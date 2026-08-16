@@ -13,7 +13,7 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Service binding: `AFDFW` -> `art-feed-dfw`
 - Custom domain: `cs.angelotoborg.com`
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-16: `6a37b19e-e172-4cdd-b5ef-4847d6d093e0`
+- Production Worker version verified on 2026-08-16: `5a723f6f-397f-408e-ad16-2358263fdf58`
 
 ## Release sequence
 
@@ -30,8 +30,8 @@ This runs the complete local verification suite, validates the production contra
 3. `npx wrangler queues list` reports both Creative Studio queues and the production Worker remains the `creative-studio-jobs` consumer.
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
-6. An authenticated Runtime-page check reports CreativeDNA, media library, music generation, image generation, artifact review, artifact retention, and AFDFW session as available.
-7. Remote D1 has no pending migration after `0004_media_assets.sql`, and `creative_media_assets` remains empty unless the owner has uploaded real media through the product.
+6. An authenticated Runtime-page check reports CreativeDNA, media library, ComfyUI workflows, CreativeDNA training data, music generation, image generation, artifact review, artifact retention, and AFDFW session as available. CreativeDNA training is truthfully `degraded` until an authenticated local runner claims a job.
+7. Remote D1 has no pending migration after `0006_creative_dna_training_jobs.sql`; the training-job table exists and contains no seeded rows.
 
 ## Rollback
 

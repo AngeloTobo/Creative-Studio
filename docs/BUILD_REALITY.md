@@ -42,14 +42,14 @@ Last verified: 2026-08-16 (America/Chicago)
 - Desktop and 390px mobile rendered inspection completed; module-semantic layout regressions found during inspection were corrected.
 - Playwright reports eight passing checks and four intentional mobile skips: desktop/mobile empty-first-run project creation, DNA versioning, note-required review, visible decision history, and reload persistence; a desktop durable cancel/retry flow; a desktop project edit/archive lifecycle; a no-fake-media boundary check; reduced motion in both layouts; and desktop keyboard focus/navigation.
 - Production environment preflight passes with a real D1 ID, dedicated R2 and Queue bindings, queue consumer, five-minute recovery trigger, AFDFW service binding, custom domain, and disabled `workers.dev` route.
-- Cloudflare deployed workflow-library Worker version `7e1282d3-3152-4b24-bfd5-f13a8c1b234b` at 100% to `cs.angelotoborg.com`.
-- Remote D1 reports no pending migrations after `0005_workflow_library.sql`; the workflow, immutable revision, and CreativeDNA training-example tables were queried directly after release and contain no seeded records.
+- Cloudflare deployed consolidated CreativeDNA/media-review Worker version `5a723f6f-397f-408e-ad16-2358263fdf58` at 100% to `cs.angelotoborg.com`.
+- Remote D1 reports no pending migrations after `0006_creative_dna_training_jobs.sql`; the durable training-job table exists and contains no seeded rows.
 - Cloudflare reports `creative-studio-jobs` with one producer and one consumer, plus the separate `creative-studio-jobs-dlq`; deployment output confirms the five-minute schedule.
 - Anonymous requests to `/` and `/api/creative-studio/session` both receive Cloudflare Access redirects.
-- Authenticated live inspection opened the production UI and reported all six runtime capabilities available, including Creative Studio D1, R2 retention, and the AFDFW session/generation adapters.
+- Authenticated live inspection reloaded the deployed production assets, confirmed the consolidated CreativeDNA Studio with upload-based training and generation on one page, and reported every connected runtime capability available. CreativeDNA training is explicitly degraded only because a local trainer has not yet claimed a run.
 - Authenticated live inspection confirmed the empty production Project screen renders `Create your first project` with no seeded project cards.
 - The three legacy prototype project rows were deleted only after exact owner/ID/name/timestamp matching and dependent-record checks; the post-cleanup production counts are zero projects, DNA artifacts, jobs, artifacts, and acceptances.
-- Post-release production counts are one owner-created project and zero DNA artifacts, jobs, generated artifacts, acceptances, and uploaded media. Deployment verification inserted no project, upload, job, artifact, or placeholder record.
+- Post-release production counts are one owner-created project, two owner-uploaded media assets, and zero DNA artifacts, generation jobs, generated artifacts, acceptances, or training jobs. Deployment verification inserted no project, upload, job, artifact, decision, training job, or placeholder record.
 
 ## Current production boundary
 
@@ -59,7 +59,7 @@ Last verified: 2026-08-16 (America/Chicago)
 - The top-level Wrangler configuration stays in development mode for isolated local tests; real bindings exist only under `env.production`.
 - The browser development adapter creates only clearly labeled local metadata and a non-media visual treatment for development job artifacts; it cannot upload or claim retained media.
 - This release includes the workflow library and migration `0005_workflow_library.sql`. Arbitrary workflow execution is intentionally not claimed yet: API-format graphs are ready for a future authenticated local runner, while UI-format graphs must first be exported from ComfyUI in API format.
-- Consolidated CreativeDNA Studio, migration `0006_creative_dna_training_jobs.sql`, and the completed media-review/failure-recovery surface are implemented locally but are not part of the currently deployed Worker version. The site-side training protocol is real and durable; an actual local trainer must still be connected and must claim a run before its status can become `running` or `completed`.
+- Consolidated CreativeDNA Studio, migration `0006_creative_dna_training_jobs.sql`, and the completed media-review/failure-recovery surface are deployed. The site-side training protocol is real and durable; an actual local trainer must still be connected and must claim a run before its status can become `running` or `completed`.
 - Removal timing for any old AFDFW prototype remains a later owner decision.
 
 See `PRODUCTION_READINESS.md` for the verified release and rollback runbook.
