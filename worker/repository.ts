@@ -130,69 +130,123 @@ export async function createLocalDna(env: Env, ownerId: string, input: CreateCre
 type JobRow = {
   id: string; projectId: string; dnaArtifactId: string; capability: Job["capability"]; modality: Job["modality"];
   status: Job["status"]; progress: number; prompt: string; provider: string; upstreamId: string | null;
-  artifactId: string | null; error: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
+  artifactId: string | null; retryOfJobId: string | null; error: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
 };
+
+export type BackgroundJob = JobRow & {
+  ownerId: string;
+  upstreamMediaPath: string | null;
+  reconcileEmail: string | null;
+  idempotencyKey: string | null;
+  reconcileAttempts: number;
+  nextReconcileAt: string | null;
+  timeoutAt: string | null;
+  reconcileLeaseUntil: string | null;
+  lastReconcileError: string | null;
+  cancelledAt: string | null;
+};
+
+const PUBLIC_JOB_COLUMNS = `id, project_id as projectId, dna_artifact_id as dnaArtifactId, capability, modality,
+  status, progress, prompt, provider, upstream_id as upstreamId, artifact_id as artifactId,
+  retry_of_job_id as retryOfJobId, error, created_at as createdAt, updated_at as updatedAt, completed_at as completedAt`;
+
+const BACKGROUND_JOB_COLUMNS = `${PUBLIC_JOB_COLUMNS}, owner_id as ownerId, upstream_media_path as upstreamMediaPath,
+  reconcile_email as reconcileEmail, idempotency_key as idempotencyKey, reconcile_attempts as reconcileAttempts,
+  next_reconcile_at as nextReconcileAt, timeout_at as timeoutAt, reconcile_lease_until as reconcileLeaseUntil,
+  last_reconcile_error as lastReconcileError, cancelled_at as cancelledAt`;
 
 function mapJob(row: JobRow): Job {
   return { ...row, progress: Number(row.progress || 0) };
 }
 
 export async function listJobs(env: Env, ownerId: string): Promise<Job[]> {
-  const result = await env.DB.prepare(`select id, project_id as projectId, dna_artifact_id as dnaArtifactId, capability, modality, status, progress, prompt, provider, upstream_id as upstreamId, artifact_id as artifactId, error, created_at as createdAt, updated_at as updatedAt, completed_at as completedAt from creative_jobs where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<JobRow>();
+  const result = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<JobRow>();
   return (result.results ?? []).map(mapJob);
 }
 
-export async function createDevelopmentJob(env: Env, ownerId: string, projectId: string, dna: CreativeDnaArtifact, modality: Job["modality"]) {
+export async function jobById(env: Env, ownerId: string, jobId: string) {
+  const row = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where id = ? and owner_id = ?`)
+    .bind(jobId, ownerId).first<JobRow>();
+  return row ? mapJob(row) : null;
+}
+
+export async function backgroundJobById(env: Env, jobId: string) {
+  const row = await env.DB.prepare(`select ${BACKGROUND_JOB_COLUMNS} from creative_jobs where id = ?`)
+    .bind(jobId).first<BackgroundJob>();
+  return row ? { ...row, progress: Number(row.progress || 0), reconcileAttempts: Number(row.reconcileAttempts || 0) } : null;
+}
+
+export async function createQueuedJob(
+  env: Env,
+  ownerId: string,
+  input: {
+    projectId: string;
+    dna: CreativeDnaArtifact;
+    modality: Job["modality"];
+    idempotencyKey: string;
+    provider: string;
+    reconcileEmail: string | null;
+    retryOfJobId?: string | null;
+  },
+) {
+  const existing = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
+    .bind(ownerId, input.idempotencyKey).first<JobRow>();
+  if (existing) return { job: mapJob(existing), created: false };
+
   const jobId = id("job");
   const now = new Date().toISOString();
+  const timeoutAt = new Date(Date.now() + 30 * 60_000).toISOString();
   const job: Job = {
     id: jobId,
-    projectId,
-    dnaArtifactId: dna.artifactId,
-    capability: modality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
-    modality,
+    projectId: input.projectId,
+    dnaArtifactId: input.dna.artifactId,
+    capability: input.modality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
+    modality: input.modality,
     status: "queued",
-    progress: 4,
-    prompt: dna.generationPrompts[modality],
-    provider: "development-worker",
+    progress: 1,
+    prompt: input.dna.generationPrompts[input.modality],
+    provider: input.provider,
     upstreamId: null,
     artifactId: null,
+    retryOfJobId: input.retryOfJobId ?? null,
     error: null,
     createdAt: now,
     updatedAt: now,
     completedAt: null,
   };
-  await env.DB.prepare(`insert into creative_jobs (id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider, upstream_id, artifact_id, error, created_at, updated_at, completed_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(job.id, ownerId, projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress, job.prompt, job.provider, null, null, null, now, now, null).run();
-  return job;
+  try {
+    await env.DB.prepare(`insert into creative_jobs (
+      id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
+      upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, completed_at,
+      reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?)`)
+      .bind(job.id, ownerId, input.projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress,
+        job.prompt, job.provider, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt).run();
+    return { job, created: true };
+  } catch (error) {
+    const winner = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
+      .bind(ownerId, input.idempotencyKey).first<JobRow>();
+    if (winner) return { job: mapJob(winner), created: false };
+    throw error;
+  }
+}
+
+export async function createDevelopmentJob(env: Env, ownerId: string, projectId: string, dna: CreativeDnaArtifact, modality: Job["modality"], idempotencyKey = id("idem")) {
+  return (await createQueuedJob(env, ownerId, {
+    projectId, dna, modality, idempotencyKey, reconcileEmail: null, provider: "development-worker",
+  })).job;
 }
 
 export async function createAfdfwJob(env: Env, ownerId: string, projectId: string, dna: CreativeDnaArtifact, modality: Job["modality"], generation: AfdfwGeneration) {
-  const jobId = id("job");
-  const status = upstreamStatus(generation.status);
-  const now = new Date().toISOString();
-  const job: Job = {
-    id: jobId,
+  const created = await createQueuedJob(env, ownerId, {
     projectId,
-    dnaArtifactId: dna.artifactId,
-    capability: modality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
+    dna,
     modality,
-    status,
-    progress: status === "completed" ? 100 : Number(generation.progress || 4),
-    prompt: dna.generationPrompts[modality],
+    idempotencyKey: id("idem"),
+    reconcileEmail: null,
     provider: modality === "music" ? "afdfw-stable-audio-3" : "afdfw-z-image",
-    upstreamId: generation.id,
-    artifactId: null,
-    error: generation.error ?? null,
-    createdAt: generation.createdAt || now,
-    updatedAt: generation.updatedAt || now,
-    completedAt: status === "completed" ? generation.updatedAt || now : null,
-  };
-  const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
-  await env.DB.prepare(`insert into creative_jobs (id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider, upstream_id, upstream_media_path, artifact_id, error, created_at, updated_at, completed_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(job.id, ownerId, projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress, job.prompt, job.provider, job.upstreamId, mediaPath, null, job.error, job.createdAt, job.updatedAt, job.completedAt).run();
-  if (status === "completed") await ensureArtifactForJob(env, ownerId, job, dna.name, mediaPath);
-  return job;
+  });
+  return attachAfdfwGeneration(env, created.job.id, generation);
 }
 
 function upstreamStatus(status: string): Job["status"] {
@@ -203,18 +257,105 @@ function upstreamStatus(status: string): Job["status"] {
 }
 
 async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: string, mediaPath: string | null) {
-  if (job.artifactId) return job.artifactId;
+  const existing = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
+    .bind(job.id, ownerId).first<{ id: string }>();
+  if (existing) {
+    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100 where id = ? and owner_id = ?")
+      .bind(existing.id, job.id, ownerId).run();
+    return existing.id;
+  }
   const artifactId = id("artifact");
   const now = new Date().toISOString();
   const colors = job.modality === "music" ? ["#9d174d", "#7c3aed"] : ["#0e7490", "#a21caf"];
   const previewUrl = mediaPath ? `/api/creative-studio/artifacts/${artifactId}/media` : null;
-  await env.DB.batch([
-    env.DB.prepare(`insert into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`)
-      .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now),
-    env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), updated_at = ? where id = ? and owner_id = ?")
-      .bind(artifactId, now, now, job.id, ownerId),
-  ]);
-  return artifactId;
+  await env.DB.prepare(`insert or ignore into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`)
+    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now).run();
+  const winner = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
+    .bind(job.id, ownerId).first<{ id: string }>();
+  if (!winner) throw new Error("artifact_create_failed");
+  await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null, reconcile_lease_until = null where id = ? and owner_id = ?")
+    .bind(winner.id, now, now, job.id, ownerId).run();
+  return winner.id;
+}
+
+export async function attachAfdfwGeneration(env: Env, jobId: string, generation: AfdfwGeneration) {
+  const current = await backgroundJobById(env, jobId);
+  if (!current) throw new Error("job_not_found");
+  if (["completed", "failed", "cancelled"].includes(current.status)) return mapJob(current);
+  const status = upstreamStatus(generation.status);
+  const now = generation.updatedAt || new Date().toISOString();
+  const progress = status === "completed" ? 100 : Math.max(current.progress, Number(generation.progress || (status === "running" ? 10 : 2)));
+  const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${current.modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
+  const nextAt = status === "queued" || status === "running" ? new Date(Date.now() + 15_000).toISOString() : null;
+  const changed = await env.DB.prepare(`update creative_jobs set upstream_id = ?, upstream_media_path = coalesce(?, upstream_media_path), status = ?, progress = ?,
+      error = ?, last_reconcile_error = null, updated_at = ?, completed_at = case when ? in ('completed', 'failed') then ? else completed_at end,
+      next_reconcile_at = ?, reconcile_lease_until = null where id = ? and status in ('queued', 'running')`)
+    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, status, now, nextAt, jobId).run();
+  if (!changed.meta.changes) {
+    const unchanged = await jobById(env, current.ownerId, jobId);
+    if (!unchanged) throw new Error("job_not_found");
+    return unchanged;
+  }
+  if (status === "completed") {
+    const dna = (await listLocalDna(env, current.ownerId)).find((item) => item.artifactId === current.dnaArtifactId);
+    await ensureArtifactForJob(env, current.ownerId, mapJob({ ...current, upstreamId: generation.id, status, progress, updatedAt: now, completedAt: now }), dna?.name ?? `${current.modality} artifact`, mediaPath);
+  }
+  const updated = await jobById(env, current.ownerId, jobId);
+  if (!updated) throw new Error("job_not_found");
+  return updated;
+}
+
+export async function claimBackgroundJob(env: Env, jobId: string, leaseMs = 12 * 60_000) {
+  const now = new Date();
+  const leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
+  const claimed = await env.DB.prepare(`update creative_jobs set reconcile_lease_until = ?, reconcile_attempts = reconcile_attempts + 1, updated_at = ?
+    where id = ? and status in ('queued', 'running')
+      and (next_reconcile_at is null or next_reconcile_at <= ?)
+      and (reconcile_lease_until is null or reconcile_lease_until <= ?)`)
+    .bind(leaseUntil, now.toISOString(), jobId, now.toISOString(), now.toISOString()).run();
+  return claimed.meta.changes ? backgroundJobById(env, jobId) : null;
+}
+
+export async function markBackgroundJobPending(env: Env, jobId: string, error: string, delaySeconds: number) {
+  const now = new Date();
+  await env.DB.prepare(`update creative_jobs set status = case when upstream_id is null then 'queued' else 'running' end,
+    last_reconcile_error = ?, error = null, next_reconcile_at = ?, reconcile_lease_until = null, updated_at = ?
+    where id = ? and status in ('queued', 'running')`)
+    .bind(error.slice(0, 500), new Date(now.getTime() + delaySeconds * 1000).toISOString(), now.toISOString(), jobId).run();
+}
+
+export async function failBackgroundJob(env: Env, jobId: string, error: string) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(`update creative_jobs set status = 'failed', error = ?, last_reconcile_error = ?, completed_at = ?,
+    next_reconcile_at = null, reconcile_lease_until = null, updated_at = ? where id = ? and status in ('queued', 'running')`)
+    .bind(error.slice(0, 500), error.slice(0, 500), now, now, jobId).run();
+}
+
+export async function releaseBackgroundJob(env: Env, jobId: string) {
+  await env.DB.prepare("update creative_jobs set reconcile_lease_until = null where id = ?").bind(jobId).run();
+}
+
+export async function dueBackgroundJobIds(env: Env, limit = 50) {
+  const now = new Date().toISOString();
+  const rows = await env.DB.prepare(`select id from creative_jobs where status in ('queued', 'running')
+    and (next_reconcile_at is null or next_reconcile_at <= ?)
+    and (reconcile_lease_until is null or reconcile_lease_until <= ?)
+    order by coalesce(next_reconcile_at, created_at) limit ?`).bind(now, now, limit).all<{ id: string }>();
+  return (rows.results ?? []).map((row) => row.id);
+}
+
+export async function cancelOwnedJob(env: Env, ownerId: string, jobId: string) {
+  const current = await jobById(env, ownerId, jobId);
+  if (!current) throw new Error("job_not_found");
+  if (current.status === "completed" || current.status === "failed") throw new Error("job_not_cancellable");
+  if (current.status === "cancelled") return current;
+  const now = new Date().toISOString();
+  await env.DB.prepare(`update creative_jobs set status = 'cancelled', error = 'cancelled_by_user', cancelled_at = ?, completed_at = ?,
+    next_reconcile_at = null, reconcile_lease_until = null, updated_at = ? where id = ? and owner_id = ? and status in ('queued', 'running')`)
+    .bind(now, now, now, jobId, ownerId).run();
+  const updated = await jobById(env, ownerId, jobId);
+  if (!updated) throw new Error("job_not_found");
+  return updated;
 }
 
 export async function reconcileDevelopmentJobs(env: Env, ownerId: string) {

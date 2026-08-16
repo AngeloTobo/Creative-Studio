@@ -2,8 +2,7 @@ import { readFileSync } from "node:fs";
 
 const production = process.argv.includes("--production");
 const raw = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-const withoutComments = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-const config = JSON.parse(withoutComments);
+const config = JSON.parse(raw);
 const issues = [];
 const target = production ? { ...config, ...(config.env?.production ?? {}) } : config;
 
@@ -22,6 +21,9 @@ if (production) {
   const baseUrl = String(target.vars?.AFDFW_BASE_URL ?? "");
   if (!hasServiceBinding && !baseUrl.startsWith("https://")) issues.push("Production requires an AFDFW service binding or HTTPS base URL");
   if (!target.r2_buckets?.some((bucket) => bucket.binding === "ARTIFACTS" && bucket.bucket_name === "creative-studio-artifacts")) issues.push("Production requires the dedicated Creative Studio artifact bucket");
+  if (!target.queues?.producers?.some((queue) => queue.binding === "JOB_QUEUE" && queue.queue === "creative-studio-jobs")) issues.push("Production requires the Creative Studio job queue producer binding");
+  if (!target.queues?.consumers?.some((queue) => queue.queue === "creative-studio-jobs")) issues.push("Production requires the Creative Studio job queue consumer");
+  if (!target.triggers?.crons?.includes("*/5 * * * *")) issues.push("Production requires the five-minute background job recovery trigger");
   if (!target.routes?.some((route) => route.pattern === "cs.angelotoborg.com" && route.custom_domain === true)) issues.push("Production requires the cs.angelotoborg.com custom domain");
   if (target.workers_dev !== false) issues.push("Production must disable the public workers.dev route");
 }

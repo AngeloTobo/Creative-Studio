@@ -7,10 +7,13 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Worker: `creative-studio`
 - D1: `creative-studio` (`DB` binding)
 - R2: `creative-studio-artifacts` (`ARTIFACTS` binding)
+- Queue: `creative-studio-jobs` (`JOB_QUEUE` producer and consumer)
+- Dead-letter queue: `creative-studio-jobs-dlq`
+- Recovery trigger: every five minutes
 - Service binding: `AFDFW` -> `art-feed-dfw`
 - Custom domain: `cs.angelotoborg.com`
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-16: `02140ad1-74b5-4982-aefe-137d224f9127`
+- Production Worker version verified on 2026-08-16: `9d750b41-287e-4801-a2cb-a248a86386d0`
 
 ## Release sequence
 
@@ -24,10 +27,11 @@ This runs the complete local verification suite, validates the production contra
 
 1. `npx wrangler deployments list --name creative-studio --env production` shows the expected version at 100%.
 2. `npx wrangler d1 migrations list creative-studio --remote --env production` reports no pending migrations.
-3. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
-4. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
-5. An authenticated Runtime-page check reports CreativeDNA, music generation, image generation, artifact review, artifact retention, and AFDFW session as available.
+3. `npx wrangler queues list` reports both Creative Studio queues and the production Worker remains the `creative-studio-jobs` consumer.
+4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
+5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
+6. An authenticated Runtime-page check reports CreativeDNA, music generation, image generation, artifact review, artifact retention, and AFDFW session as available.
 
 ## Rollback
 
-Use Cloudflare Workers version rollback for Worker/assets regressions. D1 and R2 are independent product-owned resources and must not be deleted during a code rollback. Access must continue to cover `cs.angelotoborg.com/*`.
+Use Cloudflare Workers version rollback for Worker/assets regressions. D1, R2, and Queues are independent product-owned resources and must not be deleted during a code rollback. Access must continue to cover `cs.angelotoborg.com/*`.

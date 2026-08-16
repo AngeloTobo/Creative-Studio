@@ -20,5 +20,7 @@ export interface StudioAdapter {
   archiveProject(projectId: string): Promise<Project>;
   saveCreativeDna(input: CreateCreativeDnaRequest): Promise<CreativeDnaArtifact>;
   submitJob(input: SubmitJobRequest): Promise<Job>;
+  retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
+  cancelJob(jobId: string): Promise<Job>;
   reviewArtifact(artifactId: string, decision: AcceptanceDecision, note?: string): Promise<ReviewArtifactResponse>;
 }

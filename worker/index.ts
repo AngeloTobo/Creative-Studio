@@ -1,5 +1,6 @@
 import { routeCreativeStudioApi } from "./routes/api";
-import type { Env } from "./types";
+import { consumeJobQueue, sweepBackgroundJobs } from "./jobs";
+import type { Env, JobMessage } from "./types";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -16,4 +17,10 @@ export default {
     if (env.ASSETS) return env.ASSETS.fetch(request);
     return new Response("Creative Studio assets are not built.", { status: 503 });
   },
-} satisfies ExportedHandler<Env>;
+  async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
+    await consumeJobQueue(batch, env);
+  },
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await sweepBackgroundJobs(env);
+  },
+} satisfies ExportedHandler<Env, JobMessage>;

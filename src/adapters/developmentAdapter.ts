@@ -17,7 +17,7 @@ import {
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
-const STORAGE_KEY = "creative-studio:development-adapter:v2";
+const STORAGE_KEY = "creative-studio:development-adapter:v3";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -27,6 +27,7 @@ type DevelopmentState = {
   jobs: Job[];
   artifacts: Artifact[];
   acceptances: Acceptance[];
+  idempotencyKeys: Record<string, string>;
 };
 
 type DevelopmentAdapterOptions = {
@@ -40,7 +41,7 @@ function defaultId(prefix: string) {
 }
 
 function emptyState(): DevelopmentState {
-  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], acceptances: [] };
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], acceptances: [], idempotencyKeys: {} };
 }
 
 function cleanText(value: unknown, limit: number) {
@@ -171,6 +172,41 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     return state;
   };
 
+  const addJob = (state: DevelopmentState, input: SubmitJobRequest, retryOfJobId: string | null) => {
+    const duplicateId = state.idempotencyKeys[input.idempotencyKey];
+    const duplicate = duplicateId ? state.jobs.find((item) => item.id === duplicateId) : null;
+    if (duplicate) return duplicate;
+    const dna = state.dnaArtifacts.find((item) => item.artifactId === input.dnaArtifactId);
+    if (!dna) throw new Error("creative_dna_not_found");
+    if (dna.projectId !== input.projectId) throw new Error("dna_project_mismatch");
+    const project = state.projects.find((item) => item.id === input.projectId);
+    if (!project) throw new Error("project_not_found");
+    if (project.status === "archived") throw new Error("project_archived");
+    const createdAt = now().toISOString();
+    const job: Job = {
+      id: makeId("job"),
+      projectId: input.projectId,
+      dnaArtifactId: dna.artifactId,
+      capability: input.modality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
+      modality: input.modality,
+      status: "queued",
+      progress: 4,
+      prompt: dna.generationPrompts[input.modality],
+      provider: "development-renderer",
+      upstreamId: null,
+      artifactId: null,
+      retryOfJobId,
+      error: null,
+      createdAt,
+      updatedAt: createdAt,
+      completedAt: null,
+    };
+    state.jobs.unshift(job);
+    state.idempotencyKeys[input.idempotencyKey] = job.id;
+    write(state);
+    return job;
+  };
+
   return {
     id: "development-local-storage",
     async load() {
@@ -253,32 +289,33 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async submitJob(input: SubmitJobRequest) {
       const state = read();
-      const dna = state.dnaArtifacts.find((item) => item.artifactId === input.dnaArtifactId);
-      if (!dna) throw new Error("creative_dna_not_found");
-      if (dna.projectId !== input.projectId) throw new Error("dna_project_mismatch");
-      const project = state.projects.find((item) => item.id === input.projectId);
-      if (!project) throw new Error("project_not_found");
-      if (project.status === "archived") throw new Error("project_archived");
-      const createdAt = now().toISOString();
-      const job: Job = {
-        id: makeId("job"),
-        projectId: input.projectId,
-        dnaArtifactId: dna.artifactId,
-        capability: input.modality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
-        modality: input.modality,
-        status: "queued",
-        progress: 4,
-        prompt: dna.generationPrompts[input.modality],
-        provider: "development-renderer",
-        upstreamId: null,
-        artifactId: null,
-        error: null,
-        createdAt,
-        updatedAt: createdAt,
-        completedAt: null,
-      };
-      state.jobs.unshift(job);
-      write(state);
+      return addJob(state, input, null);
+    },
+    async retryJob(jobId: string, idempotencyKey: string) {
+      const state = read();
+      const original = state.jobs.find((item) => item.id === jobId);
+      if (!original) throw new Error("job_not_found");
+      if (original.status !== "failed" && original.status !== "cancelled") throw new Error("job_not_retryable");
+      return addJob(state, {
+        projectId: original.projectId,
+        dnaArtifactId: original.dnaArtifactId,
+        modality: original.modality,
+        idempotencyKey,
+      }, original.id);
+    },
+    async cancelJob(jobId: string) {
+      const state = read();
+      const job = state.jobs.find((item) => item.id === jobId);
+      if (!job) throw new Error("job_not_found");
+      if (job.status === "completed" || job.status === "failed") throw new Error("job_not_cancellable");
+      if (job.status !== "cancelled") {
+        const cancelledAt = now().toISOString();
+        job.status = "cancelled";
+        job.error = "cancelled_by_user";
+        job.updatedAt = cancelledAt;
+        job.completedAt = cancelledAt;
+        write(state);
+      }
       return job;
     },
     async reviewArtifact(artifactId: string, decision: AcceptanceDecision, note = ""): Promise<ReviewArtifactResponse> {

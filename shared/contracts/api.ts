@@ -24,7 +24,7 @@ export const CREATIVE_STUDIO_ROUTES = {
 
 export type CreativeStudioRoute =
   | "session" | "projects" | "project-create" | "project-update" | "project-archive"
-  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create"
+  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "capabilities";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
@@ -37,6 +37,8 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/dna") return "dna-create";
   if (method === "GET" && pathname === "/api/creative-studio/jobs") return "jobs-list";
   if (method === "POST" && pathname === "/api/creative-studio/jobs") return "jobs-create";
+  if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/retry$/i.test(pathname)) return "job-retry";
+  if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "job-cancel";
   if (method === "GET" && pathname === "/api/creative-studio/artifacts") return "artifacts-list";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/media$/i.test(pathname)) return "artifact-media";
   if (method === "POST" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/(accepted|rejected|archived)$/i.test(pathname)) return "artifact-review";
@@ -72,11 +74,16 @@ export type SubmitJobRequest = {
   projectId: string;
   dnaArtifactId: string;
   modality: GenerationModality;
+  idempotencyKey: string;
 };
 
 export type SubmitJobResponse = {
   job: Job;
 };
+
+export type RetryJobRequest = { idempotencyKey: string };
+export type RetryJobResponse = { job: Job };
+export type CancelJobResponse = { job: Job };
 
 export type ReviewArtifactRequest = {
   decision: AcceptanceDecision;

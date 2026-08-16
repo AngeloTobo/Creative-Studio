@@ -46,6 +46,27 @@
           "service": "art-feed-dfw"
         }
       ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "JOB_QUEUE",
+            "queue": "creative-studio-jobs"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "creative-studio-jobs",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 10,
+            "max_concurrency": 1,
+            "dead_letter_queue": "creative-studio-jobs-dlq"
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      },
       "r2_buckets": [
         {
           "binding": "ARTIFACTS",

@@ -8,6 +8,8 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("PATCH", "/api/creative-studio/projects/project_123")).toBe("project-update");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/projects/project_123/archive")).toBe("project-archive");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/jobs")).toBe("jobs-create");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/jobs/job_123/retry")).toBe("job-retry");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/jobs/job_123/cancel")).toBe("job-cancel");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/artifacts/artifact_123/accepted")).toBe("artifact-review");
   });
 

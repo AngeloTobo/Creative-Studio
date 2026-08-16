@@ -5,6 +5,7 @@ import {
   matchCreativeStudioRoute,
   type CreateCreativeDnaRequest,
   type GenerationModality,
+  type RetryJobRequest,
   type SubmitJobRequest,
   type UpdateProjectRequest,
 } from "../../shared/contracts";
@@ -12,24 +13,25 @@ import {
   afdfwGenerations,
   afdfwMedia,
   afdfwSession,
-  afdfwSubmitGeneration,
 } from "../adapters/afdfw";
 import { backendMode } from "../config";
+import { enqueueJob } from "../jobs";
 import { body, boundedText, json } from "../lib/http";
 import {
   artifactMediaPath,
   archiveProject,
-  createAfdfwJob,
+  cancelOwnedJob,
   createDevelopmentJob,
   createLocalDna,
   createProject,
+  createQueuedJob,
+  jobById,
   listAcceptances,
   listArtifacts,
   listJobs,
   listLocalDna,
   listProjects,
   projectById,
-  reconcileAfdfwGenerations,
   reconcileDevelopmentJobs,
   retainArtifactMedia,
   reviewArtifact,
@@ -50,8 +52,20 @@ function statusFor(error: string) {
   if (error === "approved_login_required") return 401;
   if (error.endsWith("_not_found")) return 404;
   if (error.includes("not_configured") || error.startsWith("afdfw_")) return 503;
-  if (error === "generation_in_progress") return 409;
+  if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable") return 409;
   return 400;
+}
+
+function idempotencyKey(value: unknown) {
+  const key = String(value ?? "").trim();
+  if (!/^[a-z0-9_-]{16,100}$/i.test(key)) throw new Error("invalid_idempotency_key");
+  return key;
+}
+
+function reconciliationEmail(request: Request) {
+  const email = String(request.headers.get("cf-access-authenticated-user-email") ?? "").trim().toLowerCase();
+  if (!email || email.length > 320 || !email.includes("@")) throw new Error("background_identity_required");
+  return email;
 }
 
 async function capabilities(env: Env, request: Request, session: OwnerSession): Promise<Capability[]> {
@@ -82,17 +96,10 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
   ];
 }
 
-async function syncJobs(env: Env, request: Request, ownerId: string) {
+async function syncJobs(env: Env, ownerId: string) {
   if (developmentMode(env)) {
     await reconcileDevelopmentJobs(env, ownerId);
-    return;
   }
-  const [music, image] = await Promise.allSettled([
-    afdfwGenerations(env, request, "music"),
-    afdfwGenerations(env, request, "image"),
-  ]);
-  if (music.status === "fulfilled") await reconcileAfdfwGenerations(env, ownerId, "music", music.value.generations);
-  if (image.status === "fulfilled") await reconcileAfdfwGenerations(env, ownerId, "image", image.value.generations);
 }
 
 export async function routeCreativeStudioApi(request: Request, env: Env) {
@@ -133,12 +140,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       return json({ ok: true, artifact }, { status: 201 });
     }
     if (route === "jobs-list") {
-      await syncJobs(env, request, session.userId);
+      await syncJobs(env, session.userId);
       return json({ ok: true, jobs: await listJobs(env, session.userId) });
     }
     if (route === "jobs-create") {
       const input = await body<SubmitJobRequest>(request);
       if (!input || !["music", "image"].includes(input.modality)) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
+      const requestKey = idempotencyKey(input.idempotencyKey);
       const dnaArtifacts = await listLocalDna(env, session.userId);
       const dna = dnaArtifacts.find((item) => item.artifactId === input.dnaArtifactId);
       if (!dna) return json({ ok: false, error: "creative_dna_not_found" }, { status: 404 });
@@ -147,13 +155,55 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!project) return json({ ok: false, error: "project_not_found" }, { status: 404 });
       if (project.status === "archived") return json({ ok: false, error: "project_archived" }, { status: 400 });
       const modality = input.modality as GenerationModality;
-      const job = developmentMode(env)
-        ? await createDevelopmentJob(env, session.userId, input.projectId, dna, modality)
-        : await createAfdfwJob(env, session.userId, input.projectId, dna, modality, (await afdfwSubmitGeneration(env, request, modality, dna.generationPrompts[modality])).generation);
+      if (developmentMode(env)) {
+        const job = await createDevelopmentJob(env, session.userId, input.projectId, dna, modality, requestKey);
+        return json({ ok: true, job }, { status: 202 });
+      }
+      const created = await createQueuedJob(env, session.userId, {
+        projectId: input.projectId,
+        dna,
+        modality,
+        idempotencyKey: requestKey,
+        reconcileEmail: reconciliationEmail(request),
+        provider: modality === "music" ? "afdfw-stable-audio-3" : "afdfw-z-image",
+      });
+      try { await enqueueJob(env, created.job.id); } catch (error) { console.error("creative_studio_job_enqueue_failed", created.job.id, error); }
+      const job = created.job;
       return json({ ok: true, job }, { status: 202 });
     }
+    if (route === "job-retry") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/jobs\/([a-z0-9_]+)\/retry$/i);
+      const input = await body<RetryJobRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
+      const original = await jobById(env, session.userId, match[1]);
+      if (!original) throw new Error("job_not_found");
+      if (original.status !== "failed" && original.status !== "cancelled") throw new Error("job_not_retryable");
+      const dna = (await listLocalDna(env, session.userId)).find((item) => item.artifactId === original.dnaArtifactId);
+      if (!dna) throw new Error("creative_dna_not_found");
+      const project = await projectById(env, session.userId, original.projectId);
+      if (!project) throw new Error("project_not_found");
+      if (project.status === "archived") throw new Error("project_archived");
+      const created = await createQueuedJob(env, session.userId, {
+        projectId: original.projectId,
+        dna,
+        modality: original.modality,
+        idempotencyKey: idempotencyKey(input.idempotencyKey),
+        reconcileEmail: developmentMode(env) ? null : reconciliationEmail(request),
+        provider: developmentMode(env) ? "development-worker" : original.provider,
+        retryOfJobId: original.id,
+      });
+      if (!developmentMode(env)) {
+        try { await enqueueJob(env, created.job.id); } catch (error) { console.error("creative_studio_job_retry_enqueue_failed", created.job.id, error); }
+      }
+      return json({ ok: true, job: created.job }, { status: 202 });
+    }
+    if (route === "job-cancel") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/jobs\/([a-z0-9_]+)\/cancel$/i);
+      if (!match) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
+      return json({ ok: true, job: await cancelOwnedJob(env, session.userId, match[1]) });
+    }
     if (route === "artifacts-list") {
-      await syncJobs(env, request, session.userId);
+      await syncJobs(env, session.userId);
       return json({ ok: true, artifacts: await listArtifacts(env, session.userId), acceptances: await listAcceptances(env, session.userId) });
     }
     if (route === "artifact-review") {

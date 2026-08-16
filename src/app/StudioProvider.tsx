@@ -26,6 +26,8 @@ type StudioContextValue = {
   archiveProject: (projectId: string) => Promise<Project>;
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitJob: (modality: GenerationModality, dnaArtifactId?: string) => Promise<void>;
+  retryJob: (jobId: string) => Promise<void>;
+  cancelJob: (jobId: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note?: string) => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -38,6 +40,10 @@ function message(error: unknown) {
 
 function firstAvailableProject(snapshot: StudioSnapshot) {
   return snapshot.projects.find((project) => project.status !== "archived")?.id ?? "";
+}
+
+function operationKey(prefix: string) {
+  return `${prefix}_${crypto.randomUUID()}`;
 }
 
 export function StudioProvider({ children }: { children: ReactNode }) {
@@ -117,8 +123,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
-    await transact(() => adapter.submitJob({ projectId: activeProjectId, dnaArtifactId: dnaId, modality }));
+    await transact(() => adapter.submitJob({ projectId: activeProjectId, dnaArtifactId: dnaId, modality, idempotencyKey: operationKey("submit") }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
+
+  const retryJob = useCallback(async (jobId: string) => {
+    await transact(() => adapter.retryJob(jobId, operationKey("retry")));
+  }, [adapter, transact]);
+
+  const cancelJob = useCallback(async (jobId: string) => {
+    await transact(() => adapter.cancelJob(jobId));
+  }, [adapter, transact]);
 
   const reviewArtifact = useCallback(async (artifactId: string, decision: AcceptanceDecision, note?: string) => {
     await transact(() => adapter.reviewArtifact(artifactId, decision, note));
@@ -163,9 +177,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     archiveProject,
     saveDna,
     submitJob,
+    retryJob,
+    cancelJob,
     reviewArtifact,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, reviewArtifact, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, cancelJob, reviewArtifact, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

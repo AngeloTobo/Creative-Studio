@@ -154,6 +154,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .job-progress { height: 5px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: var(--surface-strong); }
 .job-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,var(--pink),var(--cyan)); transition: width .35s; }
 .queue-percent { width: 48px; flex: none; color: var(--text-soft); font-family: var(--font-mono); text-align: right; }
+.queue-lineage, .queue-error { margin-top: 7px; color: var(--text-soft); font-family: var(--font-mono); font-size: 10px; }
+.queue-error { color: #fda4af; }
+.queue-controls { display: flex; gap: 8px; margin-top: 10px; }
+.queue-controls .btn { min-height: 30px; padding: 5px 9px; font-size: 10px; }
 
 /* Artifacts */
 .artifact-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }

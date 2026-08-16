@@ -10,7 +10,7 @@ function age(value: string) {
 }
 
 export function QueueView() {
-  const { snapshot, activeProjectId, refresh } = useStudio();
+  const { snapshot, activeProjectId, refresh, retryJob, cancelJob, busy } = useStudio();
   const jobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId) ?? [];
   return (
     <section className="queue-view fade-up">
@@ -22,7 +22,17 @@ export function QueueView() {
             <div className="queue-title"><StatusDot status={job.status} /><strong>{job.modality === "music" ? "Music" : "Image"} from CreativeDNA</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
             <p>{job.prompt}</p>
             <div className="queue-meta"><span>{job.provider}</span><span>{age(job.updatedAt)}</span><span>{job.id}</span></div>
+            {job.retryOfJobId ? <div className="queue-lineage">Retry of {job.retryOfJobId}</div> : null}
+            {job.error ? <div className="queue-error">{job.error.replaceAll("_", " ")}</div> : null}
             <div className="job-progress"><i style={{ width: `${job.progress}%` }} /></div>
+            <div className="queue-controls">
+              {job.status === "queued" || job.status === "running"
+                ? <button className="btn btn-ghost" disabled={busy} title="Stops Creative Studio tracking. An upstream generation already running may still finish." onClick={() => void cancelJob(job.id)}>Cancel tracking</button>
+                : null}
+              {job.status === "failed" || job.status === "cancelled"
+                ? <button className="btn btn-ghost" disabled={busy} onClick={() => void retryJob(job.id)}><Icon name="rerun" size={15} /> Retry</button>
+                : null}
+            </div>
           </div>
           <strong className="queue-percent">{job.progress}%</strong>
         </article>)}

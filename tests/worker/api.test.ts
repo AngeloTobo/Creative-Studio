@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CreativeDnaArtifact } from "../../shared/contracts";
 import { backendMode } from "../../worker/config";
+import { processJobMessage } from "../../worker/jobs";
 import { createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, reconcileDevelopmentJobs } from "../../worker/repository";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
 import type { Env } from "../../worker/types";
@@ -35,6 +36,16 @@ function afdfwFor(ownerId: string, dnaArtifacts: CreativeDnaArtifact[] = [], app
 
 function workerEnv(mode: "development" | "afdfw", afdfw?: Fetcher, artifacts?: R2Bucket): Env {
   return { DB: env.DB, BACKEND_MODE: mode, AFDFW: afdfw, ARTIFACTS: artifacts };
+}
+
+function memoryQueue() {
+  const messages: Array<{ body: { jobId: string }; delaySeconds: number }> = [];
+  const queue = {
+    async send(body: { jobId: string }, options?: QueueSendOptions) {
+      messages.push({ body, delaySeconds: options?.delaySeconds ?? 0 });
+    },
+  } as unknown as Queue<{ jobId: string }>;
+  return { queue, messages };
 }
 
 function memoryBucket() {
@@ -210,7 +221,7 @@ describe("Creative Studio Worker API", () => {
     const createJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dnaPayload.artifact.artifactId, modality: "image" }),
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dnaPayload.artifact.artifactId, modality: "image", idempotencyKey: "worker_test_submit_001" }),
     }), local);
     const jobPayload = await result(createJob) as { job: { id: string; status: string } };
     expect(createJob.status).toBe(202);
@@ -241,6 +252,97 @@ describe("Creative Studio Worker API", () => {
     const historyPayload = await result(history) as { artifacts: Array<{ status: string }>; acceptances: Array<{ decision: string }> };
     expect(historyPayload.artifacts[0]?.status).toBe("rejected");
     expect(historyPayload.acceptances.map((item) => item.decision)).toEqual(expect.arrayContaining(["accepted", "rejected"]));
+  });
+
+  it("submits and reconciles production generation after the browser request has ended", async () => {
+    const ownerId = "owner-background";
+    const accessEmail = "angelo@example.com";
+    const project = await testProject(ownerId, "Background Study");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Background Study",
+      directive: "An original luminous portrait with a deliberate quiet center.",
+      targetModality: "image",
+    });
+    let submissions = 0;
+    let statusReads = 0;
+    const afdfw = {
+      async fetch(input: RequestInfo | URL, init?: RequestInit) {
+        const upstream = new Request(input, init);
+        const path = new URL(upstream.url).pathname;
+        if (path === "/api/me") return Response.json({ status: "approved", user: { id: ownerId }, profile: { displayName: "Angelo" } });
+        expect(upstream.headers.get("cf-access-authenticated-user-email")).toBe(accessEmail);
+        if (path === "/api/profile-image/generate" && upstream.method === "POST") {
+          submissions += 1;
+          return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, status: "running", progress: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+        }
+        if (path === "/api/profile-image/generations/generation-background") {
+          statusReads += 1;
+          return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, status: "completed", progress: 100, previewMediaId: "test-image", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+        }
+        return Response.json({ ok: false, error: "unexpected_test_upstream" }, { status: 404 });
+      },
+    } as Fetcher;
+    const { queue, messages } = memoryQueue();
+    const production = { ...workerEnv("afdfw", afdfw), JOB_QUEUE: queue };
+    const created = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", idempotencyKey: "background_submit_001" }),
+    }), production);
+    const payload = await result(created) as { job: { id: string; status: string } };
+    expect(created.status).toBe(202);
+    expect(payload.job.status).toBe("queued");
+    expect(submissions).toBe(0);
+    expect(messages[0]?.body.jobId).toBe(payload.job.id);
+
+    await processJobMessage(production, messages.shift()!.body);
+    expect(submissions).toBe(1);
+    expect(statusReads).toBe(0);
+    await env.DB.prepare("update creative_jobs set next_reconcile_at = ? where id = ?").bind("2020-01-01T00:00:00.000Z", payload.job.id).run();
+    await processJobMessage(production, { jobId: payload.job.id });
+    expect(statusReads).toBe(1);
+    const finished = await env.DB.prepare("select status, artifact_id as artifactId from creative_jobs where id = ?").bind(payload.job.id).first<{ status: string; artifactId: string }>();
+    expect(finished).toMatchObject({ status: "completed" });
+    expect(finished?.artifactId).toBeTruthy();
+  });
+
+  it("deduplicates submissions and exposes explicit cancel and retry controls", async () => {
+    const ownerId = "owner-controls";
+    const accessEmail = "controls@example.com";
+    const project = await testProject(ownerId, "Control Study");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Control Study",
+      directive: "A measured original image with a clear focal hierarchy.",
+      targetModality: "image",
+    });
+    const { queue, messages } = memoryQueue();
+    const production = { ...workerEnv("afdfw", afdfwFor(ownerId)), JOB_QUEUE: queue };
+    const create = () => routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", idempotencyKey: "controls_submit_0001" }),
+    }), production);
+    const first = await result(await create()) as { job: { id: string } };
+    const duplicate = await result(await create()) as { job: { id: string } };
+    expect(duplicate.job.id).toBe(first.job.id);
+    const row = await env.DB.prepare("select count(*) as count from creative_jobs where owner_id = ?").bind(ownerId).first<{ count: number }>();
+    expect(Number(row?.count)).toBe(1);
+
+    const cancelled = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${first.job.id}/cancel`, {
+      method: "POST",
+      headers: { "cf-access-authenticated-user-email": accessEmail },
+    }), production);
+    expect(await result(cancelled)).toMatchObject({ job: { status: "cancelled" } });
+    const retried = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${first.job.id}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
+      body: JSON.stringify({ idempotencyKey: "controls_retry_00001" }),
+    }), production);
+    expect(retried.status).toBe(202);
+    expect(await result(retried)).toMatchObject({ job: { status: "queued", retryOfJobId: first.job.id } });
+    expect(messages.length).toBeGreaterThanOrEqual(3);
   });
 
   it("retains accepted AFDFW media in owner-scoped Creative Studio storage", async () => {

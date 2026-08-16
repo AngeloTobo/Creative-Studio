@@ -11,7 +11,9 @@ const EXACT_ALLOWLIST = new Set([
 
 function isAllowed(method: string, path: string) {
   if (EXACT_ALLOWLIST.has(`${method} ${path}`)) return true;
-  return method === "GET" && (path.startsWith("/api/profile-song/media/") || path.startsWith("/api/profile-image/media/"));
+  if (method !== "GET") return false;
+  return /^\/api\/profile-(song|image)\/generations\/[a-z0-9_-]+$/i.test(path)
+    || /^\/api\/profile-(song|image)\/media\/[a-z0-9_-]+$/i.test(path);
 }
 
 async function call(env: Env, incoming: Request, path: string, init: RequestInit = {}) {
@@ -77,7 +79,21 @@ export async function afdfwSubmitGeneration(env: Env, request: Request, modality
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
+  if (response.status === 409) {
+    const conflict = await response.json() as { error?: string; generationId?: string };
+    if (conflict.error === "generation_in_progress" && conflict.generationId) {
+      return { generation: await afdfwGeneration(env, request, modality, conflict.generationId) };
+    }
+    throw new Error(conflict.error || "generation_in_progress");
+  }
   return payload<{ generation: AfdfwGeneration }>(response);
+}
+
+export async function afdfwGeneration(env: Env, request: Request, modality: GenerationModality, generationId: string) {
+  if (!/^[a-z0-9_-]+$/i.test(generationId)) throw new Error("invalid_upstream_generation_id");
+  const kind = modality === "music" ? "song" : "image";
+  const response = await call(env, request, `/api/profile-${kind}/generations/${encodeURIComponent(generationId)}`);
+  return (await payload<{ generation: AfdfwGeneration }>(response)).generation;
 }
 
 export async function afdfwGenerations(env: Env, request: Request, modality: GenerationModality) {

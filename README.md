@@ -56,10 +56,12 @@ The independent production application is live at [cs.angelotoborg.com](https://
 - Worker: `creative-studio`
 - D1: `creative-studio`
 - R2: `creative-studio-artifacts`
+- Queue: `creative-studio-jobs` with `creative-studio-jobs-dlq`
+- Scheduled recovery: every five minutes
 - Backend service binding: `AFDFW` -> `art-feed-dfw`
 - Generic `workers.dev` route: disabled in production
 
-CreativeDNA, projects, jobs, artifacts, and decisions remain in Creative Studio D1. AFDFW supplies the approved identity and allowlisted generation capabilities. Accepting generated media first retains it in Creative Studio R2.
+CreativeDNA, projects, jobs, artifacts, and decisions remain in Creative Studio D1. Creating a job durably enqueues it; the Worker submits and reconciles it without an open browser, with D1 idempotency, timeouts, retry lineage, and explicit cancellation of Creative Studio tracking. AFDFW supplies the approved identity and allowlisted generation capabilities. Accepting generated media first retains it in Creative Studio R2.
 
 New accounts and cleared environments start empty. Projects are created, edited, paused, and archived only through explicit user actions; production code does not seed project or artifact records.
 

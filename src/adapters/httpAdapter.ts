@@ -12,6 +12,7 @@ import {
   type Job,
   type Project,
   type ReviewArtifactResponse,
+  type RetryJobResponse,
   type StudioSession,
   type StudioSnapshot,
   type SubmitJobRequest,
@@ -93,6 +94,20 @@ export function createHttpAdapter(): StudioAdapter {
       const result = await request<SubmitJobResponse>(CREATIVE_STUDIO_ROUTES.jobs, {
         method: "POST",
         body: JSON.stringify(input),
+      });
+      return result.job;
+    },
+    async retryJob(jobId: string, idempotencyKey: string) {
+      const result = await request<RetryJobResponse>(`${CREATIVE_STUDIO_ROUTES.jobs}/${encodeURIComponent(jobId)}/retry`, {
+        method: "POST",
+        body: JSON.stringify({ idempotencyKey }),
+      });
+      return result.job;
+    },
+    async cancelJob(jobId: string) {
+      const result = await request<SubmitJobResponse>(`${CREATIVE_STUDIO_ROUTES.jobs}/${encodeURIComponent(jobId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
       });
       return result.job;
     },

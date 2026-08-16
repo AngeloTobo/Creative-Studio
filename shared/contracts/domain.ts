@@ -46,6 +46,7 @@ export type Job = {
   provider: string;
   upstreamId: string | null;
   artifactId: string | null;
+  retryOfJobId: string | null;
   error: string | null;
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
