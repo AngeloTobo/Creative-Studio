@@ -41,6 +41,12 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   const persisted = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });
   await expect(persisted.locator(".artifact-title").getByText("accepted", { exact: true })).toBeVisible();
   await expect(persisted.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
+
+  await page.goto("/#/cockpit");
+  await expect(page.getByRole("heading", { name: "Production cockpit", exact: true })).toBeVisible();
+  await expect(page.getByText("All caught up.")).toBeVisible();
+  await expect(page.getByText("Direct CreativeDNA generation")).toBeVisible();
+  await expect(page.getByText("Verified storage")).toBeVisible();
 });
 
 test("cancelled generation explains the retained history and offers a durable retry", async ({ page }, testInfo) => {

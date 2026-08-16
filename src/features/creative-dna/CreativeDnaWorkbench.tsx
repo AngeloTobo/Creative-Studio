@@ -32,7 +32,7 @@ function savedLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "Saved" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void }) {
+export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialReviewJobId, onCockpitTargetHandled }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void; initialReviewJobId?: string; onCockpitTargetHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, selectDna, saveDna, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const [name, setName] = useState(activeDna?.name ?? "");
@@ -166,7 +166,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts }: { onQue
         </div>
       </div>
 
-      <DnaTrainingPanel onMedia={onMedia} reviewJobId={requestedReviewJobId} onReviewJobHandled={() => setRequestedReviewJobId("")} />
+      <DnaTrainingPanel onMedia={onMedia} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} />
       <GenerationView onQueued={onQueued} onMedia={onMedia} embedded />
 
       <div className="dna-history glass">

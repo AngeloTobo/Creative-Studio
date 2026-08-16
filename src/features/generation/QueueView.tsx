@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
@@ -10,15 +11,19 @@ function age(value: string) {
   return `${minutes}m ago`;
 }
 
-export function QueueView() {
+export function QueueView({ focusRunId }: { focusRunId?: string }) {
   const { snapshot, activeProjectId, refresh, retryJob, cancelJob, cancelDnaTraining, busy } = useStudio();
   const jobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId) ?? [];
   const trainingJobs = snapshot?.trainingJobs.filter((job) => job.projectId === activeProjectId) ?? [];
+  useEffect(() => {
+    if (!focusRunId) return;
+    window.requestAnimationFrame(() => document.getElementById(`queue-run-${focusRunId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }, [focusRunId]);
   return (
     <section className="queue-view fade-up">
       <div className="view-actions"><span>{jobs.length + trainingJobs.length} durable jobs · {trainingJobs.length} training</span><button className="btn btn-ghost" onClick={() => void refresh()}><Icon name="rerun" size={16} /> Refresh</button></div>
       <div className="queue-list">
-        {trainingJobs.map((job) => <article className="queue-card glass training-queue-card" key={job.id}>
+        {trainingJobs.map((job) => <article className={`queue-card glass training-queue-card${focusRunId === job.id ? " cockpit-focus" : ""}`} id={`queue-run-${job.id}`} key={job.id}>
           <div className="queue-icon" style={{ "--job-accent": "var(--pink)" } as React.CSSProperties}><Icon name="dna" size={23} /></div>
           <div className="queue-main">
             <div className="queue-title"><i className={`training-status-dot ${job.status}`} /><strong>CreativeDNA training</strong><span className={`state-pill ${job.status}`}>{job.status.replaceAll("-", " ")}</span></div>
@@ -33,7 +38,7 @@ export function QueueView() {
         </article>)}
         {jobs.map((job) => {
           const issue = jobIssuePresentation(job.status, job.error, job.modality);
-          return <article className="queue-card glass" key={job.id}>
+          return <article className={`queue-card glass${focusRunId === job.id ? " cockpit-focus" : ""}`} id={`queue-run-${job.id}`} key={job.id}>
           <div className="queue-icon" style={{ "--job-accent": job.modality === "music" ? "var(--pink)" : job.modality === "video" ? "var(--violet)" : "var(--cyan)" } as React.CSSProperties}><Icon name={job.modality} size={23} /></div>
           <div className="queue-main">
             <div className="queue-title"><StatusDot status={job.status} /><strong>{job.artifactId && job.status === "running" ? "Retaining completed result" : `${job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} from CreativeDNA`}</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>

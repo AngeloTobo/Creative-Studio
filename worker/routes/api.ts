@@ -1,5 +1,6 @@
 import {
   deriveProjectProductionLoop,
+  deriveProductionCockpit,
   type AcceptanceDecision,
   type Capability,
   type CreateProjectRequest,
@@ -40,6 +41,7 @@ import {
   listAcceptances,
   listArtifacts,
   listJobs,
+  listJobRuntime,
   listLocalDna,
   listMediaAssets,
   listTrainingExamples,
@@ -543,6 +545,25 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           computedAt,
         })),
       });
+    }
+    if (route === "production-cockpit") {
+      await syncJobs(env, session.userId);
+      const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingJobs, trainingReviews, runners] = await Promise.all([
+        listProjects(env, session.userId),
+        listLocalDna(env, session.userId),
+        listJobs(env, session.userId),
+        listJobRuntime(env, session.userId),
+        listArtifacts(env, session.userId),
+        listMediaAssets(env, session.userId),
+        listAcceptances(env, session.userId),
+        listCreativeDnaTrainingJobs(env, session.userId),
+        listCreativeDnaTrainingReviews(env, session.userId),
+        listLocalRunners(env, session.userId),
+      ]);
+      return json({ ok: true, productionCockpit: deriveProductionCockpit({
+        projects, dnaArtifacts, jobs, artifacts, mediaAssets, acceptances, trainingJobs, trainingReviews, runners,
+        jobRuntime, computedAt: new Date().toISOString(),
+      }) });
     }
     if (route === "training-job-create") {
       const input = await body<CreateCreativeDnaTrainingJobRequest>(request);

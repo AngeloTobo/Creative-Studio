@@ -6,6 +6,7 @@ import type {
   CreateCreativeDnaRequest,
   CreativeDnaArtifact,
   GenerationModality,
+  Job,
   MediaAsset,
   Project,
   StudioSnapshot,
@@ -36,7 +37,7 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitJob: (modality: GenerationModality, dnaArtifactId?: string) => Promise<void>;
   submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => Promise<void>;
-  retryJob: (jobId: string) => Promise<void>;
+  retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note: string) => Promise<void>;
@@ -133,7 +134,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
-      && !snapshot?.trainingJobs.some((job) => job.status === "running")) return;
+      && !snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")) return;
     const timer = window.setInterval(() => void refresh(), 1_000);
     return () => window.clearInterval(timer);
   }, [refresh, snapshot?.jobs, snapshot?.trainingJobs]);
@@ -182,9 +183,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
 
-  const retryJob = useCallback(async (jobId: string) => {
-    await transact(() => adapter.retryJob(jobId, operationKey("retry")));
-  }, [adapter, transact]);
+  const retryJob = useCallback((jobId: string) => (
+    transact(() => adapter.retryJob(jobId, operationKey("retry")))
+  ), [adapter, transact]);
 
   const reuseJob = useCallback(async (jobId: string) => {
     await transact(() => adapter.reuseJob(jobId, operationKey("reuse")));

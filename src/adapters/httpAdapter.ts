@@ -36,6 +36,7 @@ import {
   type EnrollLocalRunnerResponse,
   type RevokeLocalRunnerResponse,
   type ProjectProductionLoop,
+  type ProductionCockpit,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -104,6 +105,7 @@ export function createHttpAdapter(): StudioAdapter {
       request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
     ]);
     const productionLoops = await request<{ productionLoops: ProjectProductionLoop[] }>(CREATIVE_STUDIO_ROUTES.productionLoops);
+    const productionCockpit = await request<{ productionCockpit: ProductionCockpit }>(CREATIVE_STUDIO_ROUTES.productionCockpit);
     return {
       adapter: { id: "creative-studio-bff", label: "Creative Studio Worker", development: false, durableScope: "backend" },
       session: session.session,
@@ -117,6 +119,7 @@ export function createHttpAdapter(): StudioAdapter {
       trainingJobs: trainingJobs.trainingJobs,
       trainingReviews: trainingJobs.trainingReviews,
       productionLoops: productionLoops.productionLoops,
+      productionCockpit: productionCockpit.productionCockpit,
       runners: runners.runners,
       acceptances: artifacts.acceptances,
       capabilities: capabilities.capabilities,

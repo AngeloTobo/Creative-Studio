@@ -17,6 +17,7 @@ import type {
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis } from "./creativeDna";
 import type { ProjectProductionLoop } from "./productionLoop";
+import type { ProductionCockpit } from "./productionCockpit";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
 
 export const CREATIVE_STUDIO_API_PREFIX = "/api/creative-studio" as const;
@@ -31,6 +32,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
   trainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/training-jobs`,
   productionLoops: `${CREATIVE_STUDIO_API_PREFIX}/production-loops`,
+  productionCockpit: `${CREATIVE_STUDIO_API_PREFIX}/production-cockpit`,
   runners: `${CREATIVE_STUDIO_API_PREFIX}/runners`,
   runner: `${CREATIVE_STUDIO_API_PREFIX}/runner`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
@@ -42,7 +44,7 @@ export type CreativeStudioRoute =
   | "artifacts-list" | "artifact-review" | "artifact-media"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
-  | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops"
+  | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-fail" | "runner-media-content"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail";
@@ -75,6 +77,7 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "training-job-cancel";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/review$/i.test(pathname)) return "training-job-review";
   if (method === "GET" && pathname === "/api/creative-studio/production-loops") return "production-loops";
+  if (method === "GET" && pathname === "/api/creative-studio/production-cockpit") return "production-cockpit";
   if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
   if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
   if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
@@ -105,6 +108,7 @@ export type StudioSnapshot = {
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
   productionLoops: ProjectProductionLoop[];
+  productionCockpit: ProductionCockpit;
   runners: LocalRunner[];
   capabilities: Capability[];
   acceptances: Acceptance[];

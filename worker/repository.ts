@@ -314,6 +314,12 @@ export async function listJobs(env: Env, ownerId: string): Promise<Job[]> {
   return (result.results ?? []).map(mapJob);
 }
 
+export async function listJobRuntime(env: Env, ownerId: string) {
+  const result = await env.DB.prepare(`select id, runner_id as runnerId from creative_jobs where owner_id = ? order by created_at desc limit 100`)
+    .bind(ownerId).all<{ id: string; runnerId: string | null }>();
+  return Object.fromEntries((result.results ?? []).map((row) => [row.id, { runnerId: row.runnerId }]));
+}
+
 export async function jobById(env: Env, ownerId: string, jobId: string) {
   const row = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where id = ? and owner_id = ?`)
     .bind(jobId, ownerId).first<JobRow>();

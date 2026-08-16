@@ -1147,6 +1147,18 @@ describe("Creative Studio Worker API", () => {
     const reservationCount = await env.DB.prepare("select count(*) as count from creative_dna_training_evidence_reservations where training_example_id = ?")
       .bind(freshExampleId).first<{ count: number }>();
     expect(Number(reservationCount?.count)).toBe(1);
+
+    const cockpit = await result(await routeCreativeStudioApi(request("/api/creative-studio/production-cockpit"), local)) as {
+      productionCockpit: {
+        summary: Record<string, number>;
+        actions: Array<{ kind: string }>;
+        runs: Array<{ id: string; kind: string; queuePosition: number | null }>;
+      };
+    };
+    expect(cockpit.productionCockpit.summary).toMatchObject({ activeRuns: 1, failedRuns: 0, activeProjects: 1 });
+    expect(cockpit.productionCockpit.actions).toContainEqual(expect.objectContaining({ kind: "runner-offline" }));
+    expect(cockpit.productionCockpit.runs).toContainEqual(expect.objectContaining({ id: generated.job.id, kind: "generation" }));
+    expect(cockpit.productionCockpit.runs).toContainEqual(expect.objectContaining({ kind: "training", queuePosition: 1 }));
   });
 
   it("does not expose a generic proxy route", async () => {

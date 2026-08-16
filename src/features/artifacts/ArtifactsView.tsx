@@ -116,7 +116,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; focused: boolean }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [expanded, setExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -126,7 +126,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop 
     onQueued();
   };
   return (
-    <article className="artifact-card glass">
+    <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}`} id={`artifact-card-${artifact.id}`}>
       <ArtifactThumb artifact={artifact} />
       <div className="artifact-body">
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
@@ -148,11 +148,15 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop 
   );
 }
 
-export function ArtifactsView({ onQueued, onContinueLoop }: { onQueued: () => void; onContinueLoop: () => void }) {
+export function ArtifactsView({ onQueued, onContinueLoop, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; focusArtifactId?: string }) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
   const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
+  useEffect(() => {
+    if (!focusArtifactId) return;
+    window.requestAnimationFrame(() => document.getElementById(`artifact-card-${focusArtifactId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }, [focusArtifactId]);
   return (
     <section className="artifacts-view fade-up">
       <div className="artifact-summary">
@@ -160,7 +164,7 @@ export function ArtifactsView({ onQueued, onContinueLoop }: { onQueued: () => vo
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid">
-        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} />)}
+        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} focused={focusArtifactId === artifact.id} />)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}

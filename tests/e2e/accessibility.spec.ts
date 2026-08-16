@@ -7,6 +7,7 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
   const dnaButton = page.getByRole("button", { name: /CreativeDNA/ }).first();
   await expect(dnaButton).toBeFocused();
   const focusStyle = await dnaButton.evaluate((element) => {

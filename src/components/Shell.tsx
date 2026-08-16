@@ -6,6 +6,7 @@ import { ProjectAvatar, StatusDot } from "./Visuals";
 
 const NAV_MAIN: Array<{ id: StudioView; label: string; icon: IconName; badge?: string }> = [
   { id: "portal", label: "Portal", icon: "portal" },
+  { id: "cockpit", label: "Production", icon: "analytics", badge: "LIVE" },
   { id: "dna", label: "CreativeDNA", icon: "dna", badge: "TRAIN" },
   { id: "media", label: "Media", icon: "image" },
   { id: "library", label: "Library", icon: "library" },
@@ -37,9 +38,15 @@ function Sidebar({ view, navigate }: { view: StudioView; navigate: (view: Studio
   </aside>;
 }
 
-function TopBar({ view }: { view: StudioView }) {
+function NotificationButton({ navigate, size }: { navigate: (view: StudioView) => void; size: number }) {
+  const { snapshot } = useStudio();
+  const count = snapshot?.productionCockpit.summary.actionRequired ?? 0;
+  return <button className="btn-icon bell" aria-label={`Production notifications${count ? `, ${count} actions required` : ""}`} onClick={() => navigate("cockpit")}><Icon name="bell" size={size} />{count ? <b className="notification-count">{count > 9 ? "9+" : count}</b> : null}</button>;
+}
+
+function TopBar({ view, navigate }: { view: StudioView; navigate: (view: StudioView) => void }) {
   const [title, subtitle] = VIEW_TITLES[view];
-  return <header className="topbar"><div className="greet"><h1>{title}</h1><p>{subtitle}</p></div><div className="topbar-spacer" /><div className="searchbar"><Icon name="search" size={18} /><input aria-label="Search Creative Studio" placeholder="Search Studio…" /><span className="kbd">⌘K</span></div><button className="btn-icon bell" aria-label="Notifications"><Icon name="bell" size={20} /></button></header>;
+  return <header className="topbar"><div className="greet"><h1>{title}</h1><p>{subtitle}</p></div><div className="topbar-spacer" /><div className="searchbar"><Icon name="search" size={18} /><input aria-label="Search Creative Studio" placeholder="Search Studio…" /><span className="kbd">⌘K</span></div><NotificationButton navigate={navigate} size={20} /></header>;
 }
 
 function RightPanel({ navigate }: { navigate: (view: StudioView) => void }) {
@@ -62,18 +69,17 @@ function ReviewDock({ navigate }: { navigate: (view: StudioView) => void }) {
 }
 
 export function DesktopShell({ view, navigate, children }: { view: StudioView; navigate: (view: StudioView) => void; children: ReactNode }) {
-  return <div className="app"><Sidebar view={view} navigate={navigate} /><main className="main"><TopBar view={view} /><div className="view-scroll scroll">{children}</div></main><RightPanel navigate={navigate} /><ReviewDock navigate={navigate} /></div>;
+  return <div className="app"><Sidebar view={view} navigate={navigate} /><main className="main"><TopBar view={view} navigate={navigate} /><div className="view-scroll scroll">{children}</div></main><RightPanel navigate={navigate} /><ReviewDock navigate={navigate} /></div>;
 }
 
-const MOBILE_TABS: Array<{ id: StudioView | "more"; label: string; icon: IconName }> = [
+const MOBILE_TABS: Array<{ id: StudioView; label: string; icon: IconName }> = [
   { id: "portal", label: "Portal", icon: "portal" },
   { id: "dna", label: "DNA", icon: "dna" },
   { id: "media", label: "Media", icon: "image" },
   { id: "gallery", label: "Artifacts", icon: "gallery" },
-  { id: "more", label: "More", icon: "more" },
+  { id: "cockpit", label: "Ops", icon: "analytics" },
 ];
 
 export function MobileShell({ view, navigate, children }: { view: StudioView; navigate: (view: StudioView) => void; children: ReactNode }) {
-  const moreActive = ["library", "projects", "flows", "queue", "runtime", "settings"].includes(view);
-  return <div className="mshell"><header className="mtop"><span className="mt-mark"><i className="bm-orb" /></span><strong className="mt-name">Creative <b>Studio</b></strong><span className="mt-sp" /><button className="btn-icon bell" aria-label="Notifications"><Icon name="bell" size={19} /></button></header><main className="mbody scroll">{view !== "portal" ? <div className="mview-head"><h1>{VIEW_TITLES[view][0]}</h1><p>{VIEW_TITLES[view][1]}</p></div> : null}{children}</main><nav className="mtabbar">{MOBILE_TABS.map((tab) => <button key={tab.id} className={`mtab${tab.id === "more" ? moreActive ? " on" : "" : view === tab.id ? " on" : ""}`} onClick={() => navigate(tab.id === "more" ? "queue" : tab.id)}><span className="mtab-ic"><Icon name={tab.icon} size={22} /></span>{tab.label}</button>)}</nav></div>;
+  return <div className="mshell"><header className="mtop"><span className="mt-mark"><i className="bm-orb" /></span><strong className="mt-name">Creative <b>Studio</b></strong><span className="mt-sp" /><NotificationButton navigate={navigate} size={19} /></header><main className="mbody scroll">{view !== "portal" ? <div className="mview-head"><h1>{VIEW_TITLES[view][0]}</h1><p>{VIEW_TITLES[view][1]}</p></div> : null}{children}</main><nav className="mtabbar">{MOBILE_TABS.map((tab) => <button key={tab.id} className={`mtab${view === tab.id ? " on" : ""}`} onClick={() => navigate(tab.id)}><span className="mtab-ic"><Icon name={tab.icon} size={22} /></span>{tab.label}</button>)}</nav></div>;
 }
