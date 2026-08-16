@@ -1,0 +1,66 @@
+import { useEffect, useState } from "react";
+import { useStudio } from "./StudioProvider";
+import { type StudioView } from "./views";
+import { DesktopShell, MobileShell } from "../components/Shell";
+import { Icon } from "../components/Icon";
+import { CreativeDnaWorkbench } from "../features/creative-dna/CreativeDnaWorkbench";
+import { GenerationView } from "../features/generation/GenerationView";
+import { QueueView } from "../features/generation/QueueView";
+import { ArtifactsView } from "../features/artifacts/ArtifactsView";
+import { PortalView } from "../features/portal/PortalView";
+import { LibraryView } from "../features/library/LibraryView";
+import { ProjectsView } from "../features/projects/ProjectsView";
+import { RuntimeView } from "../features/runtime/RuntimeView";
+import { PlaceholderView } from "../features/placeholder/PlaceholderView";
+
+const VIEWS = new Set<StudioView>(["portal", "dna", "generate", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
+
+function hashView(): StudioView {
+  const candidate = window.location.hash.replace(/^#\/?/, "") as StudioView;
+  return VIEWS.has(candidate) ? candidate : "portal";
+}
+
+function useResponsive() {
+  const [mobile, setMobile] = useState(() => window.innerWidth < 860);
+  useEffect(() => {
+    const update = () => setMobile(window.innerWidth < 860);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return mobile;
+}
+
+export function App() {
+  const { snapshot, loading, error } = useStudio();
+  const [view, setView] = useState<StudioView>(hashView);
+  const mobile = useResponsive();
+  useEffect(() => {
+    const update = () => setView(hashView());
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
+
+  const navigate = (next: StudioView) => {
+    setView(next);
+    window.history.pushState(null, "", `#/${next}`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const content = (() => {
+    switch (view) {
+      case "portal": return <PortalView navigate={navigate} />;
+      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} />;
+      case "generate": return <GenerationView onQueued={() => navigate("queue")} />;
+      case "queue": return <QueueView />;
+      case "gallery": return <ArtifactsView />;
+      case "library": return <LibraryView />;
+      case "projects": return <ProjectsView />;
+      case "runtime": return <RuntimeView />;
+      default: return <PlaceholderView view={view} goBack={() => navigate("portal")} />;
+    }
+  })();
+
+  if (loading) return <div className="studio-loading"><div className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></div><strong>Opening Creative Studio</strong></div>;
+
+  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-persistent mock media</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{content}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{content}</DesktopShell>}</>;
+}

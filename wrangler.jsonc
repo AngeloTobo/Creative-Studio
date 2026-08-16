@@ -1,0 +1,65 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "creative-studio",
+  "account_id": "9309f19637f76124c68ae362ead60090",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/creative-studio/*"]
+  },
+  "vars": {
+    "BACKEND_MODE": "development",
+    "AFDFW_BASE_URL": ""
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "creative-studio",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "env": {
+    "production": {
+      "name": "creative-studio",
+      "workers_dev": false,
+      "routes": [
+        {
+          "pattern": "cs.angelotoborg.com",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "BACKEND_MODE": "afdfw",
+        "AFDFW_BASE_URL": ""
+      },
+      "services": [
+        {
+          "binding": "AFDFW",
+          "service": "art-feed-dfw"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "ARTIFACTS",
+          "bucket_name": "creative-studio-artifacts"
+        }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "creative-studio",
+          "database_id": "aed622ee-4caa-4704-80c4-4b847a8fdd9c",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
+}

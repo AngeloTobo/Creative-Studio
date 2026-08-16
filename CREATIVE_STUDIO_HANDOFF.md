@@ -274,17 +274,15 @@ Before calling the first milestone complete:
 - Do not silently write accepted/canonical state. Acceptance remains an explicit user action.
 - Do not commit or push until explicitly requested.
 
-## Open owner decisions — not blockers for local Phase 0/1
+## Remaining owner decisions
 
-- Final Creative Studio domain/hostname.
-- Angelo-only access versus additional invited users.
 - Whether onboarding remains backed by the existing approved-user funnel or becomes a Creative Studio-specific access flow.
 - When to remove the prototype `/studio` frontend from AFDFW after standalone parity.
 
 ## Exact instruction for the next Codex session
 
-> Read `CREATIVE_STUDIO_HANDOFF.md` completely. Build Creative Studio as a standalone product directly in `C:\Users\angel\Documents\Creative Studio`. Treat AFDFW only as a backend/behavioral reference and do not import its frontend, routes, CSS, shell, or branding. Start with Phase 0 and continue through the first usable CreativeDNA vertical slice, using the verification gates in this handoff. Record live discoveries in `docs\BUILD_REALITY.md`. Do not deploy or change Cloudflare configuration until the standalone boundary and hostname are verified.
+> Read `CREATIVE_STUDIO_HANDOFF.md`, `docs\BUILD_REALITY.md`, and `docs\PRODUCTION_READINESS.md` completely. Continue Creative Studio as the standalone product in `C:\Users\angel\Documents\Creative Studio`. Preserve the product-owned D1/R2 boundary, the exact AFDFW allowlist, and Cloudflare Access coverage of `cs.angelotoborg.com/*`. Run the full verification and production preflight before any later release; do not deploy the AFDFW frontend as part of a Creative Studio release.
 
 ## Current handoff state
 
-Only this handoff file has been created in the standalone product directory. Application scaffolding and deployment have not started.
+The standalone Vite/React/TypeScript application, shared contracts, explicit development adapter, Worker/BFF, dedicated D1/R2 resources, and first CreativeDNA vertical slice are implemented. Production is live at `cs.angelotoborg.com` behind an Angelo-only Cloudflare Access application covering `/*`. CreativeDNA remains in Creative Studio D1; the narrow AFDFW service binding supplies approved identity and generation, and accepted media is retained in Creative Studio R2. Continue from `docs/BUILD_REALITY.md` and `docs/PRODUCTION_READINESS.md` for the verified release state and operating boundaries.

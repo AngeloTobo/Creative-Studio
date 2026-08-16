@@ -1,0 +1,4 @@
+# Keep BACKEND_MODE=development until the service boundary and approved session are configured.
+BACKEND_MODE=development
+AFDFW_BASE_URL=
+AFDFW_SERVICE_TOKEN=

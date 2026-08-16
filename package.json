@@ -1,0 +1,49 @@
+{
+  "name": "creative-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "wrangler dev --local --port 8787",
+    "db:local": "wrangler d1 migrations apply creative-studio --local",
+    "db:production": "wrangler d1 migrations apply creative-studio --remote --env production",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.worker-test.json && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "check:env": "node scripts/validate-environment.mjs",
+    "check:env:production": "node scripts/validate-environment.mjs --production",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "build": "npm run typecheck && vite build",
+    "check": "npm run lint && npm run test && npm run test:worker && npm run check:env && npm run build && npm run check:secrets",
+    "check:all": "npm run check && npm run test:e2e",
+    "deploy:production": "npm run check:all && npm run check:env:production && npm run db:production && wrangler deploy --env production"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.21.3",
+    "@cloudflare/workers-types": "5.20260816.1",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
+    "@types/node": "26.2.0",
+    "@types/react": "19.2.8",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "eslint": "10.8.1",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.4",
+    "globals": "17.11.0",
+    "jsdom": "30.0.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vite": "8.2.1",
+    "vitest": "4.1.10",
+    "wrangler": "4.123.0"
+  }
+}
