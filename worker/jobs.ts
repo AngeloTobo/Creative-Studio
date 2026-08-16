@@ -8,6 +8,7 @@ import {
   markBackgroundJobPending,
   releaseBackgroundJob,
 } from "./repository";
+import { retainCompletedArtifact } from "./retention";
 import type { Env, JobMessage } from "./types";
 
 const PERMANENT_ERRORS = new Set([
@@ -46,20 +47,29 @@ export async function processJobMessage(env: Env, message: JobMessage) {
   if (!job) return;
 
   try {
-    if (job.timeoutAt && job.timeoutAt <= new Date().toISOString()) {
-      await failBackgroundJob(env, job.id, "generation_timed_out");
-      return;
-    }
     if (!job.reconcileEmail) {
       await failBackgroundJob(env, job.id, "background_identity_required");
       return;
     }
 
     const request = backgroundRequest(job.reconcileEmail);
+    if (job.artifactId && job.upstreamMediaPath) {
+      await retainCompletedArtifact(env, request, job.ownerId, job.artifactId);
+      return;
+    }
+    if (job.timeoutAt && job.timeoutAt <= new Date().toISOString()) {
+      await failBackgroundJob(env, job.id, "generation_timed_out");
+      return;
+    }
     const generation = job.upstreamId
       ? await afdfwGeneration(env, request, job.modality, job.upstreamId)
       : (await afdfwSubmitGeneration(env, request, job.modality, job.prompt)).generation;
     const updated = await attachAfdfwGeneration(env, job.id, generation);
+    if (generation.status === "completed" || generation.status === "accepted") {
+      if (!updated.artifactId) throw new Error("artifact_not_found");
+      await retainCompletedArtifact(env, request, job.ownerId, updated.artifactId);
+      return;
+    }
     if (updated.status === "queued" || updated.status === "running") {
       await enqueueJob(env, job.id, 15);
     }
@@ -67,9 +77,10 @@ export async function processJobMessage(env: Env, message: JobMessage) {
     const error = caught instanceof Error ? caught.message : "background_reconciliation_failed";
     const latest = await backgroundJobById(env, job.id);
     if (!latest || latest.status === "cancelled") return;
-    const timedOut = Boolean(latest.timeoutAt && latest.timeoutAt <= new Date().toISOString());
+    const retentionPending = Boolean(latest.artifactId && latest.upstreamMediaPath);
+    const timedOut = !retentionPending && Boolean(latest.timeoutAt && latest.timeoutAt <= new Date().toISOString());
     const orphaned = error === "generation_not_found" && latest.reconcileAttempts >= 4;
-    if (timedOut || orphaned || PERMANENT_ERRORS.has(error)) {
+    if (timedOut || orphaned || (!retentionPending && PERMANENT_ERRORS.has(error))) {
       await failBackgroundJob(env, job.id, timedOut ? "generation_timed_out" : error);
       return;
     }

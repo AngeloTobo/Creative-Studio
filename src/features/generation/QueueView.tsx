@@ -19,14 +19,14 @@ export function QueueView() {
         {jobs.map((job) => <article className="queue-card glass" key={job.id}>
           <div className="queue-icon" style={{ "--job-accent": job.modality === "music" ? "var(--pink)" : "var(--cyan)" } as React.CSSProperties}><Icon name={job.modality} size={23} /></div>
           <div className="queue-main">
-            <div className="queue-title"><StatusDot status={job.status} /><strong>{job.modality === "music" ? "Music" : "Image"} from CreativeDNA</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
+            <div className="queue-title"><StatusDot status={job.status} /><strong>{job.artifactId && job.status === "running" ? "Retaining completed result" : `${job.modality === "music" ? "Music" : "Image"} from CreativeDNA`}</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
             <p>{job.prompt}</p>
             <div className="queue-meta"><span>{job.provider}</span><span>{age(job.updatedAt)}</span><span>{job.id}</span></div>
             {job.retryOfJobId ? <div className="queue-lineage">Retry of {job.retryOfJobId}</div> : null}
             {job.error ? <div className="queue-error">{job.error.replaceAll("_", " ")}</div> : null}
             <div className="job-progress"><i style={{ width: `${job.progress}%` }} /></div>
             <div className="queue-controls">
-              {job.status === "queued" || job.status === "running"
+              {(job.status === "queued" || job.status === "running") && !job.artifactId
                 ? <button className="btn btn-ghost" disabled={busy} title="Stops Creative Studio tracking. An upstream generation already running may still finish." onClick={() => void cancelJob(job.id)}>Cancel tracking</button>
                 : null}
               {job.status === "failed" || job.status === "cancelled"

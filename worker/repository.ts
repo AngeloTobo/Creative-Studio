@@ -257,24 +257,36 @@ function upstreamStatus(status: string): Job["status"] {
 }
 
 async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: string, mediaPath: string | null) {
-  const existing = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
-    .bind(job.id, ownerId).first<{ id: string }>();
+  const existing = await env.DB.prepare("select id, retained_key as retainedKey from creative_artifacts where job_id = ? and owner_id = ?")
+    .bind(job.id, ownerId).first<{ id: string; retainedKey: string | null }>();
   if (existing) {
-    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100 where id = ? and owner_id = ?")
-      .bind(existing.id, job.id, ownerId).run();
+    if (mediaPath && !existing.retainedKey) {
+      await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95 where id = ? and owner_id = ? and status in ('queued', 'running')")
+        .bind(existing.id, job.id, ownerId).run();
+    } else {
+      const now = new Date().toISOString();
+      await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), next_reconcile_at = null where id = ? and owner_id = ?")
+        .bind(existing.id, now, job.id, ownerId).run();
+    }
     return existing.id;
   }
   const artifactId = id("artifact");
   const now = new Date().toISOString();
   const colors = job.modality === "music" ? ["#9d174d", "#7c3aed"] : ["#0e7490", "#a21caf"];
   const previewUrl = mediaPath ? `/api/creative-studio/artifacts/${artifactId}/media` : null;
-  await env.DB.prepare(`insert or ignore into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`)
-    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now).run();
+  const artifactStatus: Artifact["status"] = mediaPath ? "retaining" : "ready";
+  await env.DB.prepare(`insert or ignore into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`)
+    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, artifactStatus, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now).run();
   const winner = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
     .bind(job.id, ownerId).first<{ id: string }>();
   if (!winner) throw new Error("artifact_create_failed");
-  await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null, reconcile_lease_until = null where id = ? and owner_id = ?")
-    .bind(winner.id, now, now, job.id, ownerId).run();
+  if (mediaPath) {
+    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95, updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status in ('queued', 'running')")
+      .bind(winner.id, now, job.id, ownerId).run();
+  } else {
+    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ?")
+      .bind(winner.id, now, now, job.id, ownerId).run();
+  }
   return winner.id;
 }
 
@@ -282,23 +294,26 @@ export async function attachAfdfwGeneration(env: Env, jobId: string, generation:
   const current = await backgroundJobById(env, jobId);
   if (!current) throw new Error("job_not_found");
   if (["completed", "failed", "cancelled"].includes(current.status)) return mapJob(current);
-  const status = upstreamStatus(generation.status);
+  const upstream = upstreamStatus(generation.status);
+  const status: Job["status"] = upstream === "completed" ? "running" : upstream;
   const now = generation.updatedAt || new Date().toISOString();
-  const progress = status === "completed" ? 100 : Math.max(current.progress, Number(generation.progress || (status === "running" ? 10 : 2)));
+  const progress = upstream === "completed" ? 95 : Math.max(current.progress, Number(generation.progress || (status === "running" ? 10 : 2)));
   const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${current.modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
-  const nextAt = status === "queued" || status === "running" ? new Date(Date.now() + 15_000).toISOString() : null;
+  const nextAt = upstream === "completed" ? null : status === "queued" || status === "running" ? new Date(Date.now() + 15_000).toISOString() : null;
+  const retentionTimeout = upstream === "completed" ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : current.timeoutAt;
   const changed = await env.DB.prepare(`update creative_jobs set upstream_id = ?, upstream_media_path = coalesce(?, upstream_media_path), status = ?, progress = ?,
-      error = ?, last_reconcile_error = null, updated_at = ?, completed_at = case when ? in ('completed', 'failed') then ? else completed_at end,
-      next_reconcile_at = ?, reconcile_lease_until = null where id = ? and status in ('queued', 'running')`)
-    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, status, now, nextAt, jobId).run();
+      error = ?, last_reconcile_error = null, updated_at = ?, completed_at = case when ? = 'failed' then ? else completed_at end,
+      next_reconcile_at = ?, timeout_at = ? where id = ? and status in ('queued', 'running')`)
+    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, upstream, now, nextAt, retentionTimeout, jobId).run();
   if (!changed.meta.changes) {
     const unchanged = await jobById(env, current.ownerId, jobId);
     if (!unchanged) throw new Error("job_not_found");
     return unchanged;
   }
-  if (status === "completed") {
+  if (upstream === "completed") {
+    if (!mediaPath) throw new Error("generation_media_missing");
     const dna = (await listLocalDna(env, current.ownerId)).find((item) => item.artifactId === current.dnaArtifactId);
-    await ensureArtifactForJob(env, current.ownerId, mapJob({ ...current, upstreamId: generation.id, status, progress, updatedAt: now, completedAt: now }), dna?.name ?? `${current.modality} artifact`, mediaPath);
+    await ensureArtifactForJob(env, current.ownerId, mapJob({ ...current, upstreamId: generation.id, status, progress, updatedAt: now, completedAt: null }), dna?.name ?? `${current.modality} artifact`, mediaPath);
   }
   const updated = await jobById(env, current.ownerId, jobId);
   if (!updated) throw new Error("job_not_found");
@@ -348,6 +363,7 @@ export async function cancelOwnedJob(env: Env, ownerId: string, jobId: string) {
   const current = await jobById(env, ownerId, jobId);
   if (!current) throw new Error("job_not_found");
   if (current.status === "completed" || current.status === "failed") throw new Error("job_not_cancellable");
+  if (current.artifactId) throw new Error("job_not_cancellable");
   if (current.status === "cancelled") return current;
   const now = new Date().toISOString();
   await env.DB.prepare(`update creative_jobs set status = 'cancelled', error = 'cancelled_by_user', cancelled_at = ?, completed_at = ?,
@@ -373,36 +389,21 @@ export async function reconcileDevelopmentJobs(env: Env, ownerId: string) {
   }
 }
 
-export async function reconcileAfdfwGenerations(env: Env, ownerId: string, modality: Job["modality"], generations: AfdfwGeneration[]) {
-  const jobs = (await listJobs(env, ownerId)).filter((job) => job.modality === modality && job.upstreamId);
-  for (const job of jobs) {
-    const generation = generations.find((item) => item.id === job.upstreamId);
-    if (!generation) continue;
-    const status = upstreamStatus(generation.status);
-    const progress = status === "completed" ? 100 : Number(generation.progress ?? job.progress);
-    const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
-    await env.DB.prepare("update creative_jobs set status = ?, progress = ?, upstream_media_path = coalesce(?, upstream_media_path), error = ?, updated_at = ?, completed_at = case when ? = 'completed' then ? else completed_at end where id = ? and owner_id = ?")
-      .bind(status, progress, mediaPath, generation.error ?? null, generation.updatedAt, status, generation.updatedAt, job.id, ownerId).run();
-    if (status === "completed" && !job.artifactId) {
-      const dna = (await listLocalDna(env, ownerId)).find((item) => item.artifactId === job.dnaArtifactId);
-      await ensureArtifactForJob(env, ownerId, { ...job, status, progress }, dna?.name ?? `${modality} artifact`, mediaPath);
-    }
-  }
-}
-
 type ArtifactRow = {
   id: string; projectId: string; jobId: string; dnaArtifactId: string; kind: Artifact["kind"]; name: string;
   status: Artifact["status"]; provider: string; prompt: string; previewKind: Artifact["preview"]["kind"];
-  previewUrl: string | null; previewFrom: string; previewTo: string; parentArtifactId: string | null; createdAt: string; updatedAt: string;
+  previewUrl: string | null; previewFrom: string; previewTo: string; parentArtifactId: string | null;
+  retainedKey: string | null; retainedSize: number | null; createdAt: string; updatedAt: string;
 };
 
 export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
-  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, created_at as createdAt, updated_at as updatedAt from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
+  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, created_at as createdAt, updated_at as updatedAt from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
   return (result.results ?? []).map((row) => ({
     id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
     name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
     preview: { kind: row.previewKind, url: row.previewUrl, colors: [row.previewFrom, row.previewTo] },
     lineage: { sourceArtifactIds: [row.dnaArtifactId], parentArtifactId: row.parentArtifactId },
+    retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
     createdAt: row.createdAt, updatedAt: row.updatedAt,
   }));
 }
@@ -413,8 +414,10 @@ export async function listAcceptances(env: Env, ownerId: string): Promise<Accept
 }
 
 export async function reviewArtifact(env: Env, ownerId: string, artifactId: string, decision: AcceptanceDecision, note: string) {
-  const current = await env.DB.prepare("select id from creative_artifacts where id = ? and owner_id = ?").bind(artifactId, ownerId).first<{ id: string }>();
+  const current = await env.DB.prepare("select id, status, preview_kind as previewKind, retained_key as retainedKey from creative_artifacts where id = ? and owner_id = ?").bind(artifactId, ownerId).first<{ id: string; status: Artifact["status"]; previewKind: Artifact["preview"]["kind"]; retainedKey: string | null }>();
   if (!current) throw new Error("artifact_not_found");
+  if (current.status === "retaining") throw new Error("artifact_not_ready");
+  if (current.previewKind === "remote-media" && !current.retainedKey) throw new Error("artifact_not_retained");
   const now = new Date().toISOString();
   const acceptance: Acceptance = { id: id("acceptance"), artifactId, decision, note: note.slice(0, 500), actor: "angelo", createdAt: now };
   const status = decision === "accepted" ? "accepted" : decision === "rejected" ? "rejected" : "archived";
@@ -439,32 +442,65 @@ export async function retainArtifactMedia(
   env: Env,
   ownerId: string,
   artifactId: string,
-  media: { bytes: ArrayBuffer; contentType: string; extension: string },
+  media: { body: ArrayBuffer | ReadableStream; contentType: string; extension: string; declaredSize?: number | null } | null,
 ) {
   if (!env.ARTIFACTS) throw new Error("artifact_retention_not_configured");
   const current = await artifactMediaPath(env, ownerId, artifactId);
   if (!current) throw new Error("artifact_not_found");
-  if (current.retainedKey) return current.retainedKey;
+  if (current.retainedKey) {
+    const retained = await env.ARTIFACTS.head(current.retainedKey);
+    if (!retained || (current.retainedSize !== null && retained.size !== Number(current.retainedSize))) {
+      throw new Error("artifact_retention_verification_failed");
+    }
+    return current.retainedKey;
+  }
+  if (!media) throw new Error("artifact_media_not_found");
   const safeOwner = ownerId.replace(/[^a-z0-9_-]/gi, "_").slice(0, 120);
-  const key = `owners/${safeOwner}/artifacts/${artifactId}/${crypto.randomUUID()}.${media.extension}`;
-  await env.ARTIFACTS.put(key, media.bytes, {
+  const key = `owners/${safeOwner}/artifacts/${artifactId}/result`;
+  const created = await env.ARTIFACTS.put(key, media.body, {
+    onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: { contentType: media.contentType },
-    customMetadata: { ownerId, artifactId, retainedAt: new Date().toISOString() },
+    customMetadata: { ownerId, artifactId, extension: media.extension, retainedAt: new Date().toISOString() },
   });
+  const retained = await env.ARTIFACTS.head(key);
+  const declaredSize = Number(media.declaredSize || 0);
+  if (!retained || retained.size <= 0 || (declaredSize > 0 && retained.size !== declaredSize)) {
+    if (created) await env.ARTIFACTS.delete(key);
+    throw new Error("artifact_retention_verification_failed");
+  }
   let updated: D1Result;
   try {
     updated = await env.DB.prepare(`update creative_artifacts set retained_key = ?, retained_content_type = ?, retained_size = ?, updated_at = ?
       where id = ? and owner_id = ? and retained_key is null`)
-      .bind(key, media.contentType, media.bytes.byteLength, new Date().toISOString(), artifactId, ownerId).run();
+      .bind(key, media.contentType, retained.size, new Date().toISOString(), artifactId, ownerId).run();
   } catch (error) {
-    await env.ARTIFACTS.delete(key);
+    if (created) await env.ARTIFACTS.delete(key);
     throw error;
   }
   if (!updated.meta.changes) {
-    await env.ARTIFACTS.delete(key);
     const winner = await artifactMediaPath(env, ownerId, artifactId);
+    if (winner?.retainedKey === key) return key;
+    if (created) await env.ARTIFACTS.delete(key);
     if (winner?.retainedKey) return winner.retainedKey;
     throw new Error("artifact_not_found");
   }
   return key;
+}
+
+export async function finalizeRetainedArtifact(env: Env, ownerId: string, artifactId: string) {
+  const artifact = await env.DB.prepare(`select job_id as jobId, retained_key as retainedKey, retained_size as retainedSize
+    from creative_artifacts where id = ? and owner_id = ?`)
+    .bind(artifactId, ownerId).first<{ jobId: string; retainedKey: string | null; retainedSize: number | null }>();
+  if (!artifact) throw new Error("artifact_not_found");
+  if (!artifact.retainedKey || !Number(artifact.retainedSize || 0)) throw new Error("artifact_not_retained");
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("update creative_artifacts set status = case when status = 'retaining' then 'ready' else status end, updated_at = ? where id = ? and owner_id = ?")
+      .bind(now, artifactId, ownerId),
+    env.DB.prepare("update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null, last_reconcile_error = null, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status != 'cancelled'")
+      .bind(artifactId, now, now, artifact.jobId, ownerId),
+  ]);
+  const job = await jobById(env, ownerId, artifact.jobId);
+  if (!job) throw new Error("job_not_found");
+  return job;
 }

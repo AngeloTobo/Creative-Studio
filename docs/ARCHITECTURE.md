@@ -15,7 +15,7 @@ flowchart LR
   WORKER -->|"exact allowlist only"| AF["AFDFW capabilities"]
   AF --> GEN["Existing generation workers"]
   D1 --> HIST["DNA, jobs, artifacts, decisions"]
-  R2 --> MEDIA["Accepted retained media"]
+  R2 --> MEDIA["Every completed result"]
 ```
 
 ## Ownership
@@ -24,7 +24,7 @@ flowchart LR
 - The BFF owns authentication handoff, validation, idempotent job creation, capability translation, and media mediation.
 - The queue consumer owns generation submission and per-generation reconciliation. A scheduled sweep re-enqueues due jobs after delivery or runtime interruptions.
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, jobs, artifact history, retained-media pointers, and append-only decisions.
-- Creative Studio R2 owns accepted generated media.
+- Creative Studio R2 owns every completed generated result, independent of its later acceptance decision.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
 
 ## CreativeDNA vertical slice
@@ -35,8 +35,8 @@ flowchart LR
 4. Saving creates a root or child version without overwriting history.
 5. Music and image translations create idempotent durable jobs tied to the exact DNA artifact, then return before generation starts.
 6. The queue consumer submits to AFDFW and reconciles the individual upstream generation without a browser session. It retains only the verified Access email needed to resolve the approved AFDFW owner; browser cookies and Access JWTs are not stored.
-7. Completion creates a reviewable artifact with job and DNA lineage.
-8. Accept copies remote generated media into Creative Studio R2 before recording the explicit decision; reject and archive record decisions without copying media. None changes AFDFW canonical state.
+7. Upstream completion creates a `retaining` artifact. The consumer streams the source into a deterministic owner/artifact R2 key, conditionally avoids overwriting an existing copy, verifies the stored size, and records the retained pointer.
+8. Only after verification does the job become `completed` and the artifact become `ready`. Accept, reject, and archive then record decisions without changing retention or AFDFW canonical state.
 
 ## Adapters
 
@@ -48,6 +48,7 @@ flowchart LR
 
 - Owner plus idempotency key has a D1 uniqueness constraint, so browser retries do not create a second Creative Studio job.
 - Queue delivery is guarded by a D1 lease, and artifact creation is unique per job.
-- Active jobs have a 30-minute deadline, bounded exponential reconciliation delay, and explicit terminal failure state.
+- Retention is idempotent at a deterministic R2 key. A failed or interrupted copy remains at 95% with a `retaining` artifact and is retried without regenerating upstream.
+- Generation has a 30-minute deadline and bounded exponential reconciliation delay. A confirmed result awaiting retention continues retrying instead of being discarded at that generation deadline.
 - Retry creates a new job with `retryOfJobId` lineage; it never rewrites the failed or cancelled record.
-- Cancel stops Creative Studio tracking. If AFDFW already handed work to ComfyUI, that upstream computation may still finish and is not represented as cancelled upstream.
+- Cancel stops Creative Studio tracking only before a completed result enters retention. Once a result exists, retention cannot be cancelled.

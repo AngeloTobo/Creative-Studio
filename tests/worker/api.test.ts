@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { CreativeDnaArtifact } from "../../shared/contracts";
 import { backendMode } from "../../worker/config";
 import { processJobMessage } from "../../worker/jobs";
-import { createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, reconcileDevelopmentJobs } from "../../worker/repository";
+import { attachAfdfwGeneration, cancelOwnedJob, createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, createQueuedJob, reconcileDevelopmentJobs } from "../../worker/repository";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
 import type { Env } from "../../worker/types";
 
@@ -51,9 +51,14 @@ function memoryQueue() {
 function memoryBucket() {
   const values = new Map<string, { bytes: ArrayBuffer; contentType: string }>();
   const bucket = {
-    async put(key: string, value: ArrayBuffer, options?: R2PutOptions) {
-      values.set(key, { bytes: value.slice(0), contentType: options?.httpMetadata && "contentType" in options.httpMetadata ? String(options.httpMetadata.contentType) : "application/octet-stream" });
-      return {};
+    async put(key: string, value: ArrayBuffer | ReadableStream, options?: R2PutOptions) {
+      const bytes = value instanceof ArrayBuffer ? value.slice(0) : await new Response(value as BodyInit).arrayBuffer();
+      values.set(key, { bytes, contentType: options?.httpMetadata && "contentType" in options.httpMetadata ? String(options.httpMetadata.contentType) : "application/octet-stream" });
+      return { key, size: bytes.byteLength };
+    },
+    async head(key: string) {
+      const value = values.get(key);
+      return value ? { key, size: value.bytes.byteLength } : null;
     },
     async get(key: string) {
       const value = values.get(key);
@@ -266,6 +271,7 @@ describe("Creative Studio Worker API", () => {
     });
     let submissions = 0;
     let statusReads = 0;
+    let mediaReads = 0;
     const afdfw = {
       async fetch(input: RequestInfo | URL, init?: RequestInit) {
         const upstream = new Request(input, init);
@@ -280,11 +286,16 @@ describe("Creative Studio Worker API", () => {
           statusReads += 1;
           return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, status: "completed", progress: 100, previewMediaId: "test-image", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
         }
+        if (path === "/api/profile-image/media/test-image") {
+          mediaReads += 1;
+          return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png", "content-length": "4" } });
+        }
         return Response.json({ ok: false, error: "unexpected_test_upstream" }, { status: 404 });
       },
     } as Fetcher;
     const { queue, messages } = memoryQueue();
-    const production = { ...workerEnv("afdfw", afdfw), JOB_QUEUE: queue };
+    const { bucket, values } = memoryBucket();
+    const production = { ...workerEnv("afdfw", afdfw, bucket), JOB_QUEUE: queue };
     const created = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
@@ -302,9 +313,23 @@ describe("Creative Studio Worker API", () => {
     await env.DB.prepare("update creative_jobs set next_reconcile_at = ? where id = ?").bind("2020-01-01T00:00:00.000Z", payload.job.id).run();
     await processJobMessage(production, { jobId: payload.job.id });
     expect(statusReads).toBe(1);
+    expect(mediaReads).toBe(1);
+    expect(values.size).toBe(1);
     const finished = await env.DB.prepare("select status, artifact_id as artifactId from creative_jobs where id = ?").bind(payload.job.id).first<{ status: string; artifactId: string }>();
     expect(finished).toMatchObject({ status: "completed" });
     expect(finished?.artifactId).toBeTruthy();
+    const retained = await env.DB.prepare("select status, retained_key as retainedKey, retained_size as retainedSize from creative_artifacts where id = ?")
+      .bind(finished?.artifactId).first<{ status: string; retainedKey: string; retainedSize: number }>();
+    expect(retained).toMatchObject({ status: "ready", retainedSize: 4 });
+    expect(retained?.retainedKey).toContain(`owners/${ownerId}/artifacts/${finished?.artifactId}/`);
+    const accepted = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${finished?.artifactId}/accepted`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
+      body: JSON.stringify({ note: "Decision after automatic retention." }),
+    }), production);
+    expect(accepted.status).toBe(200);
+    expect(mediaReads).toBe(1);
+    expect(values.size).toBe(1);
   });
 
   it("deduplicates submissions and exposes explicit cancel and retry controls", async () => {
@@ -345,7 +370,61 @@ describe("Creative Studio Worker API", () => {
     expect(messages.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("retains accepted AFDFW media in owner-scoped Creative Studio storage", async () => {
+  it("keeps a completed upstream result pending until retention verifies, then resumes without regenerating", async () => {
+    const ownerId = "owner-retention-retry";
+    const project = await testProject(ownerId, "Retention Retry");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Retention Retry",
+      directive: "An original image with a precise bright edge and deep negative space.",
+      targetModality: "image",
+    });
+    const queued = await createQueuedJob(env, ownerId, {
+      projectId: project.id,
+      dna,
+      modality: "image",
+      idempotencyKey: "retention_retry_0001",
+      provider: "afdfw-z-image",
+      reconcileEmail: "retention@example.com",
+    });
+    const pending = await attachAfdfwGeneration(env, queued.job.id, {
+      id: "image_retention_retry",
+      prompt: dna.generationPrompts.image,
+      status: "completed",
+      progress: 100,
+      previewMediaId: "retry-image",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    expect(pending.status).toBe("running");
+    expect(pending.progress).toBe(95);
+    await expect(cancelOwnedJob(env, ownerId, queued.job.id)).rejects.toThrow("job_not_cancellable");
+    let mediaReads = 0;
+    const afdfw = {
+      async fetch(input: RequestInfo | URL, init?: RequestInit) {
+        const upstream = new Request(input, init);
+        expect(new URL(upstream.url).pathname).toBe("/api/profile-image/media/retry-image");
+        mediaReads += 1;
+        if (mediaReads === 1) return new Response(new Uint8Array([1, 2, 3, 4, 5]), { headers: { "content-type": "image/png", "content-length": "6" } });
+        return new Response(new Uint8Array([1, 2, 3, 4, 5]), { headers: { "content-type": "image/png", "content-length": "5" } });
+      },
+    } as Fetcher;
+    const { bucket, values } = memoryBucket();
+    const production = workerEnv("afdfw", afdfw, bucket);
+    await processJobMessage(production, { jobId: queued.job.id });
+    let stored = await env.DB.prepare("select status, progress from creative_jobs where id = ?").bind(queued.job.id).first<{ status: string; progress: number }>();
+    expect(stored).toMatchObject({ status: "running", progress: 95 });
+    expect(values.size).toBe(0);
+
+    await env.DB.prepare("update creative_jobs set next_reconcile_at = ? where id = ?").bind("2020-01-01T00:00:00.000Z", queued.job.id).run();
+    await processJobMessage(production, { jobId: queued.job.id });
+    stored = await env.DB.prepare("select status, progress from creative_jobs where id = ?").bind(queued.job.id).first<{ status: string; progress: number }>();
+    expect(stored).toMatchObject({ status: "completed", progress: 100 });
+    expect(mediaReads).toBe(2);
+    expect(values.size).toBe(1);
+  });
+
+  it("repairs pending retention before recording an artifact decision", async () => {
     const ownerId = "owner-retention";
     const project = await testProject(ownerId);
     const dna = await createLocalDna(env, ownerId, {
@@ -363,9 +442,10 @@ describe("Creative Studio Worker API", () => {
       createdAt: "2026-08-16T12:00:00.000Z",
       updatedAt: "2026-08-16T12:01:00.000Z",
     });
-    const artifact = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
-      .bind(job.id, ownerId).first<{ id: string }>();
+    const artifact = await env.DB.prepare("select id, status from creative_artifacts where job_id = ? and owner_id = ?")
+      .bind(job.id, ownerId).first<{ id: string; status: string }>();
     expect(artifact?.id).toBeTruthy();
+    expect(artifact?.status).toBe("retaining");
     const artifactId = String(artifact?.id);
     const { bucket, values } = memoryBucket();
     const production = workerEnv("afdfw", afdfwFor(ownerId), bucket);

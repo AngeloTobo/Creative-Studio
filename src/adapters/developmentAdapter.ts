@@ -159,6 +159,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
             prompt: job.prompt,
             preview: { kind: "development-gradient", url: null, colors },
             lineage: { sourceArtifactIds: [job.dnaArtifactId], parentArtifactId: null },
+            retention: { state: "development-only", size: null },
             createdAt: current.toISOString(),
             updatedAt: current.toISOString(),
           };

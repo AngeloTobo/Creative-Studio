@@ -33,10 +33,10 @@ import {
   listProjects,
   projectById,
   reconcileDevelopmentJobs,
-  retainArtifactMedia,
   reviewArtifact,
   updateProject,
 } from "../repository";
+import { retainCompletedArtifact } from "../retention";
 import type { Env, OwnerSession } from "../types";
 
 function developmentMode(env: Env) {
@@ -91,7 +91,7 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
     { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
-    { key: "artifact-retention", label: "Artifact retention", state: env.ARTIFACTS ? "available" : "degraded", provider: env.ARTIFACTS ? "Creative Studio R2" : "AFDFW temporary media + Creative Studio history", detail: env.ARTIFACTS ? "Accepted generated media is retained under Creative Studio ownership." : "Metadata is durable; standalone retained media requires a Creative Studio R2 binding.", checkedAt },
+    { key: "artifact-retention", label: "Artifact retention", state: env.ARTIFACTS ? "available" : "degraded", provider: env.ARTIFACTS ? "Creative Studio R2" : "AFDFW temporary media + Creative Studio history", detail: env.ARTIFACTS ? "Every completed result is copied and size-verified under Creative Studio ownership before its job completes." : "Jobs cannot complete without a Creative Studio R2 binding.", checkedAt },
     { key: "afdfw-session", label: "AFDFW session", state: session.status === "approved" ? "available" : "unavailable", provider: "approved-session handoff", detail: "The browser sees only the same-origin Creative Studio session route.", checkedAt },
   ];
 }
@@ -211,26 +211,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!match) return json({ ok: false, error: "invalid_review_route" }, { status: 400 });
       const decision = match[2] as AcceptanceDecision;
       const input = await body<{ note?: unknown }>(request);
-      if (decision === "accepted" && !developmentMode(env)) {
+      if (!developmentMode(env)) {
         const source = await artifactMediaPath(env, session.userId, match[1]);
         if (!source) throw new Error("artifact_not_found");
-        if (!source.retainedKey && source.mediaPath) {
-          const mediaResponse = await afdfwMedia(env, request, source.mediaPath);
-          if (!mediaResponse.ok) throw new Error(`afdfw_media_${mediaResponse.status}`);
-          const declaredSize = Number(mediaResponse.headers.get("content-length") || 0);
-          if (declaredSize > 100 * 1024 * 1024) throw new Error("artifact_media_too_large");
-          const bytes = await mediaResponse.arrayBuffer();
-          if (bytes.byteLength > 100 * 1024 * 1024) throw new Error("artifact_media_too_large");
-          const contentType = (mediaResponse.headers.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase();
-          const extension = contentType === "image/png" ? "png"
-            : contentType === "image/jpeg" ? "jpg"
-              : contentType === "image/webp" ? "webp"
-                : contentType === "audio/mpeg" ? "mp3"
-                  : contentType === "audio/wav" || contentType === "audio/x-wav" ? "wav"
-                    : contentType === "audio/flac" ? "flac"
-                      : "bin";
-          await retainArtifactMedia(env, session.userId, match[1], { bytes, contentType, extension });
-        }
+        if (source.mediaPath || source.retainedKey) await retainCompletedArtifact(env, request, session.userId, match[1]);
       }
       return json({ ok: true, ...await reviewArtifact(env, session.userId, match[1], decision, boundedText(input?.note, 500)) });
     }

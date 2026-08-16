@@ -13,10 +13,11 @@ Last verified: 2026-08-16 (America/Chicago)
 - Deterministic CreativeDNA compilation, bounds, prompt translation, rights-safe provenance, root/parent/version lineage, and both music/image submission.
 - Queue-owned production submission and per-generation reconciliation continue after the originating browser request ends; a scheduled recovery sweep re-enqueues due work.
 - D1-backed idempotency, reconciliation leases, a 30-minute timeout, bounded retries, retry lineage, unique artifact creation, and explicit cancel controls.
+- Every real upstream completion enters a non-cancellable `retaining` state, streams to a deterministic Creative Studio R2 key, verifies stored size, and becomes completed/ready only after that verification. Interrupted retention retries without resubmitting generation.
 - Artifact history, lineage expansion, and explicit accept/reject/archive controls.
 - Exact AFDFW method/path allowlist with no generic proxy.
 - Same-account AFDFW service binding for identity handoff and generation; CreativeDNA remains product-owned in Creative Studio D1.
-- Accepted AFDFW media is copied into owner-scoped keys in the dedicated Creative Studio R2 bucket before the acceptance decision is recorded.
+- Accept, reject, and archive are decision-only operations for real results because retention is completed first; an interactive review request also repairs an older pending-retention artifact before recording a decision.
 - Fail-closed browser/Worker environment validation and a production-readiness preflight.
 - Workers-runtime Vitest integration using the real D1 migrations and production Worker entrypoint.
 
@@ -24,14 +25,14 @@ Last verified: 2026-08-16 (America/Chicago)
 
 - TypeScript, ESLint, Vitest, Vite production build, environment validation, and source secret scan pass.
 - Nine browser-domain unit tests cover CreativeDNA rights/lineage/project scope, empty development persistence, project lifecycle, idempotent generation, cancel/retry behavior, route rejection, and adapter configuration.
-- Twelve Workers-runtime tests cover the Worker entrypoint, AFDFW target validation, unauthenticated access, Access-header relay, empty/project lifecycle behavior, malformed input, project ownership, owner-isolated review, browser-independent background generation, idempotency, cancellation/retry, durable job transitions, R2 retention, append-only decisions, and generic-proxy rejection.
+- Thirteen Workers-runtime tests cover the Worker entrypoint, AFDFW target validation, unauthenticated access, Access-header relay, empty/project lifecycle behavior, malformed input, project ownership, owner-isolated review, browser-independent background generation, idempotency, cancellation/retry, verified automatic R2 retention, retention interruption/resume without regeneration, pending-retention repair, append-only decisions, and generic-proxy rejection.
 - Local D1 migration applies successfully.
 - A Worker API flow created DNA, completed a durable job, created an artifact, stored acceptance, rejected a generic proxy path, and preserved state across a Worker restart.
 - A real Chromium pass against the HTTP/BFF mode completed DNA save, image job, artifact lineage, acceptance, and reload persistence with no current console errors.
 - Desktop and 390px mobile rendered inspection completed; module-semantic layout regressions found during inspection were corrected.
 - Playwright reports six passing checks and two intentional mobile skips: desktop/mobile empty-first-run project creation, DNA versioning, generation, review, and reload persistence; a desktop project edit/archive lifecycle; reduced motion in both layouts; and desktop keyboard focus/navigation.
 - Production environment preflight passes with a real D1 ID, dedicated R2 and Queue bindings, queue consumer, five-minute recovery trigger, AFDFW service binding, custom domain, and disabled `workers.dev` route.
-- Cloudflare deployed Worker version `9d750b41-287e-4801-a2cb-a248a86386d0` at 100% to `cs.angelotoborg.com`.
+- Cloudflare deployed automatic-retention Worker version `673e5792-650f-4b8e-bca5-e566c5f50f45` at 100% to `cs.angelotoborg.com`.
 - Remote D1 reports no pending migrations after `0003_background_jobs.sql`; the background columns and three uniqueness/due indexes were queried directly after release.
 - Cloudflare reports `creative-studio-jobs` with one producer and one consumer, plus the separate `creative-studio-jobs-dlq`; deployment output confirms the five-minute schedule.
 - Anonymous requests to `/` and `/api/creative-studio/session` both receive Cloudflare Access redirects.

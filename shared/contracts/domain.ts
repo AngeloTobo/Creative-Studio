@@ -53,7 +53,7 @@ export type Job = {
   completedAt: IsoDateString | null;
 };
 
-export type ArtifactStatus = "ready" | "accepted" | "rejected" | "archived";
+export type ArtifactStatus = "retaining" | "ready" | "accepted" | "rejected" | "archived";
 
 export type Artifact = {
   id: string;
@@ -73,6 +73,10 @@ export type Artifact = {
   lineage: {
     sourceArtifactIds: string[];
     parentArtifactId: string | null;
+  };
+  retention: {
+    state: "development-only" | "pending" | "retained";
+    size: number | null;
   };
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
