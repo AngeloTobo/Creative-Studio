@@ -26,6 +26,9 @@ import {
   type SaveWorkflowRevisionRequest,
   type SaveWorkflowRevisionResponse,
   type WorkflowDefinition,
+  type CreativeDnaTrainingJob,
+  type CreateCreativeDnaTrainingJobRequest,
+  type CreativeDnaTrainingJobResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -81,7 +84,7 @@ async function uploadWorkflowRequest(file: File, projectId: string, name = "", d
 
 export function createHttpAdapter(): StudioAdapter {
   const load = async (): Promise<StudioSnapshot> => {
-    const [session, projects, dna, jobs, artifacts, media, workflows, capabilities] = await Promise.all([
+    const [session, projects, dna, jobs, artifacts, media, workflows, trainingJobs, capabilities] = await Promise.all([
       request<{ session: StudioSession }>(CREATIVE_STUDIO_ROUTES.session),
       request<{ projects: Project[] }>(CREATIVE_STUDIO_ROUTES.projects),
       request<{ artifacts: CreativeDnaArtifact[] }>(CREATIVE_STUDIO_ROUTES.dna),
@@ -89,6 +92,7 @@ export function createHttpAdapter(): StudioAdapter {
       request<{ artifacts: Artifact[]; acceptances: StudioSnapshot["acceptances"]; trainingExamples: CreativeTrainingExample[] }>(CREATIVE_STUDIO_ROUTES.artifacts),
       request<{ assets: MediaAsset[] }>(CREATIVE_STUDIO_ROUTES.media),
       request<{ workflows: WorkflowDefinition[] }>(CREATIVE_STUDIO_ROUTES.workflows),
+      request<{ trainingJobs: CreativeDnaTrainingJob[] }>(CREATIVE_STUDIO_ROUTES.trainingJobs),
       request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
     ]);
     return {
@@ -101,6 +105,7 @@ export function createHttpAdapter(): StudioAdapter {
       mediaAssets: media.assets,
       workflows: workflows.workflows,
       trainingExamples: artifacts.trainingExamples,
+      trainingJobs: trainingJobs.trainingJobs,
       acceptances: artifacts.acceptances,
       capabilities: capabilities.capabilities,
       refreshedAt: new Date().toISOString(),
@@ -167,7 +172,8 @@ export function createHttpAdapter(): StudioAdapter {
       });
       return result.job;
     },
-    async reviewArtifact(artifactId: string, decision: AcceptanceDecision, note = "") {
+    async reviewArtifact(artifactId: string, decision: AcceptanceDecision, note: string) {
+      if ((decision === "accepted" || decision === "rejected") && !note.trim()) throw new Error("review_note_required");
       return request<ReviewArtifactResponse>(`${CREATIVE_STUDIO_ROUTES.artifacts}/${encodeURIComponent(artifactId)}/${decision}`, {
         method: "POST",
         body: JSON.stringify({ decision, note }),
@@ -185,6 +191,20 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify(input),
       });
       return result.workflow;
+    },
+    async startCreativeDnaTraining(input: CreateCreativeDnaTrainingJobRequest) {
+      const result = await request<CreativeDnaTrainingJobResponse>(CREATIVE_STUDIO_ROUTES.trainingJobs, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.trainingJob;
+    },
+    async cancelCreativeDnaTraining(jobId: string) {
+      const result = await request<CreativeDnaTrainingJobResponse>(`${CREATIVE_STUDIO_ROUTES.trainingJobs}/${encodeURIComponent(jobId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.trainingJob;
     },
   };
 }

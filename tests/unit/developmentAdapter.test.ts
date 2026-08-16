@@ -44,10 +44,11 @@ describe("development adapter", () => {
     expect(artifact?.status).toBe("ready");
     if (!artifact) throw new Error("artifact missing");
 
+    await expect(adapter.reviewArtifact(artifact.id, "rejected", "   ")).rejects.toThrow("review_note_required");
     await adapter.reviewArtifact(artifact.id, "accepted", "Keep this direction.");
     const reloaded = await createDevelopmentAdapter(options).load();
     expect(reloaded.artifacts.find((item) => item.id === artifact.id)?.status).toBe("accepted");
-    expect(reloaded.acceptances.some((item) => item.artifactId === artifact.id && item.decision === "accepted")).toBe(true);
+    expect(reloaded.acceptances.find((item) => item.artifactId === artifact.id && item.decision === "accepted")).toMatchObject({ note: "Keep this direction.", actor: "development-user" });
     expect(reloaded.dnaArtifacts.some((item) => item.artifactId === dna.artifactId)).toBe(true);
   });
 

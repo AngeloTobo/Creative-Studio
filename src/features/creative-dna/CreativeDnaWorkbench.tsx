@@ -12,6 +12,8 @@ import {
 } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
+import { GenerationView } from "../generation/GenerationView";
+import { DnaTrainingPanel } from "./DnaTrainingPanel";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   energy: "Energy",
@@ -29,8 +31,8 @@ function savedLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "Saved" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function CreativeDnaWorkbench({ onQueued }: { onQueued: () => void }) {
-  const { snapshot, activeProjectId, activeDna, selectDna, saveDna, submitJob, busy, error } = useStudio();
+export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => void; onMedia: () => void }) {
+  const { snapshot, activeProjectId, activeDna, selectDna, saveDna, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const [name, setName] = useState(activeDna?.name ?? "");
   const [directive, setDirective] = useState(activeDna?.source.directive ?? "");
@@ -83,12 +85,6 @@ export function CreativeDnaWorkbench({ onQueued }: { onQueued: () => void }) {
     window.setTimeout(() => setCopied(false), 1_500);
   };
 
-  const make = async (target: CreativeDnaTarget) => {
-    if (!activeDna) return;
-    await submitJob(target, activeDna.artifactId);
-    onQueued();
-  };
-
   const invalid = directive.trim().length < 4 || (sourceKind === "commercial_reference" && !referenceLabel.trim());
 
   return (
@@ -96,8 +92,8 @@ export function CreativeDnaWorkbench({ onQueued }: { onQueued: () => void }) {
       <div className="dna-workbench-head">
         <div>
           <span className="eyebrow">Versioned cross-media blueprint</span>
-          <h2 id="dna-workbench-title">CreativeDNA</h2>
-          <p>Shape the shared intent once, then translate it into music and image jobs without flattening its lineage.</p>
+          <h2 id="dna-workbench-title">CreativeDNA Studio</h2>
+          <p>Build, train, and generate from one versioned workspace without flattening lineage.</p>
         </div>
         <button className="btn btn-ghost" onClick={startNew}><Icon name="plus" size={16} /> New DNA</button>
       </div>
@@ -146,10 +142,13 @@ export function CreativeDnaWorkbench({ onQueued }: { onQueued: () => void }) {
           {activeDna ? <div className="dna-result" role="status">
             <div className="dna-result-title"><div><span className="badge active">Saved · v{activeDna.version}</span>{activeDna.rights.referenceStoredAsProvenanceOnly ? <span className="badge rights">Rights-safe</span> : null}<h3>{activeDna.name}</h3></div><button className="lc-act" aria-label="Copy active prompt" onClick={() => void copyPrompt()}><Icon name={copied ? "check" : "copy"} size={17} /></button></div>
             <p>{activeDna.source.directive}</p>
-            <div className="dna-actions"><button className="btn btn-ghost" onClick={() => void make("music")}><Icon name="music" size={17} /> Make music</button><button className="btn btn-primary" onClick={() => void make("image")}><Icon name="image" size={17} /> Make image</button></div>
+            <small className="dna-result-next">Training and generation controls use this saved version below.</small>
           </div> : <div className="dna-empty"><Icon name="dna" size={30} /><strong>Your versioned blueprint appears here.</strong><span>Build it, reopen it, then evolve it without overwriting history.</span></div>}
         </div>
       </div>
+
+      <DnaTrainingPanel onMedia={onMedia} />
+      <GenerationView onQueued={onQueued} onMedia={onMedia} embedded />
 
       <div className="dna-history glass">
         <div className="dna-history-head"><div><span className="eyebrow">Lineage</span><h3>Version history</h3></div><span>{projectDna.length} saved</span></div>

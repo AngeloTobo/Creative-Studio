@@ -118,6 +118,28 @@ export type CreativeTrainingExample = {
   updatedAt: IsoDateString;
 };
 
+export type CreativeDnaTrainingStatus = "waiting-for-runner" | "running" | "completed" | "failed" | "cancelled";
+
+export type CreativeDnaTrainingJob = {
+  id: string;
+  projectId: string;
+  baseDnaArtifactId: string | null;
+  resultDnaArtifactId: string | null;
+  name: string;
+  targetModality: GenerationModality;
+  status: CreativeDnaTrainingStatus;
+  progress: number;
+  provider: "local-creative-dna-runner";
+  assetIds: string[];
+  trainingExampleIds: string[];
+  runnerId: string | null;
+  error: string | null;
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+  startedAt: IsoDateString | null;
+  completedAt: IsoDateString | null;
+};
+
 export type MediaKind = "image" | "audio" | "video";
 
 export type MediaAsset = {
@@ -161,7 +183,8 @@ export type CapabilityKey =
   | "artifact-retention"
   | "afdfw-session"
   | "workflow-library"
-  | "creative-dna-training-data";
+  | "creative-dna-training-data"
+  | "creative-dna-training";
 
 export type CapabilityState = "available" | "degraded" | "unavailable";
 

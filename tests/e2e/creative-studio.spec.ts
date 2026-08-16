@@ -7,18 +7,20 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("button", { name: "Create project" }).click();
   await page.getByRole("button", { name: "New DNA" }).click();
 
-  await page.getByRole("textbox", { name: "Name" }).fill("E2E Luminous Study");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill("E2E Luminous Study");
   await page.getByRole("textbox", { name: "What are you making?" }).fill(
     "A nocturnal glass form with electric magenta tension, cyan reflections, spacious composition, and a deliberately human edge.",
   );
-  await page.getByRole("button", { name: "image", exact: true }).click();
+  await page.locator(".dna-compose").getByRole("button", { name: "image", exact: true }).click();
   await page.getByRole("button", { name: "Build CreativeDNA" }).click();
 
   await expect(page.getByText("Saved · v1")).toBeVisible();
   await page.getByRole("button", { name: "Save new version" }).click();
   await expect(page.getByText("Saved · v2")).toBeVisible();
 
-  await page.getByRole("button", { name: "Make image" }).click();
+  await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Generate", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Queue image" }).click();
   await expect(page).toHaveURL(/#\/queue$/);
   await expect(page.getByText("running").first()).toBeVisible({ timeout: 5_000 });
 
@@ -26,11 +28,40 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   const artifact = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });
   await expect(artifact).toBeVisible({ timeout: 10_000 });
   await artifact.getByRole("button", { name: "Accept" }).click();
-  await expect(artifact.getByText("accepted", { exact: true })).toBeVisible();
+  const review = page.getByRole("dialog", { name: "Accept E2E Luminous Study" });
+  await expect(review).toBeVisible();
+  await expect(review.getByRole("button", { name: "Accept artifact" })).toBeDisabled();
+  await review.getByRole("textbox", { name: /Review note/ }).fill("Keep the cyan reflections and spacious focal hierarchy.");
+  await review.getByRole("button", { name: "Accept artifact" }).click();
+  await expect(artifact.locator(".artifact-title").getByText("accepted", { exact: true })).toBeVisible();
+  await expect(artifact.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
+  await expect(artifact.getByText("Reviewed by Development user")).toBeVisible();
 
   await page.reload();
   const persisted = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });
-  await expect(persisted.getByText("accepted", { exact: true })).toBeVisible();
+  await expect(persisted.locator(".artifact-title").getByText("accepted", { exact: true })).toBeVisible();
+  await expect(persisted.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
+});
+
+test("cancelled generation explains the retained history and offers a durable retry", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Queue control coverage needs one browser shape");
+  await page.goto("/#/dna");
+  await page.getByRole("textbox", { name: "Project name" }).fill("Retry E2E");
+  await page.getByRole("textbox", { name: "Project type" }).fill("Image Study");
+  await page.getByRole("button", { name: "Create project" }).click();
+  await page.getByRole("button", { name: "New DNA" }).click();
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill("Retry Direction");
+  await page.getByRole("textbox", { name: "What are you making?" }).fill("An original image with a clean silhouette and high contrast rim light.");
+  await page.locator(".dna-compose").getByRole("button", { name: "image", exact: true }).click();
+  await page.getByRole("button", { name: "Build CreativeDNA" }).click();
+  await page.getByRole("button", { name: "Queue image" }).click();
+  await page.getByRole("button", { name: "Cancel tracking" }).click();
+
+  await expect(page.getByRole("region", { name: "Tracking cancelled" })).toContainText("cancelled_by_user");
+  await expect(page.getByRole("region", { name: "Tracking cancelled" })).toContainText("remains in history");
+  await page.getByRole("button", { name: "Retry as new job" }).click();
+  await expect(page.getByText(/Retry of job_/)).toBeVisible();
+  await expect(page.locator(".queue-card")).toHaveCount(2);
 });
 
 test("project onboarding starts empty and preserves explicit lifecycle changes", async ({ page }, testInfo) => {

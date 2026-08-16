@@ -4,7 +4,6 @@ import { type StudioView } from "./views";
 import { DesktopShell, MobileShell } from "../components/Shell";
 import { Icon } from "../components/Icon";
 import { CreativeDnaWorkbench } from "../features/creative-dna/CreativeDnaWorkbench";
-import { GenerationView } from "../features/generation/GenerationView";
 import { QueueView } from "../features/generation/QueueView";
 import { ArtifactsView } from "../features/artifacts/ArtifactsView";
 import { PortalView } from "../features/portal/PortalView";
@@ -15,10 +14,12 @@ import { MediaView } from "../features/media/MediaView";
 import { PlaceholderView } from "../features/placeholder/PlaceholderView";
 import { FlowsView } from "../features/workflows/FlowsView";
 
-const VIEWS = new Set<StudioView>(["portal", "dna", "generate", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
+const VIEWS = new Set<StudioView>(["portal", "dna", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
 
 function hashView(): StudioView {
-  const candidate = window.location.hash.replace(/^#\/?/, "") as StudioView;
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  if (raw === "generate") return "dna";
+  const candidate = raw as StudioView;
   return VIEWS.has(candidate) ? candidate : "portal";
 }
 
@@ -55,9 +56,8 @@ export function App() {
     if (!activeProjectId && view !== "projects" && view !== "runtime") return <ProjectsView />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
-      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} />;
-      case "generate": return <GenerationView onQueued={() => navigate("queue")} onMedia={() => navigate("media")} />;
-      case "media": return <MediaView onGenerate={() => navigate("generate")} />;
+      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} onMedia={() => navigate("media")} />;
+      case "media": return <MediaView onGenerate={() => navigate("dna")} />;
       case "queue": return <QueueView />;
       case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} />;
       case "library": return <LibraryView />;

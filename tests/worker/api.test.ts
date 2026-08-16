@@ -77,6 +77,7 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_dna_training_jobs"),
     env.DB.prepare("delete from creative_training_examples"),
     env.DB.prepare("delete from creative_workflow_revisions"),
     env.DB.prepare("delete from creative_workflows"),
@@ -210,13 +211,21 @@ describe("Creative Studio Worker API", () => {
     expect(wrongOwner.status).toBe(404);
     expect(await result(wrongOwner)).toMatchObject({ error: "artifact_not_found" });
 
+    const missingNote = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifact?.id}/accepted`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "   " }),
+    }), workerEnv("afdfw", afdfwFor(ownerA)));
+    expect(missingNote.status).toBe(400);
+    expect(await result(missingNote)).toMatchObject({ error: "review_note_required" });
+
     const rightOwner = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifact?.id}/accepted`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ note: "Keep this direction." }),
     }), workerEnv("afdfw", afdfwFor(ownerA)));
     expect(rightOwner.status).toBe(200);
-    expect(await result(rightOwner)).toMatchObject({ ok: true, artifact: { status: "accepted" }, acceptance: { decision: "accepted" } });
+    expect(await result(rightOwner)).toMatchObject({ ok: true, artifact: { status: "accepted" }, acceptance: { decision: "accepted", note: "Keep this direction.", actor: "angelo" } });
   });
 
   it("uploads, verifies, lists, and serves owner-scoped project media", async () => {
@@ -263,6 +272,77 @@ describe("Creative Studio Worker API", () => {
     const wrongOwner = await routeCreativeStudioApi(request(payload.asset.contentUrl), workerEnv("afdfw", afdfwFor("owner-other"), bucket));
     expect(wrongOwner.status).toBe(404);
     expect(await result(wrongOwner)).toMatchObject({ error: "media_not_found" });
+  });
+
+  it("starts an upload-based CreativeDNA training run and preserves runner lineage", async () => {
+    const ownerId = "owner-training";
+    const project = await testProject(ownerId, "Training Study");
+    const { bucket } = memoryBucket();
+    const production = workerEnv("afdfw", afdfwFor(ownerId), bucket);
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("Training Source.png"),
+        "x-cs-file-size": String(bytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: bytes,
+    }), production)) as { asset: { id: string } };
+
+    const started = await routeCreativeStudioApi(request("/api/creative-studio/training-jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        name: "Trained visual language",
+        targetModality: "image",
+        assetIds: [uploaded.asset.id],
+        includeTrainingExamples: true,
+        idempotencyKey: "training_test_start_001",
+      }),
+    }), production);
+    expect(started.status).toBe(202);
+    const startedPayload = await result(started) as { trainingJob: { id: string; status: string; assetIds: string[] } };
+    expect(startedPayload.trainingJob).toMatchObject({ status: "waiting-for-runner", assetIds: [uploaded.asset.id] });
+
+    const bundle = await result(await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/bundle`), production)) as {
+      assets: Array<{ id: string; trainingEligible: boolean }>;
+    };
+    expect(bundle.assets).toEqual([expect.objectContaining({ id: uploaded.asset.id, trainingEligible: true })]);
+
+    const claimed = await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runnerId: "local-3090" }),
+    }), production);
+    expect(await result(claimed)).toMatchObject({ trainingJob: { status: "running", runnerId: "local-3090" } });
+
+    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        runnerId: "local-3090",
+        dna: {
+          directive: "A trained visual language with luminous structure and restrained warmth.",
+          targetModality: "image",
+          dimensions: { contrast: 72, warmth: 42, polish: 66 },
+        },
+      }),
+    }), production);
+    const completedPayload = await result(completed) as { trainingJob: { status: string; resultDnaArtifactId: string } };
+    expect(completedPayload.trainingJob.status).toBe("completed");
+    expect(completedPayload.trainingJob.resultDnaArtifactId).toBeTruthy();
+
+    const dna = await result(await routeCreativeStudioApi(request("/api/creative-studio/dna"), production)) as {
+      artifacts: Array<{ artifactId: string; training: null | { jobId: string; runnerId: string; assetIds: string[] } }>;
+    };
+    expect(dna.artifacts[0]).toMatchObject({
+      artifactId: completedPayload.trainingJob.resultDnaArtifactId,
+      training: { jobId: startedPayload.trainingJob.id, runnerId: "local-3090", assetIds: [uploaded.asset.id] },
+    });
   });
 
   it("imports API workflow JSON, detects safe controls, versions edits, and exports exact revisions", async () => {
@@ -379,10 +459,14 @@ describe("Creative Studio Worker API", () => {
     expect(reject.status).toBe(200);
 
     const history = await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local);
-    const historyPayload = await result(history) as { artifacts: Array<{ status: string; settingsStamp: { prompt: string; source: string } }>; acceptances: Array<{ decision: string }>; trainingExamples: Array<{ status: string; prompt: string; settingsStamp: { source: string } }> };
+    const historyPayload = await result(history) as { artifacts: Array<{ status: string; settingsStamp: { prompt: string; source: string } }>; acceptances: Array<{ decision: string; note: string; actor: string }>; trainingExamples: Array<{ status: string; prompt: string; settingsStamp: { source: string } }> };
     expect(historyPayload.artifacts[0]?.status).toBe("rejected");
     expect(historyPayload.artifacts[0]?.settingsStamp).toMatchObject({ source: "creative-dna", prompt: dnaPayload.artifact.generationPrompts.image });
     expect(historyPayload.acceptances.map((item) => item.decision)).toEqual(expect.arrayContaining(["accepted", "rejected"]));
+    expect(historyPayload.acceptances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ decision: "accepted", note: "First decision", actor: "angelo" }),
+      expect.objectContaining({ decision: "rejected", note: "Reconsidered", actor: "angelo" }),
+    ]));
     expect(historyPayload.trainingExamples[0]).toMatchObject({ status: "excluded", prompt: dnaPayload.artifact.generationPrompts.image, settingsStamp: { source: "creative-dna" } });
   });
 
@@ -616,7 +700,13 @@ describe("Creative Studio Worker API", () => {
     const media = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifactId}/media`), production);
     expect(media.status).toBe(200);
     expect(media.headers.get("content-type")).toBe("image/png");
+    expect(media.headers.get("accept-ranges")).toBe("bytes");
     expect([...new Uint8Array(await media.arrayBuffer())]).toEqual([137, 80, 78, 71]);
+
+    const ranged = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifactId}/media`, { headers: { range: "bytes=1-2" } }), production);
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-range")).toBe("bytes 1-2/4");
+    expect([...new Uint8Array(await ranged.arrayBuffer())]).toEqual([80, 78]);
   });
 
   it("does not expose a generic proxy route", async () => {

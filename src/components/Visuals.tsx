@@ -42,11 +42,15 @@ export function StatusDot({ status }: { status: Job["status"] }) {
 
 export function ArtifactThumb({ artifact, compact = false }: { artifact: Artifact; compact?: boolean }) {
   const [from, to] = artifact.preview.colors;
+  const hasImage = artifact.kind === "image" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
+  const hasAudio = artifact.kind === "music" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
   return (
     <div className={`thumb${compact ? " artifact-thumb-compact" : ""}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
       <div className="thumb-tex" />
       <span className="thumb-type"><Icon name={artifact.kind} size={15} /></span>
-      {artifact.preview.url ? <img className="artifact-media" src={artifact.preview.url} alt="" /> : <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : "FRAME"}</span>}
+      {hasImage ? <img className="artifact-media" src={artifact.preview.url ?? undefined} alt={`${artifact.name} preview`} /> : null}
+      {hasAudio ? <span className="artifact-audio-visual" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} />)}</span> : null}
+      {!hasImage && !hasAudio ? <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : "FRAME"}</span> : null}
     </div>
   );
 }

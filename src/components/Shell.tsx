@@ -6,8 +6,7 @@ import { ProjectAvatar, StatusDot } from "./Visuals";
 
 const NAV_MAIN: Array<{ id: StudioView; label: string; icon: IconName; badge?: string }> = [
   { id: "portal", label: "Portal", icon: "portal" },
-  { id: "dna", label: "CreativeDNA", icon: "dna", badge: "V1" },
-  { id: "generate", label: "Generate", icon: "generate" },
+  { id: "dna", label: "CreativeDNA", icon: "dna", badge: "TRAIN" },
   { id: "media", label: "Media", icon: "image" },
   { id: "library", label: "Library", icon: "library" },
   { id: "gallery", label: "Artifacts", icon: "gallery" },
@@ -69,12 +68,12 @@ export function DesktopShell({ view, navigate, children }: { view: StudioView; n
 const MOBILE_TABS: Array<{ id: StudioView | "more"; label: string; icon: IconName }> = [
   { id: "portal", label: "Portal", icon: "portal" },
   { id: "dna", label: "DNA", icon: "dna" },
-  { id: "generate", label: "Generate", icon: "generate" },
   { id: "media", label: "Media", icon: "image" },
+  { id: "gallery", label: "Artifacts", icon: "gallery" },
   { id: "more", label: "More", icon: "more" },
 ];
 
 export function MobileShell({ view, navigate, children }: { view: StudioView; navigate: (view: StudioView) => void; children: ReactNode }) {
-  const moreActive = ["media", "library", "projects", "flows", "queue", "runtime", "settings"].includes(view);
+  const moreActive = ["library", "projects", "flows", "queue", "runtime", "settings"].includes(view);
   return <div className="mshell"><header className="mtop"><span className="mt-mark"><i className="bm-orb" /></span><strong className="mt-name">Creative <b>Studio</b></strong><span className="mt-sp" /><button className="btn-icon bell" aria-label="Notifications"><Icon name="bell" size={19} /></button></header><main className="mbody scroll">{view !== "portal" ? <div className="mview-head"><h1>{VIEW_TITLES[view][0]}</h1><p>{VIEW_TITLES[view][1]}</p></div> : null}{children}</main><nav className="mtabbar">{MOBILE_TABS.map((tab) => <button key={tab.id} className={`mtab${tab.id === "more" ? moreActive ? " on" : "" : view === tab.id ? " on" : ""}`} onClick={() => navigate(tab.id === "more" ? "queue" : tab.id)}><span className="mtab-ic"><Icon name={tab.icon} size={22} /></span>{tab.label}</button>)}</nav></div>;
 }

@@ -13,6 +13,8 @@ import type {
   SaveWorkflowRevisionRequest,
   WorkflowDefinition,
   WorkflowScalar,
+  CreateCreativeDnaTrainingJobRequest,
+  CreativeDnaTrainingJob,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -33,10 +35,12 @@ type StudioContextValue = {
   retryJob: (jobId: string) => Promise<void>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
-  reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note?: string) => Promise<void>;
+  reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note: string) => Promise<void>;
   uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
   uploadWorkflow: (file: File, name?: string, description?: string) => Promise<WorkflowDefinition>;
   saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
+  startDnaTraining: (input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => Promise<CreativeDnaTrainingJob>;
+  cancelDnaTraining: (jobId: string) => Promise<void>;
   refresh: () => Promise<void>;
 };
 
@@ -100,10 +104,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, applySnapshot]);
 
   useEffect(() => {
-    if (!snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")) return;
+    if (!snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
+      && !snapshot?.trainingJobs.some((job) => job.status === "running")) return;
     const timer = window.setInterval(() => void refresh(), 1_000);
     return () => window.clearInterval(timer);
-  }, [refresh, snapshot?.jobs]);
+  }, [refresh, snapshot?.jobs, snapshot?.trainingJobs]);
 
   const transact = useCallback(async <T,>(action: () => Promise<T>) => {
     setBusy(true);
@@ -146,7 +151,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.cancelJob(jobId));
   }, [adapter, transact]);
 
-  const reviewArtifact = useCallback(async (artifactId: string, decision: AcceptanceDecision, note?: string) => {
+  const reviewArtifact = useCallback(async (artifactId: string, decision: AcceptanceDecision, note: string) => {
     await transact(() => adapter.reviewArtifact(artifactId, decision, note));
   }, [adapter, transact]);
 
@@ -163,6 +168,19 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const saveWorkflowRevision = useCallback(async (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => {
     const input: SaveWorkflowRevisionRequest = { baseRevisionId, values };
     return transact(() => adapter.saveWorkflowRevision(workflowId, input));
+  }, [adapter, transact]);
+
+  const startDnaTraining = useCallback((input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => {
+    if (!activeProjectId) throw new Error("project_required");
+    return transact(() => adapter.startCreativeDnaTraining({
+      ...input,
+      projectId: activeProjectId,
+      idempotencyKey: operationKey("train"),
+    }));
+  }, [activeProjectId, adapter, transact]);
+
+  const cancelDnaTraining = useCallback(async (jobId: string) => {
+    await transact(() => adapter.cancelCreativeDnaTraining(jobId));
   }, [adapter, transact]);
 
   const createProject = useCallback(async (input: CreateProjectRequest) => {
@@ -211,8 +229,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     uploadMedia,
     uploadWorkflow,
     saveWorkflowRevision,
+    startDnaTraining,
+    cancelDnaTraining,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

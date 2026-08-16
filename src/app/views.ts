@@ -1,9 +1,8 @@
-export type StudioView = "portal" | "dna" | "generate" | "media" | "library" | "gallery" | "projects" | "flows" | "queue" | "runtime" | "settings";
+export type StudioView = "portal" | "dna" | "media" | "library" | "gallery" | "projects" | "flows" | "queue" | "runtime" | "settings";
 
 export const VIEW_TITLES: Record<StudioView, [string, string]> = {
   portal: ["Welcome back, Angelo.", "This is your Creative Studio. What shall we make today?"],
-  dna: ["CreativeDNA", "Shape intent once, translate it across media."],
-  generate: ["Generate", "Send a saved blueprint into a durable job."],
+  dna: ["CreativeDNA Studio", "Build, train from uploads, and generate in one workspace."],
   media: ["Media", "Upload, retain, and inspect real project source assets."],
   library: ["Library", "CreativeDNA versions, decisions, and retained memory."],
   gallery: ["Artifact History", "Review outputs, lineage, and explicit decisions."],

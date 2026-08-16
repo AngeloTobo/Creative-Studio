@@ -9,6 +9,7 @@ import {
   type CreateProjectRequest,
   type CreativeDnaArtifact,
   type CreativeTrainingExample,
+  type CreativeDnaTrainingJob,
   type GenerationSettingsStamp,
   type Job,
   type MediaAsset,
@@ -34,6 +35,7 @@ type DevelopmentState = {
   acceptances: Acceptance[];
   workflows: WorkflowDefinition[];
   trainingExamples: CreativeTrainingExample[];
+  trainingJobs: CreativeDnaTrainingJob[];
   idempotencyKeys: Record<string, string>;
 };
 
@@ -48,7 +50,7 @@ function defaultId(prefix: string) {
 }
 
 function emptyState(): DevelopmentState {
-  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], acceptances: [], idempotencyKeys: {} };
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], acceptances: [], idempotencyKeys: {} };
 }
 
 function cleanText(value: unknown, limit: number) {
@@ -84,6 +86,7 @@ function capabilitySnapshot(now: string): Capability[] {
     { key: "media-library", label: "Media library", state: "unavailable", provider: "not connected", detail: "Real uploads require the Creative Studio Worker and R2; this adapter never simulates retained media.", checkedAt: now },
     { key: "workflow-library", label: "ComfyUI workflows", state: "unavailable", provider: "not connected", detail: "Workflow upload and immutable server revisions require the Creative Studio Worker.", checkedAt: now },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "degraded", provider: "development adapter", detail: "Candidate metadata is browser-only; no real media is presented as training-ready output.", checkedAt: now },
+    { key: "creative-dna-training", label: "CreativeDNA training", state: "unavailable", provider: "not connected", detail: "Upload-based training requires the Creative Studio Worker and an authenticated local runner.", checkedAt: now },
     { key: "music-generation", label: "Music generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; no real audio is rendered in this mode.", checkedAt: now },
     { key: "image-generation", label: "Image generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; gradients stand in for generated media.", checkedAt: now },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "development adapter", detail: "Accept, reject, and archive decisions persist in this browser.", checkedAt: now },
@@ -108,6 +111,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     capabilities: capabilitySnapshot(now),
     acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     refreshedAt: now,
@@ -360,10 +364,12 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       }
       return job;
     },
-    async reviewArtifact(artifactId: string, decision: AcceptanceDecision, note = ""): Promise<ReviewArtifactResponse> {
+    async reviewArtifact(artifactId: string, decision: AcceptanceDecision, note: string): Promise<ReviewArtifactResponse> {
       const state = reconcile(read());
       const artifact = state.artifacts.find((item) => item.id === artifactId);
       if (!artifact) throw new Error("artifact_not_found");
+      const reviewNote = note.trim().slice(0, 500);
+      if ((decision === "accepted" || decision === "rejected") && !reviewNote) throw new Error("review_note_required");
       const createdAt = now().toISOString();
       artifact.status = decision === "accepted" ? "accepted" : decision === "rejected" ? "rejected" : "archived";
       artifact.updatedAt = createdAt;
@@ -371,7 +377,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         id: makeId("acceptance"),
         artifactId,
         decision,
-        note: note.trim().slice(0, 500),
+        note: reviewNote,
         actor: "development-user",
         createdAt,
       };
@@ -392,6 +398,12 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async saveWorkflowRevision() {
       throw new Error("workflow_revision_requires_creative_studio_worker");
+    },
+    async startCreativeDnaTraining() {
+      throw new Error("creative_dna_training_requires_creative_studio_worker");
+    },
+    async cancelCreativeDnaTraining() {
+      throw new Error("creative_dna_training_requires_creative_studio_worker");
     },
   };
 }

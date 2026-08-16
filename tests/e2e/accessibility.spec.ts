@@ -18,7 +18,7 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
 
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/dna$/);
-  await expect(page.getByRole("heading", { name: "CreativeDNA", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "CreativeDNA Studio", exact: true }).first()).toBeVisible();
 });
 
 test("reduced-motion preference suppresses portal animation", async ({ page }) => {

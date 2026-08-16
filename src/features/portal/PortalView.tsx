@@ -4,8 +4,8 @@ import { ArtifactThumb, Orb, ProjectAvatar, SectionHead, StatusDot } from "../..
 import type { StudioView } from "../../app/views";
 
 const NODES: Array<{ id: StudioView; label: string; sub: string; icon: IconName; accent: string; angle: number }> = [
-  { id: "dna", label: "CreativeDNA", sub: "Shape the cross-media blueprint", icon: "dna", accent: "var(--pink)", angle: 220 },
-  { id: "generate", label: "Generate", sub: "Make image or music", icon: "generate", accent: "var(--purple)", angle: 178 },
+  { id: "dna", label: "CreativeDNA", sub: "Build, train, and generate", icon: "dna", accent: "var(--pink)", angle: 220 },
+  { id: "media", label: "Media", sub: "Upload training sources", icon: "image", accent: "var(--purple)", angle: 178 },
   { id: "library", label: "Library", sub: "DNA, rules, and memory", icon: "library", accent: "var(--blue)", angle: 136 },
   { id: "projects", label: "Projects", sub: "Your worlds and systems", icon: "projects", accent: "var(--teal)", angle: 92 },
   { id: "gallery", label: "Gallery", sub: "Review retained artifacts", icon: "gallery", accent: "var(--amber)", angle: 50 },
@@ -14,9 +14,9 @@ const NODES: Array<{ id: StudioView; label: string; sub: string; icon: IconName;
 ];
 
 const CREATE_CARDS: Array<{ id: StudioView; label: string; desc: string; icon: IconName; accent: string }> = [
-  { id: "dna", label: "CreativeDNA", desc: "Start with intent, dimensions, and provenance.", icon: "dna", accent: "var(--pink)" },
-  { id: "generate", label: "Image", desc: "Translate saved DNA into a visual job.", icon: "image", accent: "var(--cyan)" },
-  { id: "generate", label: "Music", desc: "Translate the same DNA into a music job.", icon: "music", accent: "var(--violet)" },
+  { id: "dna", label: "CreativeDNA", desc: "Build or train from retained uploads.", icon: "dna", accent: "var(--pink)" },
+  { id: "dna", label: "Image", desc: "Translate saved DNA into a visual job.", icon: "image", accent: "var(--cyan)" },
+  { id: "dna", label: "Music", desc: "Translate the same DNA into a music job.", icon: "music", accent: "var(--violet)" },
 ];
 
 export function PortalView({ navigate }: { navigate: (view: StudioView) => void }) {
@@ -43,7 +43,7 @@ export function PortalView({ navigate }: { navigate: (view: StudioView) => void 
           <SectionHead label="Create Something New" />
           <div className="create-cards studio-create-cards">
             {CREATE_CARDS.map((card, index) => <button key={`${card.label}-${index}`} className="ccard" style={{ "--ca": card.accent } as React.CSSProperties} onClick={() => {
-              if (card.id === "generate" && projectDna[0]) selectDna(projectDna[0]);
+              if (card.label !== "CreativeDNA" && projectDna[0]) selectDna(projectDna[0]);
               navigate(card.id);
             }}><span className="ccard-top"><span className="ccard-ic"><Icon name={card.icon} size={20} /></span><strong className="ccard-name">{card.label}</strong><span className="ccard-desc">{card.desc}</span></span><span className="ccard-art"><span className="cca-g" /><span className="cca-wave">{Array.from({ length: 22 }, (_, bar) => <i key={bar} style={{ height: `${18 + Math.abs(Math.sin(bar * 0.9 + card.label.length)) * 80}%` }} />)}</span></span></button>)}
           </div>

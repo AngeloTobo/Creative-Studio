@@ -4,6 +4,10 @@ import {
   type CreateProjectRequest,
   matchCreativeStudioRoute,
   type CreateCreativeDnaRequest,
+  type CreateCreativeDnaTrainingJobRequest,
+  type ClaimCreativeDnaTrainingJobRequest,
+  type CompleteCreativeDnaTrainingJobRequest,
+  type FailCreativeDnaTrainingJobRequest,
   type GenerationModality,
   type RetryJobRequest,
   type SaveWorkflowRevisionRequest,
@@ -18,7 +22,7 @@ import {
 import { backendMode } from "../config";
 import { enqueueJob } from "../jobs";
 import { body, boundedText, json } from "../lib/http";
-import { mediaContent, uploadMedia } from "../media";
+import { mediaContent, requestedMediaRange, uploadMedia } from "../media";
 import {
   artifactMediaPath,
   archiveProject,
@@ -43,6 +47,15 @@ import {
 import { retainCompletedArtifact } from "../retention";
 import type { Env, OwnerSession } from "../types";
 import { createWorkflowRevision, importWorkflow, listWorkflows, workflowContent } from "../workflows";
+import {
+  cancelCreativeDnaTrainingJob,
+  claimCreativeDnaTrainingJob,
+  completeCreativeDnaTrainingJob,
+  createCreativeDnaTrainingJob,
+  creativeDnaTrainingBundle,
+  failCreativeDnaTrainingJob,
+  listCreativeDnaTrainingJobs,
+} from "../training";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -63,7 +76,8 @@ function statusFor(error: string) {
   if (error === "unsupported_workflow_type") return 415;
   if (error === "media_upload_verification_failed") return 502;
   if (error === "invalid_media_range") return 416;
-  if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable") return 409;
+  if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable"
+    || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable") return 409;
   return 400;
 }
 
@@ -87,6 +101,7 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Owner uploads are size-verified and retained under project scope." : "An R2 binding is required for real uploads.", checkedAt },
       { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Uploaded graphs and custom settings are stored as immutable, content-hashed revisions.", checkedAt },
       { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Generated results enter a candidate set; explicit acceptance promotes prompt and settings evidence to training-ready.", checkedAt },
+      { key: "creative-dna-training", label: "CreativeDNA training", state: "unavailable", provider: "local runner required", detail: "Real upload-based training jobs require the Creative Studio Worker and an authenticated local trainer.", checkedAt },
       { key: "music-generation", label: "Music generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -105,6 +120,7 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
     { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Workflow JSON, detected controls, models, revisions, and content hashes remain product-owned.", checkedAt },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
+    { key: "creative-dna-training", label: "CreativeDNA training", state: "degraded", provider: "Creative Studio D1 + local runner", detail: "The site can start durable upload-based training jobs. Jobs remain visibly waiting until an authenticated local runner claims and completes them.", checkedAt },
     { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -278,27 +294,76 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!match) return json({ ok: false, error: "invalid_workflow_route" }, { status: 400 });
       return workflowContent(env, session.userId, match[1], url.searchParams.get("revision"));
     }
+    if (route === "training-jobs-list") return json({ ok: true, trainingJobs: await listCreativeDnaTrainingJobs(env, session.userId) });
+    if (route === "training-job-create") {
+      const input = await body<CreateCreativeDnaTrainingJobRequest>(request);
+      if (!input || !Array.isArray(input.assetIds)) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
+      const trainingJob = await createCreativeDnaTrainingJob(env, session.userId, {
+        ...input,
+        idempotencyKey: idempotencyKey(input.idempotencyKey),
+      });
+      return json({ ok: true, trainingJob }, { status: 202 });
+    }
+    if (route === "training-job-bundle") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/bundle$/i);
+      if (!match) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
+      return json({ ok: true, ...await creativeDnaTrainingBundle(env, session.userId, match[1]) });
+    }
+    if (route === "training-job-claim") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/claim$/i);
+      const input = await body<ClaimCreativeDnaTrainingJobRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
+      return json({ ok: true, trainingJob: await claimCreativeDnaTrainingJob(env, session.userId, match[1], input.runnerId) });
+    }
+    if (route === "training-job-complete") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/complete$/i);
+      const input = await body<CompleteCreativeDnaTrainingJobRequest>(request);
+      if (!match || !input?.dna) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
+      return json({ ok: true, trainingJob: await completeCreativeDnaTrainingJob(env, session.userId, match[1], input) });
+    }
+    if (route === "training-job-fail") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/fail$/i);
+      const input = await body<FailCreativeDnaTrainingJobRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
+      return json({ ok: true, trainingJob: await failCreativeDnaTrainingJob(env, session.userId, match[1], input) });
+    }
+    if (route === "training-job-cancel") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/cancel$/i);
+      if (!match) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
+      return json({ ok: true, trainingJob: await cancelCreativeDnaTrainingJob(env, session.userId, match[1]) });
+    }
     if (route === "artifact-review") {
       const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/(accepted|rejected|archived)$/i);
       if (!match) return json({ ok: false, error: "invalid_review_route" }, { status: 400 });
       const decision = match[2] as AcceptanceDecision;
       const input = await body<{ note?: unknown }>(request);
+      const note = boundedText(input?.note, 500);
+      if ((decision === "accepted" || decision === "rejected") && !note) throw new Error("review_note_required");
       if (!developmentMode(env)) {
         const source = await artifactMediaPath(env, session.userId, match[1]);
         if (!source) throw new Error("artifact_not_found");
         if (source.mediaPath || source.retainedKey) await retainCompletedArtifact(env, request, session.userId, match[1]);
       }
-      return json({ ok: true, ...await reviewArtifact(env, session.userId, match[1], decision, boundedText(input?.note, 500)) });
+      return json({ ok: true, ...await reviewArtifact(env, session.userId, match[1], decision, note) });
     }
     if (route === "artifact-media") {
       const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/media$/i);
       const media = match ? await artifactMediaPath(env, session.userId, match[1]) : null;
       if (media?.retainedKey && env.ARTIFACTS) {
-        const object = await env.ARTIFACTS.get(media.retainedKey);
+        const size = Number(media.retainedSize ?? 0);
+        const range = requestedMediaRange(request.headers.get("range"), size);
+        const object = await env.ARTIFACTS.get(media.retainedKey, range ? { range } : undefined);
         if (object) {
-          const headers = new Headers({ "cache-control": "private, max-age=3600", "content-type": media.retainedContentType || "application/octet-stream" });
+          const headers = new Headers({
+            "accept-ranges": "bytes",
+            "cache-control": "private, max-age=3600",
+            "content-length": String(range?.length ?? size),
+            "content-type": media.retainedContentType || "application/octet-stream",
+            "x-content-type-options": "nosniff",
+          });
+          if (range) headers.set("content-range", `bytes ${range.offset}-${range.offset + range.length - 1}/${size}`);
           object.writeHttpMetadata(headers);
-          return new Response(object.body, { headers });
+          return new Response(object.body, { status: range ? 206 : 200, headers });
         }
       }
       if (!media?.mediaPath) return json({ ok: false, error: "artifact_media_not_found" }, { status: 404 });

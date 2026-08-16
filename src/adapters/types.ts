@@ -12,6 +12,8 @@ import type {
   UpdateProjectRequest,
   SaveWorkflowRevisionRequest,
   WorkflowDefinition,
+  CreateCreativeDnaTrainingJobRequest,
+  CreativeDnaTrainingJob,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -26,8 +28,10 @@ export interface StudioAdapter {
   retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
   reuseJob(jobId: string, idempotencyKey: string): Promise<Job>;
   cancelJob(jobId: string): Promise<Job>;
-  reviewArtifact(artifactId: string, decision: AcceptanceDecision, note?: string): Promise<ReviewArtifactResponse>;
+  reviewArtifact(artifactId: string, decision: AcceptanceDecision, note: string): Promise<ReviewArtifactResponse>;
   uploadMedia(projectId: string, file: File, trainingEligible: boolean): Promise<MediaAsset>;
   uploadWorkflow(projectId: string, file: File, name?: string, description?: string): Promise<WorkflowDefinition>;
   saveWorkflowRevision(workflowId: string, input: SaveWorkflowRevisionRequest): Promise<WorkflowDefinition>;
+  startCreativeDnaTraining(input: CreateCreativeDnaTrainingJobRequest): Promise<CreativeDnaTrainingJob>;
+  cancelCreativeDnaTraining(jobId: string): Promise<CreativeDnaTrainingJob>;
 }

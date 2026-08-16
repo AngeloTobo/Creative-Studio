@@ -95,7 +95,7 @@ export async function uploadMedia(env: Env, request: Request, ownerId: string) {
   }
 }
 
-function requestedRange(value: string | null, size: number) {
+export function requestedMediaRange(value: string | null, size: number) {
   if (!value) return null;
   const match = value.match(/^bytes=(\d*)-(\d*)$/);
   if (!match || (!match[1] && !match[2])) throw new Error("invalid_media_range");
@@ -118,7 +118,7 @@ export async function mediaContent(env: Env, request: Request, ownerId: string, 
   if (!env.ARTIFACTS) throw new Error("media_storage_not_configured");
   const record = await mediaObjectById(env, ownerId, mediaId);
   if (!record) throw new Error("media_not_found");
-  const range = requestedRange(request.headers.get("range"), Number(record.size));
+  const range = requestedMediaRange(request.headers.get("range"), Number(record.size));
   const object = await env.ARTIFACTS.get(record.r2Key, range ? { range } : undefined);
   if (!object) throw new Error("media_content_not_found");
   const headers = new Headers({

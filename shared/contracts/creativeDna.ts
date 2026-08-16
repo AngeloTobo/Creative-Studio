@@ -86,6 +86,12 @@ export type CreativeDnaArtifact = {
     rootArtifactId: string;
     parentArtifactId: string | null;
   };
+  training?: null | {
+    jobId: string;
+    runnerId: string;
+    assetIds: string[];
+    trainingExampleIds: string[];
+  };
 };
 
 export const DEFAULT_CREATIVE_DNA_DIMENSIONS: CreativeDnaDimensions = {
@@ -238,5 +244,6 @@ export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCom
       rootArtifactId: meta.rootArtifactId,
       parentArtifactId: meta.parentArtifactId || null,
     },
+    training: null,
   };
 }

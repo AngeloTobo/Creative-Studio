@@ -573,8 +573,10 @@ export async function reviewArtifact(env: Env, ownerId: string, artifactId: stri
   if (!current) throw new Error("artifact_not_found");
   if (current.status === "retaining") throw new Error("artifact_not_ready");
   if (current.previewKind === "remote-media" && !current.retainedKey) throw new Error("artifact_not_retained");
+  const reviewNote = note.trim().slice(0, 500);
+  if ((decision === "accepted" || decision === "rejected") && !reviewNote) throw new Error("review_note_required");
   const now = new Date().toISOString();
-  const acceptance: Acceptance = { id: id("acceptance"), artifactId, decision, note: note.slice(0, 500), actor: "angelo", createdAt: now };
+  const acceptance: Acceptance = { id: id("acceptance"), artifactId, decision, note: reviewNote, actor: "angelo", createdAt: now };
   const status = decision === "accepted" ? "accepted" : decision === "rejected" ? "rejected" : "archived";
   await env.DB.batch([
     env.DB.prepare("update creative_artifacts set status = ?, updated_at = ? where id = ? and owner_id = ?").bind(status, now, artifactId, ownerId),
