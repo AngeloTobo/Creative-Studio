@@ -9,6 +9,7 @@ import {
   type CreateProjectRequest,
   type CreativeDnaArtifact,
   type Job,
+  type MediaAsset,
   type Project,
   type ReviewArtifactResponse,
   type StudioSnapshot,
@@ -26,6 +27,7 @@ type DevelopmentState = {
   dnaArtifacts: CreativeDnaArtifact[];
   jobs: Job[];
   artifacts: Artifact[];
+  mediaAssets: MediaAsset[];
   acceptances: Acceptance[];
   idempotencyKeys: Record<string, string>;
 };
@@ -41,7 +43,7 @@ function defaultId(prefix: string) {
 }
 
 function emptyState(): DevelopmentState {
-  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], acceptances: [], idempotencyKeys: {} };
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], acceptances: [], idempotencyKeys: {} };
 }
 
 function cleanText(value: unknown, limit: number) {
@@ -74,6 +76,7 @@ function projectValues(input: CreateProjectRequest) {
 function capabilitySnapshot(now: string): Capability[] {
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "deterministic compiler", detail: "Versioned locally in the development adapter.", checkedAt: now },
+    { key: "media-library", label: "Media library", state: "unavailable", provider: "not connected", detail: "Real uploads require the Creative Studio Worker and R2; this adapter never simulates retained media.", checkedAt: now },
     { key: "music-generation", label: "Music generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; no real audio is rendered in this mode.", checkedAt: now },
     { key: "image-generation", label: "Image generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; gradients stand in for generated media.", checkedAt: now },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "development adapter", detail: "Accept, reject, and archive decisions persist in this browser.", checkedAt: now },
@@ -95,6 +98,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     dnaArtifacts: [...state.dnaArtifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     jobs: [...state.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     artifacts: [...state.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     capabilities: capabilitySnapshot(now),
     acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     refreshedAt: now,
@@ -337,6 +341,9 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       state.acceptances.unshift(acceptance);
       write(state);
       return { artifact, acceptance };
+    },
+    async uploadMedia() {
+      throw new Error("media_upload_requires_creative_studio_worker");
     },
   };
 }

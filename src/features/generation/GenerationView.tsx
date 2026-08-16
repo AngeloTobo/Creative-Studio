@@ -3,10 +3,11 @@ import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
 import type { GenerationModality } from "../../../shared/contracts";
 
-export function GenerationView({ onQueued }: { onQueued: () => void }) {
+export function GenerationView({ onQueued, onMedia }: { onQueued: () => void; onMedia: () => void }) {
   const { snapshot, activeProjectId, activeDna, selectDna, submitJob, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const selected = activeDna ?? projectDna[0] ?? null;
+  const projectMedia = snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [];
 
   const submit = async (modality: GenerationModality) => {
     if (!selected) return;
@@ -32,6 +33,8 @@ export function GenerationView({ onQueued }: { onQueued: () => void }) {
       </section>
 
       <aside className="generation-history glass">
+        <div className="generation-media-link"><span><span className="eyebrow">Project media</span><strong>{projectMedia.length} retained</strong><small>Provenance-ready source assets</small></span><button className="btn-icon" aria-label="Open project media" onClick={onMedia}><Icon name="image" size={18} /></button></div>
+        <p className="generation-media-note">Current jobs use the saved CreativeDNA prompt. Uploaded media remains retained for lineage and future training workflows.</p>
         <span className="eyebrow">Saved DNA</span>
         <div className="generation-dna-list">
           {projectDna.map((artifact) => <button key={artifact.artifactId} className={selected?.artifactId === artifact.artifactId ? "on" : ""} onClick={() => selectDna(artifact)}><Icon name={artifact.targetModality} size={16} /><span><strong>{artifact.name}</strong><small>v{artifact.version} · {artifact.source.kind === "commercial_reference" ? "reference-safe" : "original"}</small></span></button>)}

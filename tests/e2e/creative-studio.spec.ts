@@ -57,3 +57,16 @@ test("project onboarding starts empty and preserves explicit lifecycle changes",
   await expect(card.getByText("archived", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create your first project" })).toBeVisible();
 });
+
+test("media workspace never substitutes fake uploads in development mode", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Media workspace coverage needs one browser shape");
+  await page.goto("/#/media");
+  await page.getByRole("textbox", { name: "Project name" }).fill("Media E2E");
+  await page.getByRole("textbox", { name: "Project type" }).fill("Source Library");
+  await page.getByRole("button", { name: "Create project" }).click();
+  await page.goto("/#/media");
+  await expect(page.getByRole("heading", { name: "Bring real source material into the studio." })).toBeVisible();
+  await expect(page.getByText("The browser development adapter never creates fake media.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload and retain" })).toBeDisabled();
+  await expect(page.getByText("No media uploaded yet.")).toBeVisible();
+});

@@ -17,6 +17,9 @@ describe("development adapter", () => {
     const initial = await adapter.load();
     expect(initial.adapter.id).toBe("development-local-storage");
     expect(initial.projects).toHaveLength(0);
+    expect(initial.mediaAssets).toEqual([]);
+    await expect(adapter.uploadMedia("project_missing", new File(["real"], "real.png", { type: "image/png" }), true))
+      .rejects.toThrow("media_upload_requires_creative_studio_worker");
 
     const project = await adapter.createProject({ name: "Durable Signal", type: "Visual System" });
 

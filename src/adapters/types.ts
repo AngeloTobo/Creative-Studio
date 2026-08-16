@@ -6,6 +6,7 @@ import type {
   StudioSnapshot,
   SubmitJobRequest,
   Job,
+  MediaAsset,
   Project,
   CreateProjectRequest,
   UpdateProjectRequest,
@@ -23,4 +24,5 @@ export interface StudioAdapter {
   retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
   cancelJob(jobId: string): Promise<Job>;
   reviewArtifact(artifactId: string, decision: AcceptanceDecision, note?: string): Promise<ReviewArtifactResponse>;
+  uploadMedia(projectId: string, file: File, trainingEligible: boolean): Promise<MediaAsset>;
 }

@@ -12,10 +12,11 @@ flowchart LR
   Q --> WORKER["Background job consumer"]
   WORKER --> D1
   BFF --> R2["Creative Studio R2"]
+  UI -->|"owned media upload"| BFF
   WORKER -->|"exact allowlist only"| AF["AFDFW capabilities"]
   AF --> GEN["Existing generation workers"]
   D1 --> HIST["DNA, jobs, artifacts, decisions"]
-  R2 --> MEDIA["Every completed result"]
+  R2 --> MEDIA["Uploads and every completed result"]
 ```
 
 ## Ownership
@@ -23,8 +24,8 @@ flowchart LR
 - The frontend owns presentation and interaction only. It imports shared types but no Worker or AFDFW source.
 - The BFF owns authentication handoff, validation, idempotent job creation, capability translation, and media mediation.
 - The queue consumer owns generation submission and per-generation reconciliation. A scheduled sweep re-enqueues due jobs after delivery or runtime interruptions.
-- Creative Studio D1 owns project metadata, CreativeDNA in every environment, jobs, artifact history, retained-media pointers, and append-only decisions.
-- Creative Studio R2 owns every completed generated result, independent of its later acceptance decision.
+- Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
+- Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
 
 ## CreativeDNA vertical slice
@@ -43,6 +44,14 @@ flowchart LR
 - `development-local-storage` is deliberately visible and browser-scoped. Its media is a gradient placeholder.
 - `creative-studio-bff` is backend-scoped. In Worker development mode, D1 metadata is durable across process restarts while generated media remains a placeholder.
 - Production uses the `AFDFW` same-account service binding, dedicated D1/R2/Queue bindings, a five-minute recovery trigger, and Cloudflare Access over `cs.angelotoborg.com/*`.
+
+## Media intake and training boundary
+
+1. The browser sends an image, audio, or video file only to `/api/creative-studio/media` with the active project, original name, byte size, MIME type, and explicit future-training consent.
+2. The Worker validates ownership, project state, type, and the 100 MB limit before writing.
+3. The Worker streams the body to a project-scoped R2 key and verifies its stored size.
+4. D1 metadata is committed only after verification, then the asset becomes available through an owner-scoped content route.
+5. Consent and provenance make the asset eligible for a later training workflow. Intake itself never starts training and current image/music generation remains CreativeDNA text-conditioned until an explicit source-conditioned contract is implemented.
 
 ## Job lifecycle guarantees
 

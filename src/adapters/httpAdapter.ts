@@ -10,6 +10,7 @@ import {
   type CreateProjectResponse,
   type CreativeDnaArtifact,
   type Job,
+  type MediaAsset,
   type Project,
   type ReviewArtifactResponse,
   type RetryJobResponse,
@@ -19,6 +20,7 @@ import {
   type SubmitJobResponse,
   type UpdateProjectRequest,
   type UpdateProjectResponse,
+  type UploadMediaResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -35,14 +37,33 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
+async function uploadRequest(file: File, projectId: string, trainingEligible: boolean) {
+  const response = await fetch(CREATIVE_STUDIO_ROUTES.media, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": file.type,
+      "x-cs-project-id": projectId,
+      "x-cs-file-name": encodeURIComponent(file.name),
+      "x-cs-file-size": String(file.size),
+      "x-cs-training-eligible": String(trainingEligible),
+    },
+    body: file,
+  });
+  const payload = await response.json() as ApiResult<UploadMediaResponse>;
+  if (!response.ok || !payload.ok) throw new Error(payload.ok ? `http_${response.status}` : payload.error);
+  return payload.asset;
+}
+
 export function createHttpAdapter(): StudioAdapter {
   const load = async (): Promise<StudioSnapshot> => {
-    const [session, projects, dna, jobs, artifacts, capabilities] = await Promise.all([
+    const [session, projects, dna, jobs, artifacts, media, capabilities] = await Promise.all([
       request<{ session: StudioSession }>(CREATIVE_STUDIO_ROUTES.session),
       request<{ projects: Project[] }>(CREATIVE_STUDIO_ROUTES.projects),
       request<{ artifacts: CreativeDnaArtifact[] }>(CREATIVE_STUDIO_ROUTES.dna),
       request<{ jobs: Job[] }>(CREATIVE_STUDIO_ROUTES.jobs),
       request<{ artifacts: Artifact[]; acceptances: StudioSnapshot["acceptances"] }>(CREATIVE_STUDIO_ROUTES.artifacts),
+      request<{ assets: MediaAsset[] }>(CREATIVE_STUDIO_ROUTES.media),
       request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
     ]);
     return {
@@ -52,6 +73,7 @@ export function createHttpAdapter(): StudioAdapter {
       dnaArtifacts: dna.artifacts,
       jobs: jobs.jobs,
       artifacts: artifacts.artifacts,
+      mediaAssets: media.assets,
       acceptances: artifacts.acceptances,
       capabilities: capabilities.capabilities,
       refreshedAt: new Date().toISOString(),
@@ -116,6 +138,9 @@ export function createHttpAdapter(): StudioAdapter {
         method: "POST",
         body: JSON.stringify({ decision, note }),
       });
+    },
+    async uploadMedia(projectId: string, file: File, trainingEligible: boolean) {
+      return uploadRequest(file, projectId, trainingEligible);
     },
   };
 }

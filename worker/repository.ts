@@ -8,6 +8,8 @@ import {
   type CreativeDnaArtifact,
   type CreateProjectRequest,
   type Job,
+  type MediaAsset,
+  type MediaKind,
   type Project,
   type UpdateProjectRequest,
 } from "../shared/contracts";
@@ -59,6 +61,85 @@ export async function createProject(env: Env, ownerId: string, input: CreateProj
   await env.DB.prepare(`insert into creative_projects (id, owner_id, name, type, status, description, note, hue, initials, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(project.id, ownerId, project.name, project.type, project.status, project.description, project.note, project.hue, project.initials, now, now).run();
   return project;
+}
+
+type MediaRow = {
+  id: string;
+  projectId: string;
+  kind: MediaKind;
+  name: string;
+  originalFileName: string;
+  mimeType: string;
+  size: number;
+  source: "upload";
+  status: "retained";
+  trainingEligible: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const MEDIA_COLUMNS = `id, project_id as projectId, kind, name, original_file_name as originalFileName,
+  mime_type as mimeType, size, source, status, training_eligible as trainingEligible,
+  created_at as createdAt, updated_at as updatedAt`;
+
+function mapMedia(row: MediaRow): MediaAsset {
+  return {
+    ...row,
+    size: Number(row.size),
+    trainingEligible: Boolean(row.trainingEligible),
+    contentUrl: `/api/creative-studio/media/${row.id}/content`,
+    provenance: { uploadedByOwner: true, uploadedAt: row.createdAt, parentAssetIds: [] },
+  };
+}
+
+export async function listMediaAssets(env: Env, ownerId: string): Promise<MediaAsset[]> {
+  const result = await env.DB.prepare(`select ${MEDIA_COLUMNS} from creative_media_assets where owner_id = ? order by created_at desc limit 250`)
+    .bind(ownerId).all<MediaRow>();
+  return (result.results ?? []).map(mapMedia);
+}
+
+export async function createMediaAsset(
+  env: Env,
+  ownerId: string,
+  input: {
+    id: string;
+    projectId: string;
+    kind: MediaKind;
+    name: string;
+    originalFileName: string;
+    mimeType: string;
+    size: number;
+    r2Key: string;
+    trainingEligible: boolean;
+  },
+) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(`insert into creative_media_assets (
+    id, owner_id, project_id, kind, name, original_file_name, mime_type, size, r2_key,
+    source, status, training_eligible, created_at, updated_at
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'upload', 'retained', ?, ?, ?)`)
+    .bind(input.id, ownerId, input.projectId, input.kind, input.name, input.originalFileName,
+      input.mimeType, input.size, input.r2Key, input.trainingEligible ? 1 : 0, now, now).run();
+  return mapMedia({
+    id: input.id,
+    projectId: input.projectId,
+    kind: input.kind,
+    name: input.name,
+    originalFileName: input.originalFileName,
+    mimeType: input.mimeType,
+    size: input.size,
+    source: "upload",
+    status: "retained",
+    trainingEligible: input.trainingEligible ? 1 : 0,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+export async function mediaObjectById(env: Env, ownerId: string, mediaId: string) {
+  return env.DB.prepare(`select r2_key as r2Key, mime_type as mimeType, size, original_file_name as originalFileName
+    from creative_media_assets where id = ? and owner_id = ?`)
+    .bind(mediaId, ownerId).first<{ r2Key: string; mimeType: string; size: number; originalFileName: string }>();
 }
 
 export async function updateProject(env: Env, ownerId: string, projectId: string, input: UpdateProjectRequest) {

@@ -11,6 +11,9 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/jobs/job_123/retry")).toBe("job-retry");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/jobs/job_123/cancel")).toBe("job-cancel");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/artifacts/artifact_123/accepted")).toBe("artifact-review");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/media")).toBe("media-list");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/media")).toBe("media-upload");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/media/media_123/content")).toBe("media-content");
   });
 
   it("does not become a generic AFDFW proxy", () => {

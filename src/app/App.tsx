@@ -11,9 +11,10 @@ import { PortalView } from "../features/portal/PortalView";
 import { LibraryView } from "../features/library/LibraryView";
 import { ProjectsView } from "../features/projects/ProjectsView";
 import { RuntimeView } from "../features/runtime/RuntimeView";
+import { MediaView } from "../features/media/MediaView";
 import { PlaceholderView } from "../features/placeholder/PlaceholderView";
 
-const VIEWS = new Set<StudioView>(["portal", "dna", "generate", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
+const VIEWS = new Set<StudioView>(["portal", "dna", "generate", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
 
 function hashView(): StudioView {
   const candidate = window.location.hash.replace(/^#\/?/, "") as StudioView;
@@ -39,6 +40,9 @@ export function App() {
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
+  useEffect(() => {
+    document.querySelector(mobile ? ".mbody" : ".view-scroll")?.scrollTo({ top: 0 });
+  }, [activeProjectId, mobile, view]);
 
   const navigate = (next: StudioView) => {
     setView(next);
@@ -51,7 +55,8 @@ export function App() {
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} />;
-      case "generate": return <GenerationView onQueued={() => navigate("queue")} />;
+      case "generate": return <GenerationView onQueued={() => navigate("queue")} onMedia={() => navigate("media")} />;
+      case "media": return <MediaView onGenerate={() => navigate("generate")} />;
       case "queue": return <QueueView />;
       case "gallery": return <ArtifactsView />;
       case "library": return <LibraryView />;
@@ -63,5 +68,5 @@ export function App() {
 
   if (loading) return <div className="studio-loading"><div className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></div><strong>Opening Creative Studio</strong></div>;
 
-  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-persistent mock media</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{content}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{content}</DesktopShell>}</>;
+  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-only metadata</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{content}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{content}</DesktopShell>}</>;
 }

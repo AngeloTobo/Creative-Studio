@@ -6,6 +6,7 @@ import type {
   Capability,
   GenerationModality,
   Job,
+  MediaAsset,
   Project,
   StudioSession,
 } from "./domain";
@@ -19,13 +20,15 @@ export const CREATIVE_STUDIO_ROUTES = {
   dna: `${CREATIVE_STUDIO_API_PREFIX}/dna`,
   jobs: `${CREATIVE_STUDIO_API_PREFIX}/jobs`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
+  media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
 } as const;
 
 export type CreativeStudioRoute =
   | "session" | "projects" | "project-create" | "project-update" | "project-archive"
   | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
-  | "artifacts-list" | "artifact-review" | "artifact-media" | "capabilities";
+  | "artifacts-list" | "artifact-review" | "artifact-media"
+  | "media-list" | "media-upload" | "media-content" | "capabilities";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
   if (method === "GET" && pathname === "/api/creative-studio/session") return "session";
@@ -42,6 +45,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "GET" && pathname === "/api/creative-studio/artifacts") return "artifacts-list";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/media$/i.test(pathname)) return "artifact-media";
   if (method === "POST" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/(accepted|rejected|archived)$/i.test(pathname)) return "artifact-review";
+  if (method === "GET" && pathname === "/api/creative-studio/media") return "media-list";
+  if (method === "POST" && pathname === "/api/creative-studio/media") return "media-upload";
+  if (method === "GET" && /^\/api\/creative-studio\/media\/[a-z0-9_]+\/content$/i.test(pathname)) return "media-content";
   if (method === "GET" && pathname === "/api/creative-studio/capabilities") return "capabilities";
   return null;
 }
@@ -53,6 +59,7 @@ export type StudioSnapshot = {
   dnaArtifacts: CreativeDnaArtifact[];
   jobs: Job[];
   artifacts: Artifact[];
+  mediaAssets: MediaAsset[];
   capabilities: Capability[];
   acceptances: Acceptance[];
   refreshedAt: string;
@@ -94,6 +101,8 @@ export type ReviewArtifactResponse = {
   artifact: Artifact;
   acceptance: Acceptance;
 };
+
+export type UploadMediaResponse = { asset: MediaAsset };
 
 export type ApiSuccess<T> = { ok: true } & T;
 export type ApiFailure = { ok: false; error: string; message?: string };

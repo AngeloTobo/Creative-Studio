@@ -60,11 +60,13 @@ function memoryBucket() {
       const value = values.get(key);
       return value ? { key, size: value.bytes.byteLength } : null;
     },
-    async get(key: string) {
+    async get(key: string, options?: R2GetOptions) {
       const value = values.get(key);
       if (!value) return null;
+      const range = options?.range as { offset: number; length: number } | undefined;
+      const bytes = range ? value.bytes.slice(range.offset, range.offset + range.length) : value.bytes;
       return {
-        body: value.bytes,
+        body: bytes,
         writeHttpMetadata(headers: Headers) { headers.set("content-type", value.contentType); },
       };
     },
@@ -75,6 +77,7 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_media_assets"),
     env.DB.prepare("delete from creative_acceptances"),
     env.DB.prepare("delete from creative_artifacts"),
     env.DB.prepare("delete from creative_jobs"),
@@ -211,6 +214,72 @@ describe("Creative Studio Worker API", () => {
     }), workerEnv("afdfw", afdfwFor(ownerA)));
     expect(rightOwner.status).toBe(200);
     expect(await result(rightOwner)).toMatchObject({ ok: true, artifact: { status: "accepted" }, acceptance: { decision: "accepted" } });
+  });
+
+  it("uploads, verifies, lists, and serves owner-scoped project media", async () => {
+    const ownerId = "owner-media";
+    const project = await testProject(ownerId, "Media Study");
+    const { bucket, values } = memoryBucket();
+    const production = workerEnv("afdfw", afdfwFor(ownerId), bucket);
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const uploaded = await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("Owner Reference.png"),
+        "x-cs-file-size": String(bytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: bytes,
+    }), production);
+    expect(uploaded.status).toBe(201);
+    const payload = await result(uploaded) as { asset: { id: string; projectId: string; trainingEligible: boolean; contentUrl: string; size: number } };
+    expect(payload.asset).toMatchObject({ projectId: project.id, trainingEligible: true, size: bytes.byteLength });
+    expect(values.size).toBe(1);
+
+    const row = await env.DB.prepare("select r2_key as r2Key, training_eligible as trainingEligible from creative_media_assets where id = ?")
+      .bind(payload.asset.id).first<{ r2Key: string; trainingEligible: number }>();
+    expect(row?.r2Key).toContain(`owners/${ownerId}/projects/${project.id}/media/${payload.asset.id}/source`);
+    expect(Number(row?.trainingEligible)).toBe(1);
+
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/media"), production)) as { assets: Array<{ id: string }> };
+    expect(listed.assets).toEqual([{ ...payload.asset, kind: "image", name: "Owner Reference", originalFileName: "Owner Reference.png", mimeType: "image/png", source: "upload", status: "retained", provenance: expect.any(Object), createdAt: expect.any(String), updatedAt: expect.any(String) }]);
+
+    const content = await routeCreativeStudioApi(request(payload.asset.contentUrl), production);
+    expect(content.status).toBe(200);
+    expect(content.headers.get("content-type")).toBe("image/png");
+    expect(content.headers.get("x-content-type-options")).toBe("nosniff");
+    expect([...new Uint8Array(await content.arrayBuffer())]).toEqual([...bytes]);
+
+    const ranged = await routeCreativeStudioApi(request(payload.asset.contentUrl, { headers: { range: "bytes=2-5" } }), production);
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-range")).toBe(`bytes 2-5/${bytes.byteLength}`);
+    expect([...new Uint8Array(await ranged.arrayBuffer())]).toEqual([78, 71, 13, 10]);
+
+    const wrongOwner = await routeCreativeStudioApi(request(payload.asset.contentUrl), workerEnv("afdfw", afdfwFor("owner-other"), bucket));
+    expect(wrongOwner.status).toBe(404);
+    expect(await result(wrongOwner)).toMatchObject({ error: "media_not_found" });
+  });
+
+  it("rejects unsupported media before writing R2", async () => {
+    const ownerId = "owner-unsupported-media";
+    const project = await testProject(ownerId, "Unsupported Media");
+    const { bucket, values } = memoryBucket();
+    const response = await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "text/html",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": "unsafe.html",
+        "x-cs-file-size": "6",
+        "x-cs-training-eligible": "false",
+      },
+      body: "unsafe",
+    }), workerEnv("afdfw", afdfwFor(ownerId), bucket));
+    expect(response.status).toBe(415);
+    expect(await result(response)).toMatchObject({ error: "unsupported_media_type" });
+    expect(values.size).toBe(0);
   });
 
   it("persists queued, running, completed, artifact, and append-only decision state", async () => {

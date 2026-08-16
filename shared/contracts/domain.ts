@@ -82,6 +82,29 @@ export type Artifact = {
   updatedAt: IsoDateString;
 };
 
+export type MediaKind = "image" | "audio" | "video";
+
+export type MediaAsset = {
+  id: string;
+  projectId: string;
+  kind: MediaKind;
+  name: string;
+  originalFileName: string;
+  mimeType: string;
+  size: number;
+  source: "upload";
+  status: "retained";
+  contentUrl: string;
+  trainingEligible: boolean;
+  provenance: {
+    uploadedByOwner: true;
+    uploadedAt: IsoDateString;
+    parentAssetIds: string[];
+  };
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+};
+
 export type AcceptanceDecision = "accepted" | "rejected" | "archived";
 
 export type Acceptance = {
@@ -95,6 +118,7 @@ export type Acceptance = {
 
 export type CapabilityKey =
   | "creative-dna"
+  | "media-library"
   | "music-generation"
   | "image-generation"
   | "artifact-review"

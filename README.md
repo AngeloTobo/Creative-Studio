@@ -34,7 +34,7 @@ npm run check
 npm run test:e2e
 ```
 
-`npm run check` covers lint, browser-domain unit tests, Workers-runtime API tests with isolated D1 migrations, environment validation, TypeScript, production build, and a source secret-signature scan. The browser suite runs the entire CreativeDNA versioning and artifact acceptance loop in desktop and mobile Chrome, plus keyboard-focus and reduced-motion gates.
+`npm run check` covers lint, browser-domain unit tests, Workers-runtime API tests with isolated D1 migrations, environment validation, TypeScript, production build, and a source secret-signature scan. The browser suite runs the entire CreativeDNA versioning and artifact acceptance loop in desktop and mobile Chrome, verifies the real-media boundary, and includes keyboard-focus and reduced-motion gates.
 
 The production contract is configured and can be checked independently:
 
@@ -44,7 +44,7 @@ npm run check:env:production
 
 ## Runtime modes
 
-- `development`: explicitly labeled simulated media, with real browser-local project, job, and history persistence. The first run contains no records.
+- `development`: explicitly labeled browser-local project, job, and history persistence. It contains no seeded records and never pretends that an uploaded file was retained.
 - `http`: the frontend calls only the Creative Studio BFF. The Worker uses standalone D1 and either its development renderer or narrow AFDFW adapters.
 - `BACKEND_MODE=development`: no AFDFW calls; suitable for local Worker verification.
 - `BACKEND_MODE=afdfw`: the production Worker uses the same-account `art-feed-dfw` service binding for approved-session handoff and generation only. Do not put tokens in Vite environment variables.
@@ -61,7 +61,7 @@ The independent production application is live at [cs.angelotoborg.com](https://
 - Backend service binding: `AFDFW` -> `art-feed-dfw`
 - Generic `workers.dev` route: disabled in production
 
-CreativeDNA, projects, jobs, artifacts, and decisions remain in Creative Studio D1. Creating a job durably enqueues it; the Worker submits and reconciles it without an open browser, with D1 idempotency, timeouts, retry lineage, and explicit cancellation of Creative Studio tracking. AFDFW supplies the approved identity and allowlisted generation capabilities. Every completed result is streamed into Creative Studio R2 and size-verified before its job is marked completed; acceptance does not control retention.
+CreativeDNA, projects, jobs, uploaded-media records, artifacts, and decisions remain in Creative Studio D1. Project uploads stream directly to Creative Studio R2, are size-verified before metadata is committed, and retain explicit future-training consent plus owner provenance. Uploading does not start training. Creating a generation job durably enqueues it; the Worker submits and reconciles it without an open browser, with D1 idempotency, timeouts, retry lineage, and explicit cancellation of Creative Studio tracking. AFDFW supplies the approved identity and allowlisted generation capabilities. Every completed result is also streamed into Creative Studio R2 and size-verified before its job is marked completed; acceptance does not control retention.
 
 New accounts and cleared environments start empty. Projects are created, edited, paused, and archived only through explicit user actions; production code does not seed project or artifact records.
 

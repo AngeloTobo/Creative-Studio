@@ -17,6 +17,7 @@ import {
 import { backendMode } from "../config";
 import { enqueueJob } from "../jobs";
 import { body, boundedText, json } from "../lib/http";
+import { mediaContent, uploadMedia } from "../media";
 import {
   artifactMediaPath,
   archiveProject,
@@ -30,6 +31,7 @@ import {
   listArtifacts,
   listJobs,
   listLocalDna,
+  listMediaAssets,
   listProjects,
   projectById,
   reconcileDevelopmentJobs,
@@ -52,6 +54,10 @@ function statusFor(error: string) {
   if (error === "approved_login_required") return 401;
   if (error.endsWith("_not_found")) return 404;
   if (error.includes("not_configured") || error.startsWith("afdfw_")) return 503;
+  if (error === "media_upload_too_large") return 413;
+  if (error === "unsupported_media_type") return 415;
+  if (error === "media_upload_verification_failed") return 502;
+  if (error === "invalid_media_range") return 416;
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable") return 409;
   return 400;
 }
@@ -73,6 +79,7 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
   if (developmentMode(env)) {
     return [
       { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned DNA is stored in the standalone Worker database.", checkedAt },
+      { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Owner uploads are size-verified and retained under project scope." : "An R2 binding is required for real uploads.", checkedAt },
       { key: "music-generation", label: "Music generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -88,6 +95,7 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
   const state = (result: PromiseSettledResult<unknown>) => result.status === "fulfilled" ? "available" : "unavailable";
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
+    { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
     { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -205,6 +213,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     if (route === "artifacts-list") {
       await syncJobs(env, session.userId);
       return json({ ok: true, artifacts: await listArtifacts(env, session.userId), acceptances: await listAcceptances(env, session.userId) });
+    }
+    if (route === "media-list") return json({ ok: true, assets: await listMediaAssets(env, session.userId) });
+    if (route === "media-upload") return json({ ok: true, asset: await uploadMedia(env, request, session.userId) }, { status: 201 });
+    if (route === "media-content") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/media\/([a-z0-9_]+)\/content$/i);
+      if (!match) return json({ ok: false, error: "invalid_media_route" }, { status: 400 });
+      return await mediaContent(env, request, session.userId, match[1]);
     }
     if (route === "artifact-review") {
       const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/(accepted|rejected|archived)$/i);

@@ -6,6 +6,7 @@ import type {
   CreateCreativeDnaRequest,
   CreativeDnaArtifact,
   GenerationModality,
+  MediaAsset,
   Project,
   StudioSnapshot,
   UpdateProjectRequest,
@@ -29,6 +30,7 @@ type StudioContextValue = {
   retryJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note?: string) => Promise<void>;
+  uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
   refresh: () => Promise<void>;
 };
 
@@ -138,6 +140,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.reviewArtifact(artifactId, decision, note));
   }, [adapter, transact]);
 
+  const uploadMedia = useCallback(async (file: File, trainingEligible: boolean) => {
+    if (!activeProjectId) throw new Error("project_required");
+    return transact(() => adapter.uploadMedia(activeProjectId, file, trainingEligible));
+  }, [activeProjectId, adapter, transact]);
+
   const createProject = useCallback(async (input: CreateProjectRequest) => {
     const project = await transact(() => adapter.createProject(input));
     setActiveProjectId(project.id);
@@ -180,8 +187,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     retryJob,
     cancelJob,
     reviewArtifact,
+    uploadMedia,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, cancelJob, reviewArtifact, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, cancelJob, reviewArtifact, uploadMedia, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
