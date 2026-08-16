@@ -1,0 +1,44 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.cache/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# Cloudflare and local runtime state
+.wrangler/
+data/
+tmp/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local uploads and prototype-tool state
+uploads/
+.thumbnail
+.image-slots.state.json
+.playwright-cli/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
