@@ -30,8 +30,8 @@ export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
   status?: Exclude<ProjectStatus, "archived">;
 };
 
-export type GenerationModality = "music" | "image";
-export type GenerationCapability = "MUSIC_GENERATE" | "IMAGE_GENERATE";
+export type GenerationModality = "music" | "image" | "video";
+export type GenerationCapability = "MUSIC_GENERATE" | "IMAGE_GENERATE" | "VIDEO_GENERATE";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 export type Job = {
@@ -73,6 +73,7 @@ export type GenerationSettingsStamp = {
   parameters: Record<string, string | number | boolean>;
   models: string[];
   inputAssetIds: string[];
+  inputBindings?: Record<string, string>;
 };
 
 export type ArtifactStatus = "retaining" | "ready" | "accepted" | "rejected" | "archived";
@@ -126,7 +127,7 @@ export type CreativeDnaTrainingJob = {
   baseDnaArtifactId: string | null;
   resultDnaArtifactId: string | null;
   name: string;
-  targetModality: GenerationModality;
+  targetModality: Exclude<GenerationModality, "video">;
   status: CreativeDnaTrainingStatus;
   progress: number;
   provider: "local-creative-dna-runner";
@@ -179,6 +180,8 @@ export type CapabilityKey =
   | "media-library"
   | "music-generation"
   | "image-generation"
+  | "video-generation"
+  | "local-runner"
   | "artifact-review"
   | "artifact-retention"
   | "afdfw-session"
@@ -208,4 +211,21 @@ export type AdapterDescriptor = {
   label: string;
   development: boolean;
   durableScope: "browser" | "backend";
+};
+
+export type LocalRunnerState = "offline" | "online" | "busy" | "revoked";
+
+export type LocalRunner = {
+  id: string;
+  name: string;
+  state: LocalRunnerState;
+  version: string | null;
+  comfyUrl: string | null;
+  comfyVersion: string | null;
+  device: string | null;
+  activeJobId: string | null;
+  lastError: string | null;
+  lastHeartbeatAt: IsoDateString | null;
+  createdAt: IsoDateString;
+  revokedAt: IsoDateString | null;
 };

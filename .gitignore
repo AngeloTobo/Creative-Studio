@@ -30,6 +30,7 @@ uploads/
 playwright-report/
 test-results/
 output/
+runner/config.local.json
 
 # Logs
 *.log

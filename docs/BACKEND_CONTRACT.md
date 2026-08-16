@@ -12,7 +12,7 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 | `GET` | `/api/creative-studio/dna` | List versioned CreativeDNA artifacts |
 | `POST` | `/api/creative-studio/dna` | Create a root or child DNA version |
 | `GET` | `/api/creative-studio/jobs` | List durable jobs without driving their lifecycle |
-| `POST` | `/api/creative-studio/jobs` | Persist and enqueue one idempotent music or image job |
+| `POST` | `/api/creative-studio/jobs` | Persist one idempotent image, music, or API-format video workflow job |
 | `POST` | `/api/creative-studio/jobs/:id/retry` | Create a lineage-linked retry of a failed or cancelled job |
 | `POST` | `/api/creative-studio/jobs/:id/cancel` | Stop Creative Studio tracking for an active job |
 | `GET` | `/api/creative-studio/artifacts` | List artifacts and acceptance history |
@@ -21,6 +21,9 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 | `GET` | `/api/creative-studio/media` | List owner-scoped retained project uploads |
 | `POST` | `/api/creative-studio/media` | Stream one allowlisted image, audio, or video upload to verified R2 storage |
 | `GET` | `/api/creative-studio/media/:id/content` | Serve an owned uploaded asset from Creative Studio R2 |
+| `GET` | `/api/creative-studio/runners` | List paired machine state without returning credentials |
+| `POST` | `/api/creative-studio/runners/enroll` | Create a hashed registration and return its token once |
+| `POST` | `/api/creative-studio/runners/:id/revoke` | Revoke a machine and release its unfinished local jobs |
 | `GET` | `/api/creative-studio/capabilities` | Report bounded runtime health |
 
 Every other Creative Studio API path returns `404`. There is no arbitrary forwarding route.
@@ -45,7 +48,20 @@ Interactive calls may relay cookies, verified Cloudflare Access identity, and Ac
 
 CreativeDNA and artifact decisions are stored in Creative Studio D1 only. Every upstream completion is streamed into Creative Studio R2 and size-verified before its Creative Studio job is marked completed. Retention is independent of accept, reject, or archive decisions. No CreativeDNA, accept, profile, feed, admin, or raw ComfyUI route is on the AFDFW allowlist.
 
-Media uploads never traverse AFDFW. The upload route requires an owned, non-archived project; an allowlisted MIME type; a 100 MB or smaller declared size; and an explicit `true` or `false` future-training consent value. It writes to a project-scoped R2 key, verifies the stored byte count, and only then commits D1 metadata. The media contract records provenance and consent but does not claim or schedule a training run.
+Media uploads never traverse AFDFW. The upload route requires an owned, non-archived project; an allowlisted MIME type; a 100 MB or smaller declared size; and an explicit `true` or `false` future-training consent value. It writes to a project-scoped R2 key, verifies the stored byte count, and only then commits D1 metadata. The media contract records provenance and consent; the owner separately selects eligible inputs when starting a durable CreativeDNA training run.
+
+## Local Runner allowlist
+
+The separate runner hostname accepts only bearer-authenticated machine routes:
+
+- `POST /api/creative-studio/runner/heartbeat`
+- `POST /api/creative-studio/runner/jobs/claim`
+- `POST /api/creative-studio/runner/jobs/:id/heartbeat`
+- `POST /api/creative-studio/runner/jobs/:id/complete`
+- `POST /api/creative-studio/runner/jobs/:id/fail`
+- `GET /api/creative-studio/runner/media/:id`
+
+Tokens are generated with 256 bits of randomness, returned once, stored only as SHA-256 hashes in D1, owner-scoped, and revocable. A claim carries an immutable API-format workflow revision plus only the retained inputs bound in its settings stamp. Leases expire after two minutes unless renewed. Completion accepts only allowlisted image, audio, or video MIME types up to 100 MB, writes to a deterministic R2 key, verifies the byte count, and only then completes the D1 job and training candidate. The runner hostname returns `404` for the product shell and every non-runner route.
 
 ## Runtime validation
 
@@ -54,5 +70,5 @@ Media uploads never traverse AFDFW. The upload route requires an owned, non-arch
 - AFDFW mode requires either a service binding or a valid base URL.
 - Non-local base URLs must use HTTPS.
 - AFDFW `401` and `403` responses become a same-origin `approved_login_required` response without seeding owner data.
-- `npm run check:env:production` blocks a release while the D1 ID is a placeholder, backend mode is development, the R2/custom-domain boundary is missing, `workers.dev` is enabled, or no protected AFDFW target exists.
+- `npm run check:env:production` blocks a release while the D1 ID is a placeholder, backend mode is development, the R2/custom-domain boundary is missing, Worker-first asset routing is absent, `workers.dev` is enabled, or no protected AFDFW target exists.
 - The same production preflight requires the dedicated queue producer/consumer and the five-minute recovery trigger.

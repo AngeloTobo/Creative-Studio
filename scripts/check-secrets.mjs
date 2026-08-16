@@ -12,6 +12,7 @@ const signatures = [
   ["OpenAI-style token", /sk-(?:proj-)?[A-Za-z0-9_-]{20,}/],
   ["Cloudflare API token", /(?:CF_API_TOKEN|CLOUDFLARE_API_TOKEN)\s*=\s*[^\s#][^\r\n]{15,}/],
   ["Creative Studio service token", /AFDFW_SERVICE_TOKEN\s*=\s*[^\s#][^\r\n]{15,}/],
+  ["Creative Studio runner token", /csr_[A-Za-z0-9_-]{40,80}/],
 ];
 
 const findings = [];

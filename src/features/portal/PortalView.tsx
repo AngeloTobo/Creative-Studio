@@ -62,7 +62,7 @@ export function PortalView({ navigate }: { navigate: (view: StudioView) => void 
         {project ? <button className="mproj-card glass" onClick={() => navigate("projects")}><ProjectAvatar project={project} size={50} /><span className="mp-body"><strong className="mp-name">{project.name} <i className="badge active">{project.status}</i></strong><span className="mp-desc">{project.description}</span></span><Icon name="chevron" size={18} /></button> : null}
         <div className="mact-card glass">
           <SectionHead label="Creative Queue" action="View all" onAction={() => navigate("queue")} />
-          {activeJobs.slice(0, 3).map((job) => <div className="mact-row" key={job.id}><span className="mini-job-art" style={{ background: job.modality === "music" ? "linear-gradient(135deg,#9d174d,#7c3aed)" : "linear-gradient(135deg,#0e7490,#a21caf)" }} /><span><strong className="ar-title">{job.modality === "music" ? "Music" : "Image"} generation</strong><span className="ar-sub">{job.status} · {job.progress}%</span></span><StatusDot status={job.status} /></div>)}
+          {activeJobs.slice(0, 3).map((job) => <div className="mact-row" key={job.id}><span className="mini-job-art" style={{ background: job.modality === "music" ? "linear-gradient(135deg,#9d174d,#7c3aed)" : job.modality === "video" ? "linear-gradient(135deg,#312e81,#db2777)" : "linear-gradient(135deg,#0e7490,#a21caf)" }} /><span><strong className="ar-title">{job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} generation</strong><span className="ar-sub">{job.status} · {job.progress}%</span></span><StatusDot status={job.status} /></div>)}
           {!activeJobs.length ? <div className="empty-copy">Queue is clear.</div> : null}
         </div>
       </div>

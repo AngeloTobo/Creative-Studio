@@ -9,7 +9,7 @@ const target = production ? { ...config, ...(config.env?.production ?? {}) } : c
 const backendMode = target.vars?.BACKEND_MODE ?? "development";
 if (!["development", "afdfw"].includes(backendMode)) issues.push(`Unsupported BACKEND_MODE: ${backendMode}`);
 if (config.main !== "worker/index.ts") issues.push("Worker entrypoint must remain worker/index.ts");
-if (config.assets?.run_worker_first?.[0] !== "/api/creative-studio/*") issues.push("Creative Studio API must run through the Worker before assets");
+if (config.assets?.run_worker_first?.[0] !== "/*") issues.push("Creative Studio must run the Worker before assets so the runner hostname stays API-only");
 
 const d1 = target.d1_databases?.find((binding) => binding.binding === "DB");
 if (!d1) issues.push("Missing Creative Studio D1 binding named DB");
@@ -25,6 +25,7 @@ if (production) {
   if (!target.queues?.consumers?.some((queue) => queue.queue === "creative-studio-jobs")) issues.push("Production requires the Creative Studio job queue consumer");
   if (!target.triggers?.crons?.includes("*/5 * * * *")) issues.push("Production requires the five-minute background job recovery trigger");
   if (!target.routes?.some((route) => route.pattern === "cs.angelotoborg.com" && route.custom_domain === true)) issues.push("Production requires the cs.angelotoborg.com custom domain");
+  if (!target.routes?.some((route) => route.pattern === "runner.cs.angelotoborg.com" && route.custom_domain === true)) issues.push("Production requires the token-authenticated runner.cs.angelotoborg.com custom domain");
   if (target.workers_dev !== false) issues.push("Production must disable the public workers.dev route");
 }
 

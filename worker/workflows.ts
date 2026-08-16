@@ -138,6 +138,22 @@ async function ownedRevision(env: Env, ownerId: string, workflowId: string, revi
     .bind(revisionId, workflowId, ownerId).first<RevisionRow>();
 }
 
+export async function workflowExecutionPlan(env: Env, ownerId: string, workflowId: string, revisionId: string) {
+  const row = await env.DB.prepare(`select ${WORKFLOW_COLUMNS} from creative_workflows where id = ? and owner_id = ?`)
+    .bind(workflowId, ownerId).first<WorkflowRow>();
+  if (!row) throw new Error("workflow_not_found");
+  const revisionRow = await ownedRevision(env, ownerId, workflowId, revisionId);
+  if (!revisionRow) throw new Error("workflow_revision_not_found");
+  const revision = parseRevision(revisionRow);
+  if (revision.format !== "comfyui-api") throw new Error("workflow_api_export_required");
+  let graph: unknown;
+  try { graph = JSON.parse(revisionRow.graphJson); } catch { throw new Error("invalid_workflow_json"); }
+  return {
+    workflow: { ...row, currentRevision: revision } satisfies WorkflowDefinition,
+    graph,
+  };
+}
+
 export async function createWorkflowRevision(env: Env, ownerId: string, workflowId: string, input: SaveWorkflowRevisionRequest) {
   const workflow = await env.DB.prepare(`select ${WORKFLOW_COLUMNS} from creative_workflows where id = ? and owner_id = ?`)
     .bind(workflowId, ownerId).first<WorkflowRow>();

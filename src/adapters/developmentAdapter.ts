@@ -112,6 +112,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    runners: [],
     capabilities: capabilitySnapshot(now),
     acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     refreshedAt: now,
@@ -197,6 +198,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
   };
 
   const addJob = (state: DevelopmentState, input: SubmitJobRequest, retryOfJobId: string | null) => {
+    if (input.modality === "video") throw new Error("video_workflow_requires_creative_studio_worker");
     const duplicateId = state.idempotencyKeys[input.idempotencyKey];
     const duplicate = duplicateId ? state.jobs.find((item) => item.id === duplicateId) : null;
     if (duplicate) return duplicate;
@@ -404,6 +406,12 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async cancelCreativeDnaTraining() {
       throw new Error("creative_dna_training_requires_creative_studio_worker");
+    },
+    async enrollLocalRunner() {
+      throw new Error("runner_enrollment_requires_creative_studio_worker");
+    },
+    async revokeLocalRunner() {
+      throw new Error("runner_enrollment_requires_creative_studio_worker");
     },
   };
 }

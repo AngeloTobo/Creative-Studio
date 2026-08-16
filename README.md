@@ -27,6 +27,25 @@ npm run dev
 
 The Vite client runs on its printed local URL and calls the Worker at `http://127.0.0.1:8787/api/creative-studio/*` during development.
 
+## Local Runner v1
+
+Local Runner v1 executes imported ComfyUI API-format workflows on this Windows machine without keeping Creative Studio open. In the deployed app, open **Settings**, create a one-time machine token, then run from this repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local-runner.ps1
+```
+
+The installer prompts for the one-time token, writes it to `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers an at-logon task, and starts it. ComfyUI must be available at `http://127.0.0.1:8188`. Runner credentials are hashed in D1 and can be revoked in Settings. The machine agent talks only to the token-authenticated `runner.cs.angelotoborg.com` API; that hostname serves no application shell or owner-session routes.
+
+For a foreground diagnostic run:
+
+```powershell
+$env:CS_RUNNER_CONFIG = "$env:LOCALAPPDATA\Creative Studio Runner\config.json"
+npm run runner:once
+```
+
+UI-format ComfyUI files remain editable and versioned, but must be exported in API format before execution. Image, music/audio, and video workflows are supported; 3D execution is deliberately outside Local Runner v1.
+
 ## Verify
 
 ```powershell
@@ -60,8 +79,9 @@ The independent production application is live at [cs.angelotoborg.com](https://
 - Scheduled recovery: every five minutes
 - Backend service binding: `AFDFW` -> `art-feed-dfw`
 - Generic `workers.dev` route: disabled in production
+- Local runner endpoint: `runner.cs.angelotoborg.com` with revocable bearer credentials and no public application shell
 
-CreativeDNA, projects, generation jobs, CreativeDNA training jobs, uploaded-media records, ComfyUI workflow revisions, artifacts, training evidence, and decisions remain in Creative Studio D1. CreativeDNA authoring, training, generation, and version history share one workspace. Project uploads stream directly to Creative Studio R2, are size-verified before metadata is committed, and retain explicit training consent plus owner provenance. Uploading alone does not train: the owner selects eligible uploads and starts a durable run that waits truthfully for an authenticated local trainer. The runner receives an immutable bundle and completion creates a new lineage-bearing DNA version. Workflow JSONs can be imported, inspected, customized through safe detected controls, versioned by content hash, and exported exactly. Creating a generation job durably enqueues it; the Worker submits and reconciles it without an open browser, with D1 idempotency, timeouts, retry lineage, immutable settings stamps, explicit cancellation of Creative Studio tracking, failure guidance, and durable retry controls. AFDFW supplies the approved identity and allowlisted generation capabilities. Every completed result is also streamed into Creative Studio R2 and size-verified before its job is marked completed; acceptance does not control retention. Artifact review is media-aware: retained music uses an audio player plus download, retained images open into full-size inspection, and R2 media supports byte ranges. Accept and reject require a review note; every append-only decision visibly retains its note, actor, and time. Generated prompts and settings enter a CreativeDNA candidate set, and artifact acceptance or rejection explicitly makes that evidence training-ready or excluded.
+CreativeDNA, projects, generation jobs, CreativeDNA training jobs, runner registrations, uploaded-media records, ComfyUI workflow revisions, artifacts, training evidence, and decisions remain in Creative Studio D1. CreativeDNA authoring, training, generation, and version history share one workspace. Project uploads stream directly to Creative Studio R2, are size-verified before metadata is committed, and retain explicit training consent plus owner provenance. Uploading alone does not train: the owner selects eligible uploads and starts a durable run that waits truthfully for an authenticated local trainer. Workflow JSONs can be imported, inspected, customized through safe detected controls, versioned by content hash, and exported exactly. AFDFW remains available for its narrow image/music adapters; API-format image, music/audio, and video workflow jobs instead wait for Local Runner v1, which downloads only their bound inputs, submits the immutable graph to localhost ComfyUI, renews a lease, and uploads the completed output directly into verified Creative Studio R2 retention. Every completed result keeps its workflow revision, hash, parameters, models, input bindings, prompt, and retry lineage. Acceptance does not control retention. Artifact review is media-aware for image, audio, and video. Accept and reject require a review note; every append-only decision visibly retains its note, actor, and time. Generated prompts and settings enter a CreativeDNA candidate set, and artifact acceptance or rejection explicitly makes that evidence training-ready or excluded.
 
 New accounts and cleared environments start empty. Projects are created, edited, paused, and archived only through explicit user actions; production code does not seed project or artifact records.
 

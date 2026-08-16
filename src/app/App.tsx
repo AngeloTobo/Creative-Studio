@@ -13,6 +13,7 @@ import { RuntimeView } from "../features/runtime/RuntimeView";
 import { MediaView } from "../features/media/MediaView";
 import { PlaceholderView } from "../features/placeholder/PlaceholderView";
 import { FlowsView } from "../features/workflows/FlowsView";
+import { SettingsView } from "../features/settings/SettingsView";
 
 const VIEWS = new Set<StudioView>(["portal", "dna", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
 
@@ -53,7 +54,7 @@ export function App() {
   };
 
   const content = (() => {
-    if (!activeProjectId && view !== "projects" && view !== "runtime") return <ProjectsView />;
+    if (!activeProjectId && view !== "projects" && view !== "runtime" && view !== "settings") return <ProjectsView />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} onMedia={() => navigate("media")} />;
@@ -64,6 +65,7 @@ export function App() {
       case "projects": return <ProjectsView />;
       case "runtime": return <RuntimeView />;
       case "flows": return <FlowsView />;
+      case "settings": return <SettingsView />;
       default: return <PlaceholderView view={view} goBack={() => navigate("portal")} />;
     }
   })();

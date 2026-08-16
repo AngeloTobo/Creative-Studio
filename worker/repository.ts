@@ -228,6 +228,11 @@ export type BackgroundJob = JobRow & {
   reconcileLeaseUntil: string | null;
   lastReconcileError: string | null;
   cancelledAt: string | null;
+  executionTarget: "afdfw" | "local-comfyui";
+  workflowId: string | null;
+  workflowRevisionId: string | null;
+  runnerId: string | null;
+  runnerLeaseUntil: string | null;
 };
 
 const PUBLIC_JOB_COLUMNS = `id, project_id as projectId, dna_artifact_id as dnaArtifactId, capability, modality,
@@ -238,7 +243,9 @@ const PUBLIC_JOB_COLUMNS = `id, project_id as projectId, dna_artifact_id as dnaA
 const BACKGROUND_JOB_COLUMNS = `${PUBLIC_JOB_COLUMNS}, owner_id as ownerId, upstream_media_path as upstreamMediaPath,
   reconcile_email as reconcileEmail, idempotency_key as idempotencyKey, reconcile_attempts as reconcileAttempts,
   next_reconcile_at as nextReconcileAt, timeout_at as timeoutAt, reconcile_lease_until as reconcileLeaseUntil,
-  last_reconcile_error as lastReconcileError, cancelled_at as cancelledAt`;
+  last_reconcile_error as lastReconcileError, cancelled_at as cancelledAt, execution_target as executionTarget,
+  workflow_id as workflowId, workflow_revision_id as workflowRevisionId, runner_id as runnerId,
+  runner_lease_until as runnerLeaseUntil`;
 
 function parseSettingsStamp(value: string, fallback: Omit<GenerationSettingsStamp, "schemaVersion">): GenerationSettingsStamp {
   try {
@@ -291,6 +298,9 @@ export async function createQueuedJob(
     retryOfJobId?: string | null;
     promptOverride?: string;
     settingsStampOverride?: GenerationSettingsStamp;
+    executionTarget?: "afdfw" | "local-comfyui";
+    workflowId?: string | null;
+    workflowRevisionId?: string | null;
   },
 ) {
   const existing = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -299,8 +309,8 @@ export async function createQueuedJob(
 
   const jobId = id("job");
   const now = new Date().toISOString();
-  const timeoutAt = new Date(Date.now() + 30 * 60_000).toISOString();
-  const prompt = input.promptOverride ?? input.dna.generationPrompts[input.modality];
+  const timeoutAt = input.executionTarget === "local-comfyui" ? null : new Date(Date.now() + 30 * 60_000).toISOString();
+  const prompt = input.promptOverride ?? input.dna.generationPrompts[input.modality === "video" ? "image" : input.modality];
   const settingsStamp: GenerationSettingsStamp = input.settingsStampOverride ?? {
     schemaVersion: 1,
     source: "creative-dna",
@@ -318,7 +328,7 @@ export async function createQueuedJob(
     id: jobId,
     projectId: input.projectId,
     dnaArtifactId: input.dna.artifactId,
-    capability: input.modality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
+    capability: input.modality === "music" ? "MUSIC_GENERATE" : input.modality === "video" ? "VIDEO_GENERATE" : "IMAGE_GENERATE",
     modality: input.modality,
     status: "queued",
     progress: 1,
@@ -337,11 +347,12 @@ export async function createQueuedJob(
     await env.DB.prepare(`insert into creative_jobs (
       id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
       upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, completed_at,
-      reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at, settings_stamp_json
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?)`)
+      reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at, settings_stamp_json,
+      execution_target, workflow_id, workflow_revision_id
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
       .bind(job.id, ownerId, input.projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress,
         job.prompt, job.provider, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
-        JSON.stringify(job.settingsStamp)).run();
+        JSON.stringify(job.settingsStamp), input.executionTarget ?? "afdfw", input.workflowId ?? null, input.workflowRevisionId ?? null).run();
     return { job, created: true };
   } catch (error) {
     const winner = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -455,7 +466,7 @@ export async function claimBackgroundJob(env: Env, jobId: string, leaseMs = 12 *
   const now = new Date();
   const leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
   const claimed = await env.DB.prepare(`update creative_jobs set reconcile_lease_until = ?, reconcile_attempts = reconcile_attempts + 1, updated_at = ?
-    where id = ? and status in ('queued', 'running')
+    where id = ? and execution_target = 'afdfw' and status in ('queued', 'running')
       and (next_reconcile_at is null or next_reconcile_at <= ?)
       and (reconcile_lease_until is null or reconcile_lease_until <= ?)`)
     .bind(leaseUntil, now.toISOString(), jobId, now.toISOString(), now.toISOString()).run();
@@ -483,11 +494,92 @@ export async function releaseBackgroundJob(env: Env, jobId: string) {
 
 export async function dueBackgroundJobIds(env: Env, limit = 50) {
   const now = new Date().toISOString();
-  const rows = await env.DB.prepare(`select id from creative_jobs where status in ('queued', 'running')
+  const rows = await env.DB.prepare(`select id from creative_jobs where execution_target = 'afdfw' and status in ('queued', 'running')
     and (next_reconcile_at is null or next_reconcile_at <= ?)
     and (reconcile_lease_until is null or reconcile_lease_until <= ?)
     order by coalesce(next_reconcile_at, created_at) limit ?`).bind(now, now, limit).all<{ id: string }>();
   return (rows.results ?? []).map((row) => row.id);
+}
+
+const RUNNER_OUTPUT_TYPES: Record<string, { kind: Job["modality"]; extension: string }> = {
+  "image/png": { kind: "image", extension: "png" },
+  "image/jpeg": { kind: "image", extension: "jpg" },
+  "image/webp": { kind: "image", extension: "webp" },
+  "audio/wav": { kind: "music", extension: "wav" },
+  "audio/mpeg": { kind: "music", extension: "mp3" },
+  "audio/flac": { kind: "music", extension: "flac" },
+  "audio/ogg": { kind: "music", extension: "ogg" },
+  "video/mp4": { kind: "video", extension: "mp4" },
+  "video/webm": { kind: "video", extension: "webm" },
+  "video/quicktime": { kind: "video", extension: "mov" },
+};
+
+export const MAX_RUNNER_OUTPUT_BYTES = 100 * 1024 * 1024;
+
+export async function completeLocalRunnerJob(
+  env: Env,
+  ownerId: string,
+  runnerId: string,
+  jobId: string,
+  body: ReadableStream,
+  contentTypeValue: string,
+  declaredSize: number,
+) {
+  if (!env.ARTIFACTS) throw new Error("artifact_storage_not_configured");
+  const contentType = contentTypeValue.toLowerCase().split(";", 1)[0].trim();
+  const output = RUNNER_OUTPUT_TYPES[contentType];
+  if (!output) throw new Error("unsupported_runner_output_type");
+  if (!Number.isInteger(declaredSize) || declaredSize <= 0) throw new Error("empty_runner_output");
+  if (declaredSize > MAX_RUNNER_OUTPUT_BYTES) throw new Error("runner_output_too_large");
+  const background = await backgroundJobById(env, jobId);
+  if (!background || background.ownerId !== ownerId) throw new Error("job_not_found");
+  if (background.executionTarget !== "local-comfyui" || background.runnerId !== runnerId) throw new Error("runner_job_not_completable");
+  if (background.modality !== output.kind) throw new Error("runner_output_modality_mismatch");
+  if (background.status === "completed") {
+    const completed = await jobById(env, ownerId, jobId);
+    if (!completed) throw new Error("job_not_found");
+    return completed;
+  }
+  if (background.status !== "running") throw new Error("runner_job_not_completable");
+
+  const artifactId = `artifact_${jobId}`;
+  const safeOwner = ownerId.replace(/[^a-z0-9_-]/gi, "_").slice(0, 120);
+  const key = `owners/${safeOwner}/artifacts/${artifactId}/result.${output.extension}`;
+  const created = await env.ARTIFACTS.put(key, body, {
+    onlyIf: { etagDoesNotMatch: "*" },
+    httpMetadata: { contentType },
+    customMetadata: { ownerId, artifactId, jobId, runnerId, retainedAt: new Date().toISOString() },
+  });
+  const retained = await env.ARTIFACTS.head(key);
+  if (!retained || retained.size !== declaredSize) {
+    if (created) await env.ARTIFACTS.delete(key);
+    throw new Error("artifact_retention_verification_failed");
+  }
+
+  const dna = (await listLocalDna(env, ownerId)).find((item) => item.artifactId === background.dnaArtifactId);
+  const now = new Date().toISOString();
+  const colors = background.modality === "music" ? ["#9d174d", "#7c3aed"] : background.modality === "video" ? ["#312e81", "#db2777"] : ["#0e7490", "#a21caf"];
+  await env.DB.batch([
+    env.DB.prepare(`insert or ignore into creative_artifacts (
+      id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt,
+      preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id,
+      created_at, updated_at, retained_key, retained_content_type, retained_size, settings_stamp_json
+    ) values (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 'remote-media', ?, ?, ?, null, null, ?, ?, ?, ?, ?, ?)`)
+      .bind(artifactId, ownerId, background.projectId, jobId, background.dnaArtifactId, background.modality,
+        dna?.name ?? `${background.modality} artifact`, background.provider, background.prompt,
+        `/api/creative-studio/artifacts/${artifactId}/media`, colors[0], colors[1], now, now, key, contentType,
+        retained.size, background.settingsStampJson),
+    env.DB.prepare(`update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null,
+      completed_at = coalesce(completed_at, ?), updated_at = ?, runner_lease_until = null, next_reconcile_at = null
+      where id = ? and owner_id = ? and execution_target = 'local-comfyui' and runner_id = ? and status = 'running'`)
+      .bind(artifactId, now, now, jobId, ownerId, runnerId),
+    env.DB.prepare("update creative_runners set active_job_id = null, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
+      .bind(now, runnerId, ownerId),
+  ]);
+  const completed = await jobById(env, ownerId, jobId);
+  if (!completed || completed.status !== "completed") throw new Error("runner_job_not_completable");
+  await ensureTrainingExample(env, ownerId, completed, artifactId);
+  return completed;
 }
 
 export async function cancelOwnedJob(env: Env, ownerId: string, jobId: string) {

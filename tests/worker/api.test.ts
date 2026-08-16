@@ -77,6 +77,7 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_runners"),
     env.DB.prepare("delete from creative_dna_training_jobs"),
     env.DB.prepare("delete from creative_training_examples"),
     env.DB.prepare("delete from creative_workflow_revisions"),
@@ -101,6 +102,9 @@ describe("Creative Studio Worker API", () => {
     const response = await exports.default.fetch(`${BASE}/api/creative-studio/session`);
     expect(response.status).toBe(200);
     expect(await result(response)).toMatchObject({ ok: true, session: { status: "development", userId: "development-angelo" } });
+    const runnerShell = await exports.default.fetch("https://runner.cs.angelotoborg.com/");
+    expect(runnerShell.status).toBe(404);
+    expect(await result(runnerShell)).toMatchObject({ error: "runner_route_not_found" });
   });
 
   it("requires a protected AFDFW target outside development mode", () => {
@@ -707,6 +711,112 @@ describe("Creative Studio Worker API", () => {
     expect(ranged.status).toBe(206);
     expect(ranged.headers.get("content-range")).toBe("bytes 1-2/4");
     expect([...new Uint8Array(await ranged.arrayBuffer())]).toEqual([80, 78]);
+  });
+
+  it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Runner Study");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "H3 Motion Study",
+      directive: "A luminous figure moves through a quiet field of violet light.",
+      targetModality: "image",
+    });
+    const { bucket, values } = memoryBucket();
+    const local = workerEnv("development", undefined, bucket);
+    const inputBytes = new Uint8Array([137, 80, 78, 71]);
+    const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("h3-source.png"),
+        "x-cs-file-size": String(inputBytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: inputBytes,
+    }), local)) as { asset: { id: string } };
+    const graph = JSON.stringify({
+      "1": { class_type: "LoadImage", inputs: { image: "source.png" } },
+      "2": { class_type: "MiniMaxH3I2V", inputs: { prompt: "Original H3 motion prompt", image: ["1", 0], seed: 42 } },
+      "3": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("minimax-h3-api.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("MiniMax H3 I2V"),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string; contentHash: string; parameters: Array<{ id: string; kind: string }> } } };
+    const mediaParameter = imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "media");
+    expect(mediaParameter).toBeTruthy();
+
+    const enrollmentResponse = await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "3090 test runner" }),
+    }), local);
+    expect(enrollmentResponse.status).toBe(201);
+    const enrollment = await result(enrollmentResponse) as { runner: { id: string }; token: string };
+    const runnerHeaders = { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" };
+    const unauthorized = await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", { method: "POST" }), local);
+    expect(unauthorized.status).toBe(401);
+
+    const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        idempotencyKey: "runner_video_submit_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+        },
+      }),
+    }), local)) as { job: { id: string; status: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string> } } };
+    expect(created.job).toMatchObject({ status: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
+    expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
+
+    await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.0.0", comfyUrl: "http://127.0.0.1:8188", comfyVersion: "0.33.0", device: "RTX 3090" }),
+    }), local);
+    const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { id: string }; graph: Record<string, unknown>; inputs: Array<{ id: string }> } };
+    expect(claimed.bundle.job.id).toBe(created.job.id);
+    expect(claimed.bundle.inputs.map((asset) => asset.id)).toEqual([uploaded.asset.id]);
+    expect(claimed.bundle.graph).toMatchObject({ "1": { class_type: "LoadImage" } });
+    await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 18, upstreamId: "comfy-prompt-h3-001" }),
+    }), local);
+    await env.DB.prepare("update creative_jobs set runner_lease_until = ? where id = ?").bind("2020-01-01T00:00:00.000Z", created.job.id).run();
+    const resumed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { upstreamId: string } } };
+    expect(resumed.bundle.job.upstreamId).toBe("comfy-prompt-h3-001");
+
+    const runnerMedia = await routeCreativeStudioApi(request(`/api/creative-studio/runner/media/${uploaded.asset.id}`, {
+      headers: { authorization: `Bearer ${enrollment.token}` },
+    }), local);
+    expect([...new Uint8Array(await runnerMedia.arrayBuffer())]).toEqual([...inputBytes]);
+
+    const outputBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
+    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/complete`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "video/mp4", "x-cs-file-size": String(outputBytes.byteLength) },
+      body: outputBytes,
+    }), local);
+    expect(completed.status).toBe(200);
+    expect(await result(completed)).toMatchObject({ job: { status: "completed", modality: "video", provider: "local-comfyui" } });
+    expect(values.size).toBe(2);
+    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ kind: string; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
+    expect(history.artifacts[0]).toMatchObject({ kind: "video", retention: { state: "retained", size: outputBytes.byteLength } });
+    expect(history.trainingExamples[0]).toMatchObject({ kind: "video", status: "candidate" });
   });
 
   it("does not expose a generic proxy route", async () => {

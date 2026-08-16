@@ -34,9 +34,9 @@ export function QueueView() {
         {jobs.map((job) => {
           const issue = jobIssuePresentation(job.status, job.error, job.modality);
           return <article className="queue-card glass" key={job.id}>
-          <div className="queue-icon" style={{ "--job-accent": job.modality === "music" ? "var(--pink)" : "var(--cyan)" } as React.CSSProperties}><Icon name={job.modality} size={23} /></div>
+          <div className="queue-icon" style={{ "--job-accent": job.modality === "music" ? "var(--pink)" : job.modality === "video" ? "var(--violet)" : "var(--cyan)" } as React.CSSProperties}><Icon name={job.modality} size={23} /></div>
           <div className="queue-main">
-            <div className="queue-title"><StatusDot status={job.status} /><strong>{job.artifactId && job.status === "running" ? "Retaining completed result" : `${job.modality === "music" ? "Music" : "Image"} from CreativeDNA`}</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
+            <div className="queue-title"><StatusDot status={job.status} /><strong>{job.artifactId && job.status === "running" ? "Retaining completed result" : `${job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} from CreativeDNA`}</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
             <p>{job.prompt}</p>
             <div className="queue-meta"><span>{job.provider}</span><span>Updated {age(job.updatedAt)}</span><span>{job.id}</span></div>
             {job.retryOfJobId ? <div className="queue-lineage">Retry of {job.retryOfJobId}</div> : null}
@@ -53,7 +53,7 @@ export function QueueView() {
           </div>
           <strong className="queue-percent">{job.progress}%</strong>
         </article>})}
-        {!jobs.length && !trainingJobs.length ? <div className="empty-state glass"><Icon name="queue" size={34} /><h2>No jobs yet</h2><p>Train CreativeDNA from uploads or generate music and image from a saved version.</p></div> : null}
+        {!jobs.length && !trainingJobs.length ? <div className="empty-state glass"><Icon name="queue" size={34} /><h2>No jobs yet</h2><p>Train CreativeDNA from uploads or generate image, music, and video from a saved version.</p></div> : null}
       </div>
     </section>
   );

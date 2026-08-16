@@ -11,7 +11,7 @@ export function RuntimeView() {
         <button className="btn btn-ghost" onClick={() => void refresh()}><Icon name="rerun" size={16} /> Recheck</button>
       </div>
       <div className="capability-grid">
-        {snapshot?.capabilities.map((capability) => <article className="capability-card glass" key={capability.key}><div><span className={`capability-state ${capability.state}`}><i />{capability.state}</span><Icon name={capability.key === "creative-dna" ? "dna" : capability.key.includes("generation") ? capability.key.startsWith("music") ? "music" : "image" : capability.key === "artifact-review" ? "check" : capability.key === "artifact-retention" ? "archive" : "runtime"} size={23} /></div><h3>{capability.label}</h3><p>{capability.detail}</p><footer><span>{capability.provider}</span><time>{new Date(capability.checkedAt).toLocaleTimeString()}</time></footer></article>)}
+        {snapshot?.capabilities.map((capability) => <article className="capability-card glass" key={capability.key}><div><span className={`capability-state ${capability.state}`}><i />{capability.state}</span><Icon name={capability.key === "creative-dna" ? "dna" : capability.key.includes("generation") ? capability.key.startsWith("music") ? "music" : capability.key.startsWith("video") ? "video" : "image" : capability.key === "artifact-review" ? "check" : capability.key === "artifact-retention" ? "archive" : "runtime"} size={23} /></div><h3>{capability.label}</h3><p>{capability.detail}</p><footer><span>{capability.provider}</span><time>{new Date(capability.checkedAt).toLocaleTimeString()}</time></footer></article>)}
       </div>
     </section>
   );

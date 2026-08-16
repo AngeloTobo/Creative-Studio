@@ -52,6 +52,14 @@ export function ArtifactMediaReview({ artifact, onInspect }: { artifact: Artifac
       </section>
     );
   }
+  if (artifact.kind === "video") {
+    return (
+      <section className="artifact-video-review" aria-label={`Video review for ${artifact.name}`}>
+        <video controls playsInline preload="metadata" src={mediaUrl}>Your browser does not support video playback.</video>
+        <a className="btn btn-ghost artifact-download" href={mediaUrl} download={downloadName(artifact)}><Icon name="arrow" size={15} /> Download video</a>
+      </section>
+    );
+  }
   return <button type="button" className="btn btn-ghost artifact-inspect" onClick={onInspect}><Icon name="search" size={15} /> Inspect full-size image</button>;
 }
 
@@ -124,7 +132,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview }: { artifact: A
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
         <p>{artifact.prompt}</p>
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
-        <ArtifactMediaReview artifact={artifact} onInspect={() => onInspect(artifact)} />
+        <ArtifactMediaReview artifact={artifact} onInspect={() => artifact.kind === "image" && onInspect(artifact)} />
         <DecisionHistory decisions={decisions} />
         <button className="lineage-toggle" onClick={() => setExpanded((value) => !value)}><Icon name="history" size={15} /> {expanded ? "Hide lineage" : "Show lineage"}</button>
         {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span><span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}

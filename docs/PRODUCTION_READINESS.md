@@ -12,8 +12,10 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Recovery trigger: every five minutes
 - Service binding: `AFDFW` -> `art-feed-dfw`
 - Custom domain: `cs.angelotoborg.com`
+- Local Runner API domain: `runner.cs.angelotoborg.com` (runner routes only; no shell)
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-16: `5a723f6f-397f-408e-ad16-2358263fdf58`
+- Production Worker version verified on 2026-08-16: `ffa2919b-4b9b-4f98-b746-8c91448f2296`
+- Installed runner: `Angelo RTX 3090 workstation`, runner `1.0.0`, ComfyUI `0.33.0`, RTX 3090 heartbeat healthy
 
 ## Release sequence
 
@@ -30,8 +32,10 @@ This runs the complete local verification suite, validates the production contra
 3. `npx wrangler queues list` reports both Creative Studio queues and the production Worker remains the `creative-studio-jobs` consumer.
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
-6. An authenticated Runtime-page check reports CreativeDNA, media library, ComfyUI workflows, CreativeDNA training data, music generation, image generation, artifact review, artifact retention, and AFDFW session as available. CreativeDNA training is truthfully `degraded` until an authenticated local runner claims a job.
-7. Remote D1 has no pending migration after `0006_creative_dna_training_jobs.sql`; the training-job table exists and contains no seeded rows.
+6. `runner.cs.angelotoborg.com/` returns `404`; its unauthenticated claim route returns `401`; the main product root still redirects through Cloudflare Access.
+7. An authenticated Runtime-page check reports Local Runner and video generation available while its recent heartbeat is healthy. CreativeDNA training remains truthfully `degraded` until the separate profile-synthesis trainer is implemented.
+8. Remote D1 has no pending migration after `0007_local_runner_v1.sql`; runner registration exists and generated job/artifact tables contain no deployment fixtures.
+9. Windows Scheduled Task `Creative Studio Local Runner` is running, its config ACL permits only the current user and SYSTEM, and D1 reports no runner error.
 
 ## Rollback
 

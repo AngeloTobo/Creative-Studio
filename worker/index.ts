@@ -5,6 +5,13 @@ import type { Env, JobMessage } from "./types";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const runnerHost = url.hostname === "runner.cs.angelotoborg.com";
+    if (runnerHost && !url.pathname.startsWith("/api/creative-studio/runner/")) {
+      return new Response(JSON.stringify({ ok: false, error: "runner_route_not_found" }), {
+        status: 404,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
     if (url.pathname.startsWith("/api/creative-studio/")) {
       return routeCreativeStudioApi(request, env);
     }

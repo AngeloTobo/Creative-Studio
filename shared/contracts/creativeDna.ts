@@ -1,4 +1,4 @@
-import type { GenerationCapability, GenerationModality } from "./domain";
+import type { GenerationCapability } from "./domain";
 
 export const CREATIVE_DNA_SCHEMA_VERSION = "creative-dna/1.0" as const;
 
@@ -14,7 +14,7 @@ export const CREATIVE_DNA_DIMENSION_KEYS = [
 ] as const;
 
 export type CreativeDnaDimensionKey = (typeof CREATIVE_DNA_DIMENSION_KEYS)[number];
-export type CreativeDnaTarget = GenerationModality;
+export type CreativeDnaTarget = "music" | "image";
 export type CreativeDnaSourceKind = "original" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
 

@@ -29,6 +29,9 @@ import {
   type CreativeDnaTrainingJob,
   type CreateCreativeDnaTrainingJobRequest,
   type CreativeDnaTrainingJobResponse,
+  type LocalRunner,
+  type EnrollLocalRunnerResponse,
+  type RevokeLocalRunnerResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -84,7 +87,7 @@ async function uploadWorkflowRequest(file: File, projectId: string, name = "", d
 
 export function createHttpAdapter(): StudioAdapter {
   const load = async (): Promise<StudioSnapshot> => {
-    const [session, projects, dna, jobs, artifacts, media, workflows, trainingJobs, capabilities] = await Promise.all([
+    const [session, projects, dna, jobs, artifacts, media, workflows, trainingJobs, runners, capabilities] = await Promise.all([
       request<{ session: StudioSession }>(CREATIVE_STUDIO_ROUTES.session),
       request<{ projects: Project[] }>(CREATIVE_STUDIO_ROUTES.projects),
       request<{ artifacts: CreativeDnaArtifact[] }>(CREATIVE_STUDIO_ROUTES.dna),
@@ -93,6 +96,7 @@ export function createHttpAdapter(): StudioAdapter {
       request<{ assets: MediaAsset[] }>(CREATIVE_STUDIO_ROUTES.media),
       request<{ workflows: WorkflowDefinition[] }>(CREATIVE_STUDIO_ROUTES.workflows),
       request<{ trainingJobs: CreativeDnaTrainingJob[] }>(CREATIVE_STUDIO_ROUTES.trainingJobs),
+      request<{ runners: LocalRunner[] }>(CREATIVE_STUDIO_ROUTES.runners),
       request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
     ]);
     return {
@@ -106,6 +110,7 @@ export function createHttpAdapter(): StudioAdapter {
       workflows: workflows.workflows,
       trainingExamples: artifacts.trainingExamples,
       trainingJobs: trainingJobs.trainingJobs,
+      runners: runners.runners,
       acceptances: artifacts.acceptances,
       capabilities: capabilities.capabilities,
       refreshedAt: new Date().toISOString(),
@@ -205,6 +210,19 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify({}),
       });
       return result.trainingJob;
+    },
+    async enrollLocalRunner(name: string) {
+      return request<EnrollLocalRunnerResponse>(`${CREATIVE_STUDIO_ROUTES.runners}/enroll`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+    },
+    async revokeLocalRunner(runnerId: string) {
+      const result = await request<RevokeLocalRunnerResponse>(`${CREATIVE_STUDIO_ROUTES.runners}/${encodeURIComponent(runnerId)}/revoke`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.runner;
     },
   };
 }

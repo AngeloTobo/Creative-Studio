@@ -44,13 +44,15 @@ export function ArtifactThumb({ artifact, compact = false }: { artifact: Artifac
   const [from, to] = artifact.preview.colors;
   const hasImage = artifact.kind === "image" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
   const hasAudio = artifact.kind === "music" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
+  const hasVideo = artifact.kind === "video" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
   return (
     <div className={`thumb${compact ? " artifact-thumb-compact" : ""}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
       <div className="thumb-tex" />
       <span className="thumb-type"><Icon name={artifact.kind} size={15} /></span>
       {hasImage ? <img className="artifact-media" src={artifact.preview.url ?? undefined} alt={`${artifact.name} preview`} /> : null}
       {hasAudio ? <span className="artifact-audio-visual" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} />)}</span> : null}
-      {!hasImage && !hasAudio ? <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : "FRAME"}</span> : null}
+      {hasVideo ? <video className="artifact-media" src={artifact.preview.url ?? undefined} muted playsInline preload="metadata" aria-label={`${artifact.name} video preview`} /> : null}
+      {!hasImage && !hasAudio && !hasVideo ? <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : artifact.kind === "video" ? "MOTION" : "FRAME"}</span> : null}
     </div>
   );
 }

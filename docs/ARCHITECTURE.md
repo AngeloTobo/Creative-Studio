@@ -15,6 +15,9 @@ flowchart LR
   UI -->|"owned media upload"| BFF
   WORKER -->|"exact allowlist only"| AF["AFDFW capabilities"]
   AF --> GEN["Existing generation workers"]
+  BFF -->|"lease + immutable bundle"| LR["Windows Local Runner"]
+  LR -->|"localhost only"| COMFY["ComfyUI 127.0.0.1:8188"]
+  LR -->|"verified output"| BFF
   D1 --> HIST["DNA, jobs, artifacts, decisions"]
   R2 --> MEDIA["Uploads and every completed result"]
 ```
@@ -27,6 +30,7 @@ flowchart LR
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
+- Local Runner v1 owns browser-independent execution of API-format ComfyUI workflows. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
 
 ## CreativeDNA vertical slice
 
@@ -61,3 +65,6 @@ flowchart LR
 - Generation has a 30-minute deadline and bounded exponential reconciliation delay. A confirmed result awaiting retention continues retrying instead of being discarded at that generation deadline.
 - Retry creates a new job with `retryOfJobId` lineage; it never rewrites the failed or cancelled record.
 - Cancel stops Creative Studio tracking only before a completed result enters retention. Once a result exists, retention cannot be cancelled.
+- Local workflow jobs use a separate `local-comfyui` execution target, never enter the AFDFW queue consumer, and remain queued while the runner is offline.
+- A paired runner claims one job with a two-minute renewable lease. A restart or lost heartbeat makes the job reclaimable; deterministic artifact IDs and R2 keys prevent duplicate retained results.
+- Exact workflow revision, SHA-256 hash, parameters, model names, media-parameter-to-asset bindings, DNA lineage, and retry lineage remain stamped on the job and artifact.

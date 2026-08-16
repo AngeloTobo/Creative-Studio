@@ -17,8 +17,11 @@
     "check:env": "node scripts/validate-environment.mjs",
     "check:env:production": "node scripts/validate-environment.mjs --production",
     "check:secrets": "node scripts/check-secrets.mjs",
+    "runner:start": "node runner/index.mjs",
+    "runner:once": "node runner/index.mjs --once",
+    "runner:check": "node runner/index.mjs --self-test",
     "build": "npm run typecheck && vite build",
-    "check": "npm run lint && npm run test && npm run test:worker && npm run check:env && npm run build && npm run check:secrets",
+    "check": "npm run lint && npm run test && npm run test:worker && npm run runner:check && npm run check:env && npm run build && npm run check:secrets",
     "check:all": "npm run check && npm run test:e2e",
     "deploy:production": "npm run check:all && npm run check:env:production && npm run db:production && wrangler deploy --env production"
   },

@@ -11,6 +11,7 @@ import type {
   StudioSession,
   CreativeTrainingExample,
   CreativeDnaTrainingJob,
+  LocalRunner,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput } from "./creativeDna";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
@@ -26,6 +27,8 @@ export const CREATIVE_STUDIO_ROUTES = {
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
   trainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/training-jobs`,
+  runners: `${CREATIVE_STUDIO_API_PREFIX}/runners`,
+  runner: `${CREATIVE_STUDIO_API_PREFIX}/runner`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
 } as const;
 
@@ -35,7 +38,9 @@ export type CreativeStudioRoute =
   | "artifacts-list" | "artifact-review" | "artifact-media"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
-  | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-claim" | "training-job-bundle" | "training-job-complete" | "training-job-fail";
+  | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-claim" | "training-job-bundle" | "training-job-complete" | "training-job-fail"
+  | "runners-list" | "runner-enroll" | "runner-revoke"
+  | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-fail" | "runner-media-content";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
   if (method === "GET" && pathname === "/api/creative-studio/session") return "session";
@@ -67,6 +72,15 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "GET" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/bundle$/i.test(pathname)) return "training-job-bundle";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/complete$/i.test(pathname)) return "training-job-complete";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/fail$/i.test(pathname)) return "training-job-fail";
+  if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
+  if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
+  if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
+  if (method === "POST" && pathname === "/api/creative-studio/runner/heartbeat") return "runner-heartbeat";
+  if (method === "POST" && pathname === "/api/creative-studio/runner/jobs/claim") return "runner-job-claim";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-job-heartbeat";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-job-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-job-fail";
+  if (method === "GET" && /^\/api\/creative-studio\/runner\/media\/[a-z0-9_]+$/i.test(pathname)) return "runner-media-content";
   if (method === "GET" && pathname === "/api/creative-studio/capabilities") return "capabilities";
   return null;
 }
@@ -82,6 +96,7 @@ export type StudioSnapshot = {
   workflows: WorkflowDefinition[];
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
+  runners: LocalRunner[];
   capabilities: Capability[];
   acceptances: Acceptance[];
   refreshedAt: string;
@@ -104,6 +119,11 @@ export type SubmitJobRequest = {
   dnaArtifactId: string;
   modality: GenerationModality;
   idempotencyKey: string;
+  workflow?: {
+    workflowId: string;
+    revisionId: string;
+    inputBindings: Record<string, string>;
+  };
 };
 
 export type SubmitJobResponse = {
@@ -129,7 +149,7 @@ export type CreateCreativeDnaTrainingJobRequest = {
   projectId: string;
   baseDnaArtifactId?: string | null;
   name: string;
-  targetModality: GenerationModality;
+  targetModality: Exclude<GenerationModality, "video">;
   assetIds: string[];
   includeTrainingExamples: boolean;
   idempotencyKey: string;
@@ -146,6 +166,30 @@ export type CreativeDnaTrainingBundleResponse = {
 };
 export type ImportWorkflowResponse = { workflow: WorkflowDefinition };
 export type SaveWorkflowRevisionResponse = { workflow: WorkflowDefinition };
+export type EnrollLocalRunnerRequest = { name: string };
+export type EnrollLocalRunnerResponse = { runner: LocalRunner; token: string; apiBase: string };
+export type RevokeLocalRunnerResponse = { runner: LocalRunner };
+
+export type RunnerHeartbeatRequest = {
+  version: string;
+  comfyUrl: string;
+  comfyVersion?: string | null;
+  device?: string | null;
+  activeJobId?: string | null;
+  error?: string | null;
+};
+
+export type RunnerJobBundle = {
+  job: Job;
+  workflow: WorkflowDefinition;
+  graph: unknown;
+  inputs: MediaAsset[];
+};
+
+export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
+export type RunnerJobHeartbeatRequest = { progress: number; upstreamId?: string | null };
+export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
+export type RunnerFailJobRequest = { error: string };
 export type { SaveWorkflowRevisionRequest };
 
 export type ApiSuccess<T> = { ok: true } & T;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { GenerationModality } from "../../../shared/contracts";
+import type { CreativeDnaTarget } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 
@@ -17,7 +17,7 @@ export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
   const jobs = snapshot?.trainingJobs.filter((job) => job.projectId === activeProjectId) ?? [];
   const [selected, setSelected] = useState<string[]>([]);
   const [name, setName] = useState("");
-  const [targetModality, setTargetModality] = useState<GenerationModality>(activeDna?.targetModality ?? "image");
+  const [targetModality, setTargetModality] = useState<CreativeDnaTarget>(activeDna?.targetModality ?? "image");
   const [includeExamples, setIncludeExamples] = useState(true);
   const selectedAssetIds = selected.filter((assetId) => eligibleAssets.some((asset) => asset.id === assetId));
 
@@ -59,7 +59,7 @@ export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
 
       <div className="dna-training-config">
         <label className="field"><span>Result name</span><input className="input" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder={activeDna ? `${activeDna.name} trained` : "Upload-trained CreativeDNA"} /></label>
-        <div className="field"><span>Primary output</span><div className="seg">{(["image", "music"] as GenerationModality[]).map((target) => <button key={target} className={targetModality === target ? "on" : ""} onClick={() => setTargetModality(target)}><Icon name={target} size={15} /> {target}</button>)}</div></div>
+        <div className="field"><span>Primary output</span><div className="seg">{(["image", "music"] as CreativeDnaTarget[]).map((target) => <button key={target} className={targetModality === target ? "on" : ""} onClick={() => setTargetModality(target)}><Icon name={target} size={15} /> {target}</button>)}</div></div>
         <label className="training-consent training-evidence-toggle"><input type="checkbox" checked={includeExamples} disabled={busy || !trainingExamples.length} onChange={(event) => setIncludeExamples(event.target.checked)} /><span><strong>Include accepted generation evidence</strong><small>{trainingExamples.length} prompt + exact-settings {trainingExamples.length === 1 ? "example" : "examples"} ready</small></span></label>
         <div className="training-base"><span className="eyebrow">Lineage</span><strong>{activeDna ? `Evolve ${activeDna.name} v${activeDna.version}` : "Create a new DNA root"}</strong><small>The completed runner result becomes a new immutable CreativeDNA version.</small></div>
         <button className="btn btn-primary training-start" disabled={busy || !hasInputs || snapshot?.adapter.development} onClick={() => void start()}><Icon name="dna" size={17} /> Start training</button>

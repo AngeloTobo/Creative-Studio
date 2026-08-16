@@ -15,6 +15,8 @@ import type {
   WorkflowScalar,
   CreateCreativeDnaTrainingJobRequest,
   CreativeDnaTrainingJob,
+  EnrollLocalRunnerResponse,
+  LocalRunner,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -32,6 +34,7 @@ type StudioContextValue = {
   archiveProject: (projectId: string) => Promise<Project>;
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitJob: (modality: GenerationModality, dnaArtifactId?: string) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => Promise<void>;
   retryJob: (jobId: string) => Promise<void>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -41,6 +44,8 @@ type StudioContextValue = {
   saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
   startDnaTraining: (input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => Promise<CreativeDnaTrainingJob>;
   cancelDnaTraining: (jobId: string) => Promise<void>;
+  enrollLocalRunner: (name: string) => Promise<EnrollLocalRunnerResponse>;
+  revokeLocalRunner: (runnerId: string) => Promise<LocalRunner>;
   refresh: () => Promise<void>;
 };
 
@@ -139,6 +144,21 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.submitJob({ projectId: activeProjectId, dnaArtifactId: dnaId, modality, idempotencyKey: operationKey("submit") }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
 
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => {
+    if (!activeProjectId) throw new Error("project_required");
+    const dnaId = dnaArtifactId ?? activeDna?.artifactId;
+    if (!dnaId) throw new Error("creative_dna_required");
+    const modality: GenerationModality = workflow.modality === "audio" || workflow.modality === "music" ? "music" : workflow.modality === "video" ? "video" : "image";
+    if (workflow.modality === "3d") throw new Error("workflow_modality_not_supported");
+    await transact(() => adapter.submitJob({
+      projectId: activeProjectId,
+      dnaArtifactId: dnaId,
+      modality,
+      idempotencyKey: operationKey("workflow"),
+      workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings },
+    }));
+  }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
+
   const retryJob = useCallback(async (jobId: string) => {
     await transact(() => adapter.retryJob(jobId, operationKey("retry")));
   }, [adapter, transact]);
@@ -183,6 +203,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.cancelCreativeDnaTraining(jobId));
   }, [adapter, transact]);
 
+  const enrollLocalRunner = useCallback((name: string) => transact(() => adapter.enrollLocalRunner(name)), [adapter, transact]);
+  const revokeLocalRunner = useCallback((runnerId: string) => transact(() => adapter.revokeLocalRunner(runnerId)), [adapter, transact]);
+
   const createProject = useCallback(async (input: CreateProjectRequest) => {
     const project = await transact(() => adapter.createProject(input));
     setActiveProjectId(project.id);
@@ -222,6 +245,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     archiveProject,
     saveDna,
     submitJob,
+    submitWorkflowJob,
     retryJob,
     reuseJob,
     cancelJob,
@@ -231,8 +255,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     saveWorkflowRevision,
     startDnaTraining,
     cancelDnaTraining,
+    enrollLocalRunner,
+    revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

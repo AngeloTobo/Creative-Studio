@@ -51,6 +51,12 @@ describe("real artifact media review", () => {
     expect(imageMarkup).toContain("<img");
     expect(imageMarkup).toContain("Inspect full-size image");
     expect(imageMarkup).not.toContain("<audio");
+
+    const video = artifact("video");
+    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} /><ArtifactMediaReview artifact={video} onInspect={() => undefined} /></>);
+    expect(videoMarkup).toContain("<video");
+    expect(videoMarkup).toContain("Download video");
+    expect(videoMarkup).not.toContain("Inspect full-size image");
   });
 
   it("turns stored job error codes into actionable failure details without hiding the provider code", () => {
