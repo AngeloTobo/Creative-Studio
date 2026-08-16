@@ -38,8 +38,8 @@ Last verified: 2026-08-16 (America/Chicago)
 - Desktop and 390px mobile rendered inspection completed; module-semantic layout regressions found during inspection were corrected.
 - Playwright reports seven passing checks and three intentional mobile skips: desktop/mobile empty-first-run project creation, DNA versioning, generation, review, and reload persistence; a desktop project edit/archive lifecycle; a no-fake-media boundary check; reduced motion in both layouts; and desktop keyboard focus/navigation.
 - Production environment preflight passes with a real D1 ID, dedicated R2 and Queue bindings, queue consumer, five-minute recovery trigger, AFDFW service binding, custom domain, and disabled `workers.dev` route.
-- Cloudflare deployed media-intake Worker version `6a37b19e-e172-4cdd-b5ef-4847d6d093e0` at 100% to `cs.angelotoborg.com`.
-- Remote D1 reports no pending migrations after `0004_media_assets.sql`; all fourteen media metadata, consent, storage, and timestamp columns were queried directly after release.
+- Cloudflare deployed workflow-library Worker version `7e1282d3-3152-4b24-bfd5-f13a8c1b234b` at 100% to `cs.angelotoborg.com`.
+- Remote D1 reports no pending migrations after `0005_workflow_library.sql`; the workflow, immutable revision, and CreativeDNA training-example tables were queried directly after release and contain no seeded records.
 - Cloudflare reports `creative-studio-jobs` with one producer and one consumer, plus the separate `creative-studio-jobs-dlq`; deployment output confirms the five-minute schedule.
 - Anonymous requests to `/` and `/api/creative-studio/session` both receive Cloudflare Access redirects.
 - Authenticated live inspection opened the production UI and reported all six runtime capabilities available, including Creative Studio D1, R2 retention, and the AFDFW session/generation adapters.
