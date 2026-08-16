@@ -51,6 +51,28 @@ export type Job = {
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
   completedAt: IsoDateString | null;
+  settingsStamp: GenerationSettingsStamp;
+};
+
+export type GenerationSettingsStamp = {
+  schemaVersion: 1;
+  source: "creative-dna" | "comfyui-workflow";
+  createdAt: IsoDateString;
+  reusedFromJobId: string | null;
+  prompt: string;
+  provider: string;
+  modality: string;
+  workflow: null | {
+    workflowId: string;
+    revisionId: string;
+    version: number;
+    name: string;
+    format: "comfyui-api" | "comfyui-ui";
+    contentHash: string;
+  };
+  parameters: Record<string, string | number | boolean>;
+  models: string[];
+  inputAssetIds: string[];
 };
 
 export type ArtifactStatus = "retaining" | "ready" | "accepted" | "rejected" | "archived";
@@ -78,6 +100,20 @@ export type Artifact = {
     state: "development-only" | "pending" | "retained";
     size: number | null;
   };
+  settingsStamp: GenerationSettingsStamp;
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+};
+
+export type CreativeTrainingExample = {
+  id: string;
+  projectId: string;
+  dnaArtifactId: string;
+  artifactId: string;
+  kind: string;
+  status: "candidate" | "training-ready" | "excluded";
+  prompt: string;
+  settingsStamp: GenerationSettingsStamp;
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
 };
@@ -123,7 +159,9 @@ export type CapabilityKey =
   | "image-generation"
   | "artifact-review"
   | "artifact-retention"
-  | "afdfw-session";
+  | "afdfw-session"
+  | "workflow-library"
+  | "creative-dna-training-data";
 
 export type CapabilityState = "available" | "degraded" | "unavailable";
 

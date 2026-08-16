@@ -6,6 +6,7 @@ import {
   type CreateCreativeDnaRequest,
   type GenerationModality,
   type RetryJobRequest,
+  type SaveWorkflowRevisionRequest,
   type SubmitJobRequest,
   type UpdateProjectRequest,
 } from "../../shared/contracts";
@@ -32,6 +33,7 @@ import {
   listJobs,
   listLocalDna,
   listMediaAssets,
+  listTrainingExamples,
   listProjects,
   projectById,
   reconcileDevelopmentJobs,
@@ -40,6 +42,7 @@ import {
 } from "../repository";
 import { retainCompletedArtifact } from "../retention";
 import type { Env, OwnerSession } from "../types";
+import { createWorkflowRevision, importWorkflow, listWorkflows, workflowContent } from "../workflows";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -55,7 +58,9 @@ function statusFor(error: string) {
   if (error.endsWith("_not_found")) return 404;
   if (error.includes("not_configured") || error.startsWith("afdfw_")) return 503;
   if (error === "media_upload_too_large") return 413;
+  if (error === "workflow_upload_too_large") return 413;
   if (error === "unsupported_media_type") return 415;
+  if (error === "unsupported_workflow_type") return 415;
   if (error === "media_upload_verification_failed") return 502;
   if (error === "invalid_media_range") return 416;
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable") return 409;
@@ -80,6 +85,8 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
     return [
       { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned DNA is stored in the standalone Worker database.", checkedAt },
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Owner uploads are size-verified and retained under project scope." : "An R2 binding is required for real uploads.", checkedAt },
+      { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Uploaded graphs and custom settings are stored as immutable, content-hashed revisions.", checkedAt },
+      { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Generated results enter a candidate set; explicit acceptance promotes prompt and settings evidence to training-ready.", checkedAt },
       { key: "music-generation", label: "Music generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -96,6 +103,8 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
+    { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Workflow JSON, detected controls, models, revisions, and content hashes remain product-owned.", checkedAt },
+    { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
     { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -179,6 +188,38 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const job = created.job;
       return json({ ok: true, job }, { status: 202 });
     }
+    if (route === "job-reuse") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/jobs\/([a-z0-9_]+)\/reuse$/i);
+      const input = await body<RetryJobRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
+      const original = await jobById(env, session.userId, match[1]);
+      if (!original) throw new Error("job_not_found");
+      const dna = (await listLocalDna(env, session.userId)).find((item) => item.artifactId === original.dnaArtifactId);
+      if (!dna) throw new Error("creative_dna_not_found");
+      const project = await projectById(env, session.userId, original.projectId);
+      if (!project) throw new Error("project_not_found");
+      if (project.status === "archived") throw new Error("project_archived");
+      const createdAt = new Date().toISOString();
+      const created = await createQueuedJob(env, session.userId, {
+        projectId: original.projectId,
+        dna,
+        modality: original.modality,
+        idempotencyKey: idempotencyKey(input.idempotencyKey),
+        reconcileEmail: developmentMode(env) ? null : reconciliationEmail(request),
+        provider: developmentMode(env) ? "development-worker" : original.provider,
+        promptOverride: original.settingsStamp.prompt,
+        settingsStampOverride: {
+          ...original.settingsStamp,
+          createdAt,
+          reusedFromJobId: original.id,
+          provider: developmentMode(env) ? "development-worker" : original.provider,
+        },
+      });
+      if (!developmentMode(env)) {
+        try { await enqueueJob(env, created.job.id); } catch (error) { console.error("creative_studio_job_reuse_enqueue_failed", created.job.id, error); }
+      }
+      return json({ ok: true, job: created.job }, { status: 202 });
+    }
     if (route === "job-retry") {
       const match = url.pathname.match(/^\/api\/creative-studio\/jobs\/([a-z0-9_]+)\/retry$/i);
       const input = await body<RetryJobRequest>(request);
@@ -212,7 +253,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     }
     if (route === "artifacts-list") {
       await syncJobs(env, session.userId);
-      return json({ ok: true, artifacts: await listArtifacts(env, session.userId), acceptances: await listAcceptances(env, session.userId) });
+      const [artifacts, acceptances, trainingExamples] = await Promise.all([
+        listArtifacts(env, session.userId), listAcceptances(env, session.userId), listTrainingExamples(env, session.userId),
+      ]);
+      return json({ ok: true, artifacts, acceptances, trainingExamples });
     }
     if (route === "media-list") return json({ ok: true, assets: await listMediaAssets(env, session.userId) });
     if (route === "media-upload") return json({ ok: true, asset: await uploadMedia(env, request, session.userId) }, { status: 201 });
@@ -220,6 +264,19 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const match = url.pathname.match(/^\/api\/creative-studio\/media\/([a-z0-9_]+)\/content$/i);
       if (!match) return json({ ok: false, error: "invalid_media_route" }, { status: 400 });
       return await mediaContent(env, request, session.userId, match[1]);
+    }
+    if (route === "workflows-list") return json({ ok: true, workflows: await listWorkflows(env, session.userId) });
+    if (route === "workflow-import") return json({ ok: true, workflow: await importWorkflow(env, request, session.userId) }, { status: 201 });
+    if (route === "workflow-revision-create") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/workflows\/([a-z0-9_]+)\/revisions$/i);
+      const input = await body<SaveWorkflowRevisionRequest>(request);
+      if (!match || !input || !input.values || typeof input.values !== "object") return json({ ok: false, error: "invalid_workflow_revision_request" }, { status: 400 });
+      return json({ ok: true, workflow: await createWorkflowRevision(env, session.userId, match[1], input) }, { status: 201 });
+    }
+    if (route === "workflow-content") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/workflows\/([a-z0-9_]+)\/content$/i);
+      if (!match) return json({ ok: false, error: "invalid_workflow_route" }, { status: 400 });
+      return workflowContent(env, session.userId, match[1], url.searchParams.get("revision"));
     }
     if (route === "artifact-review") {
       const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/(accepted|rejected|archived)$/i);

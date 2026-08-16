@@ -6,7 +6,9 @@ import {
   type Artifact,
   type CreateCreativeDnaRequest,
   type CreativeDnaArtifact,
+  type CreativeTrainingExample,
   type CreateProjectRequest,
+  type GenerationSettingsStamp,
   type Job,
   type MediaAsset,
   type MediaKind,
@@ -212,6 +214,7 @@ type JobRow = {
   id: string; projectId: string; dnaArtifactId: string; capability: Job["capability"]; modality: Job["modality"];
   status: Job["status"]; progress: number; prompt: string; provider: string; upstreamId: string | null;
   artifactId: string | null; retryOfJobId: string | null; error: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
+  settingsStampJson: string;
 };
 
 export type BackgroundJob = JobRow & {
@@ -229,15 +232,33 @@ export type BackgroundJob = JobRow & {
 
 const PUBLIC_JOB_COLUMNS = `id, project_id as projectId, dna_artifact_id as dnaArtifactId, capability, modality,
   status, progress, prompt, provider, upstream_id as upstreamId, artifact_id as artifactId,
-  retry_of_job_id as retryOfJobId, error, created_at as createdAt, updated_at as updatedAt, completed_at as completedAt`;
+  retry_of_job_id as retryOfJobId, error, created_at as createdAt, updated_at as updatedAt, completed_at as completedAt,
+  settings_stamp_json as settingsStampJson`;
 
 const BACKGROUND_JOB_COLUMNS = `${PUBLIC_JOB_COLUMNS}, owner_id as ownerId, upstream_media_path as upstreamMediaPath,
   reconcile_email as reconcileEmail, idempotency_key as idempotencyKey, reconcile_attempts as reconcileAttempts,
   next_reconcile_at as nextReconcileAt, timeout_at as timeoutAt, reconcile_lease_until as reconcileLeaseUntil,
   last_reconcile_error as lastReconcileError, cancelled_at as cancelledAt`;
 
+function parseSettingsStamp(value: string, fallback: Omit<GenerationSettingsStamp, "schemaVersion">): GenerationSettingsStamp {
+  try {
+    const parsed = JSON.parse(value) as GenerationSettingsStamp;
+    if (parsed?.schemaVersion === 1) return parsed;
+  } catch {
+    // Older rows are represented by a truthful, minimal fallback.
+  }
+  return { schemaVersion: 1, ...fallback };
+}
+
 function mapJob(row: JobRow): Job {
-  return { ...row, progress: Number(row.progress || 0) };
+  const settingsStamp = parseSettingsStamp(row.settingsStampJson, {
+    source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
+    provider: row.provider, modality: row.modality, workflow: null, parameters: { prompt: row.prompt },
+    models: [], inputAssetIds: [],
+  });
+  const { settingsStampJson: _settingsStampJson, ...job } = row;
+  void _settingsStampJson;
+  return { ...job, progress: Number(row.progress || 0), settingsStamp };
 }
 
 export async function listJobs(env: Env, ownerId: string): Promise<Job[]> {
@@ -268,6 +289,8 @@ export async function createQueuedJob(
     provider: string;
     reconcileEmail: string | null;
     retryOfJobId?: string | null;
+    promptOverride?: string;
+    settingsStampOverride?: GenerationSettingsStamp;
   },
 ) {
   const existing = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -277,6 +300,20 @@ export async function createQueuedJob(
   const jobId = id("job");
   const now = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + 30 * 60_000).toISOString();
+  const prompt = input.promptOverride ?? input.dna.generationPrompts[input.modality];
+  const settingsStamp: GenerationSettingsStamp = input.settingsStampOverride ?? {
+    schemaVersion: 1,
+    source: "creative-dna",
+    createdAt: now,
+    reusedFromJobId: input.retryOfJobId ?? null,
+    prompt,
+    provider: input.provider,
+    modality: input.modality,
+    workflow: null,
+    parameters: { prompt },
+    models: [],
+    inputAssetIds: [],
+  };
   const job: Job = {
     id: jobId,
     projectId: input.projectId,
@@ -285,7 +322,7 @@ export async function createQueuedJob(
     modality: input.modality,
     status: "queued",
     progress: 1,
-    prompt: input.dna.generationPrompts[input.modality],
+    prompt,
     provider: input.provider,
     upstreamId: null,
     artifactId: null,
@@ -294,15 +331,17 @@ export async function createQueuedJob(
     createdAt: now,
     updatedAt: now,
     completedAt: null,
+    settingsStamp,
   };
   try {
     await env.DB.prepare(`insert into creative_jobs (
       id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
       upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, completed_at,
-      reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?)`)
+      reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at, settings_stamp_json
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?)`)
       .bind(job.id, ownerId, input.projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress,
-        job.prompt, job.provider, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt).run();
+        job.prompt, job.provider, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
+        JSON.stringify(job.settingsStamp)).run();
     return { job, created: true };
   } catch (error) {
     const winner = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -341,6 +380,7 @@ async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: s
   const existing = await env.DB.prepare("select id, retained_key as retainedKey from creative_artifacts where job_id = ? and owner_id = ?")
     .bind(job.id, ownerId).first<{ id: string; retainedKey: string | null }>();
   if (existing) {
+    await ensureTrainingExample(env, ownerId, job, existing.id);
     if (mediaPath && !existing.retainedKey) {
       await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95 where id = ? and owner_id = ? and status in ('queued', 'running')")
         .bind(existing.id, job.id, ownerId).run();
@@ -356,11 +396,12 @@ async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: s
   const colors = job.modality === "music" ? ["#9d174d", "#7c3aed"] : ["#0e7490", "#a21caf"];
   const previewUrl = mediaPath ? `/api/creative-studio/artifacts/${artifactId}/media` : null;
   const artifactStatus: Artifact["status"] = mediaPath ? "retaining" : "ready";
-  await env.DB.prepare(`insert or ignore into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`)
-    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, artifactStatus, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now).run();
+  await env.DB.prepare(`insert or ignore into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at, settings_stamp_json) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?, ?)`)
+    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, artifactStatus, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now, JSON.stringify(job.settingsStamp)).run();
   const winner = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
     .bind(job.id, ownerId).first<{ id: string }>();
   if (!winner) throw new Error("artifact_create_failed");
+  await ensureTrainingExample(env, ownerId, job, winner.id);
   if (mediaPath) {
     await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95, updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status in ('queued', 'running')")
       .bind(winner.id, now, job.id, ownerId).run();
@@ -369,6 +410,15 @@ async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: s
       .bind(winner.id, now, now, job.id, ownerId).run();
   }
   return winner.id;
+}
+
+async function ensureTrainingExample(env: Env, ownerId: string, job: Job, artifactId: string) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(`insert or ignore into creative_training_examples (
+    id, owner_id, project_id, dna_artifact_id, artifact_id, kind, status, prompt, settings_stamp_json, created_at, updated_at
+  ) values (?, ?, ?, ?, ?, ?, 'candidate', ?, ?, ?, ?)`)
+    .bind(id("trainingexample"), ownerId, job.projectId, job.dnaArtifactId, artifactId, job.modality,
+      job.prompt, JSON.stringify(job.settingsStamp), now, now).run();
 }
 
 export async function attachAfdfwGeneration(env: Env, jobId: string, generation: AfdfwGeneration) {
@@ -474,17 +524,21 @@ type ArtifactRow = {
   id: string; projectId: string; jobId: string; dnaArtifactId: string; kind: Artifact["kind"]; name: string;
   status: Artifact["status"]; provider: string; prompt: string; previewKind: Artifact["preview"]["kind"];
   previewUrl: string | null; previewFrom: string; previewTo: string; parentArtifactId: string | null;
-  retainedKey: string | null; retainedSize: number | null; createdAt: string; updatedAt: string;
+  retainedKey: string | null; retainedSize: number | null; createdAt: string; updatedAt: string; settingsStampJson: string;
 };
 
 export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
-  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, created_at as createdAt, updated_at as updatedAt from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
+  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, created_at as createdAt, updated_at as updatedAt, settings_stamp_json as settingsStampJson from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
   return (result.results ?? []).map((row) => ({
     id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
     name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
     preview: { kind: row.previewKind, url: row.previewUrl, colors: [row.previewFrom, row.previewTo] },
     lineage: { sourceArtifactIds: [row.dnaArtifactId], parentArtifactId: row.parentArtifactId },
     retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
+    settingsStamp: parseSettingsStamp(row.settingsStampJson, {
+      source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
+      provider: row.provider, modality: row.kind, workflow: null, parameters: { prompt: row.prompt }, models: [], inputAssetIds: [],
+    }),
     createdAt: row.createdAt, updatedAt: row.updatedAt,
   }));
 }
@@ -492,6 +546,26 @@ export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact
 export async function listAcceptances(env: Env, ownerId: string): Promise<Acceptance[]> {
   const result = await env.DB.prepare(`select id, artifact_id as artifactId, decision, note, actor, created_at as createdAt from creative_acceptances where owner_id = ? order by created_at desc limit 200`).bind(ownerId).all<Acceptance>();
   return (result.results ?? []) as Acceptance[];
+}
+
+type TrainingExampleRow = Omit<CreativeTrainingExample, "settingsStamp"> & { settingsStampJson: string };
+
+export async function listTrainingExamples(env: Env, ownerId: string): Promise<CreativeTrainingExample[]> {
+  const result = await env.DB.prepare(`select id, project_id as projectId, dna_artifact_id as dnaArtifactId,
+    artifact_id as artifactId, kind, status, prompt, settings_stamp_json as settingsStampJson,
+    created_at as createdAt, updated_at as updatedAt
+    from creative_training_examples where owner_id = ? order by created_at desc limit 500`)
+    .bind(ownerId).all<TrainingExampleRow>();
+  return (result.results ?? []).map((row) => {
+    const { settingsStampJson, ...example } = row;
+    return {
+      ...example,
+      settingsStamp: parseSettingsStamp(settingsStampJson, {
+        source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
+        provider: "unknown", modality: row.kind, workflow: null, parameters: { prompt: row.prompt }, models: [], inputAssetIds: [],
+      }),
+    };
+  });
 }
 
 export async function reviewArtifact(env: Env, ownerId: string, artifactId: string, decision: AcceptanceDecision, note: string) {
@@ -505,6 +579,11 @@ export async function reviewArtifact(env: Env, ownerId: string, artifactId: stri
   await env.DB.batch([
     env.DB.prepare("update creative_artifacts set status = ?, updated_at = ? where id = ? and owner_id = ?").bind(status, now, artifactId, ownerId),
     env.DB.prepare("insert into creative_acceptances (id, owner_id, artifact_id, decision, note, actor, created_at) values (?, ?, ?, ?, ?, ?, ?)").bind(acceptance.id, ownerId, artifactId, decision, acceptance.note, acceptance.actor, now),
+    env.DB.prepare(`update creative_training_examples set status = case
+      when ? = 'accepted' then 'training-ready'
+      when ? = 'rejected' then 'excluded'
+      else status end, updated_at = ? where artifact_id = ? and owner_id = ?`)
+      .bind(decision, decision, now, artifactId, ownerId),
   ]);
   const artifact = (await listArtifacts(env, ownerId)).find((item) => item.id === artifactId);
   if (!artifact) throw new Error("artifact_not_found");

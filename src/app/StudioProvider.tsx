@@ -10,6 +10,9 @@ import type {
   Project,
   StudioSnapshot,
   UpdateProjectRequest,
+  SaveWorkflowRevisionRequest,
+  WorkflowDefinition,
+  WorkflowScalar,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -28,9 +31,12 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitJob: (modality: GenerationModality, dnaArtifactId?: string) => Promise<void>;
   retryJob: (jobId: string) => Promise<void>;
+  reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note?: string) => Promise<void>;
   uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
+  uploadWorkflow: (file: File, name?: string, description?: string) => Promise<WorkflowDefinition>;
+  saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
   refresh: () => Promise<void>;
 };
 
@@ -132,6 +138,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.retryJob(jobId, operationKey("retry")));
   }, [adapter, transact]);
 
+  const reuseJob = useCallback(async (jobId: string) => {
+    await transact(() => adapter.reuseJob(jobId, operationKey("reuse")));
+  }, [adapter, transact]);
+
   const cancelJob = useCallback(async (jobId: string) => {
     await transact(() => adapter.cancelJob(jobId));
   }, [adapter, transact]);
@@ -144,6 +154,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     if (!activeProjectId) throw new Error("project_required");
     return transact(() => adapter.uploadMedia(activeProjectId, file, trainingEligible));
   }, [activeProjectId, adapter, transact]);
+
+  const uploadWorkflow = useCallback(async (file: File, name = "", description = "") => {
+    if (!activeProjectId) throw new Error("project_required");
+    return transact(() => adapter.uploadWorkflow(activeProjectId, file, name, description));
+  }, [activeProjectId, adapter, transact]);
+
+  const saveWorkflowRevision = useCallback(async (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => {
+    const input: SaveWorkflowRevisionRequest = { baseRevisionId, values };
+    return transact(() => adapter.saveWorkflowRevision(workflowId, input));
+  }, [adapter, transact]);
 
   const createProject = useCallback(async (input: CreateProjectRequest) => {
     const project = await transact(() => adapter.createProject(input));
@@ -185,11 +205,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     saveDna,
     submitJob,
     retryJob,
+    reuseJob,
     cancelJob,
     reviewArtifact,
     uploadMedia,
+    uploadWorkflow,
+    saveWorkflowRevision,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, cancelJob, reviewArtifact, uploadMedia, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

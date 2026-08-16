@@ -13,6 +13,7 @@ import { ProjectsView } from "../features/projects/ProjectsView";
 import { RuntimeView } from "../features/runtime/RuntimeView";
 import { MediaView } from "../features/media/MediaView";
 import { PlaceholderView } from "../features/placeholder/PlaceholderView";
+import { FlowsView } from "../features/workflows/FlowsView";
 
 const VIEWS = new Set<StudioView>(["portal", "dna", "generate", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
 
@@ -58,10 +59,11 @@ export function App() {
       case "generate": return <GenerationView onQueued={() => navigate("queue")} onMedia={() => navigate("media")} />;
       case "media": return <MediaView onGenerate={() => navigate("generate")} />;
       case "queue": return <QueueView />;
-      case "gallery": return <ArtifactsView />;
+      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} />;
       case "library": return <LibraryView />;
       case "projects": return <ProjectsView />;
       case "runtime": return <RuntimeView />;
+      case "flows": return <FlowsView />;
       default: return <PlaceholderView view={view} goBack={() => navigate("portal")} />;
     }
   })();

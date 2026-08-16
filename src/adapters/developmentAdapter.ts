@@ -8,6 +8,8 @@ import {
   type CreateCreativeDnaRequest,
   type CreateProjectRequest,
   type CreativeDnaArtifact,
+  type CreativeTrainingExample,
+  type GenerationSettingsStamp,
   type Job,
   type MediaAsset,
   type Project,
@@ -15,6 +17,7 @@ import {
   type StudioSnapshot,
   type SubmitJobRequest,
   type UpdateProjectRequest,
+  type WorkflowDefinition,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -29,6 +32,8 @@ type DevelopmentState = {
   artifacts: Artifact[];
   mediaAssets: MediaAsset[];
   acceptances: Acceptance[];
+  workflows: WorkflowDefinition[];
+  trainingExamples: CreativeTrainingExample[];
   idempotencyKeys: Record<string, string>;
 };
 
@@ -43,7 +48,7 @@ function defaultId(prefix: string) {
 }
 
 function emptyState(): DevelopmentState {
-  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], acceptances: [], idempotencyKeys: {} };
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], acceptances: [], idempotencyKeys: {} };
 }
 
 function cleanText(value: unknown, limit: number) {
@@ -77,6 +82,8 @@ function capabilitySnapshot(now: string): Capability[] {
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "deterministic compiler", detail: "Versioned locally in the development adapter.", checkedAt: now },
     { key: "media-library", label: "Media library", state: "unavailable", provider: "not connected", detail: "Real uploads require the Creative Studio Worker and R2; this adapter never simulates retained media.", checkedAt: now },
+    { key: "workflow-library", label: "ComfyUI workflows", state: "unavailable", provider: "not connected", detail: "Workflow upload and immutable server revisions require the Creative Studio Worker.", checkedAt: now },
+    { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "degraded", provider: "development adapter", detail: "Candidate metadata is browser-only; no real media is presented as training-ready output.", checkedAt: now },
     { key: "music-generation", label: "Music generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; no real audio is rendered in this mode.", checkedAt: now },
     { key: "image-generation", label: "Image generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; gradients stand in for generated media.", checkedAt: now },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "development adapter", detail: "Accept, reject, and archive decisions persist in this browser.", checkedAt: now },
@@ -99,6 +106,8 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     jobs: [...state.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     artifacts: [...state.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     capabilities: capabilitySnapshot(now),
     acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     refreshedAt: now,
@@ -114,7 +123,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     const raw = storage.getItem(STORAGE_KEY);
     if (raw) {
       try {
-        return JSON.parse(raw) as DevelopmentState;
+        return { ...emptyState(), ...(JSON.parse(raw) as Partial<DevelopmentState>) };
       } catch {
         // A corrupt development snapshot is replaced with an empty state.
       }
@@ -164,11 +173,17 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
             preview: { kind: "development-gradient", url: null, colors },
             lineage: { sourceArtifactIds: [job.dnaArtifactId], parentArtifactId: null },
             retention: { state: "development-only", size: null },
+            settingsStamp: job.settingsStamp,
             createdAt: current.toISOString(),
             updatedAt: current.toISOString(),
           };
           job.artifactId = artifactId;
           state.artifacts.unshift(artifact);
+          state.trainingExamples.unshift({
+            id: makeId("trainingexample"), projectId: job.projectId, dnaArtifactId: job.dnaArtifactId,
+            artifactId, kind: job.modality, status: "candidate", prompt: job.prompt,
+            settingsStamp: job.settingsStamp, createdAt: current.toISOString(), updatedAt: current.toISOString(),
+          });
         }
         changed = true;
       }
@@ -188,6 +203,12 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     if (!project) throw new Error("project_not_found");
     if (project.status === "archived") throw new Error("project_archived");
     const createdAt = now().toISOString();
+    const prompt = dna.generationPrompts[input.modality];
+    const settingsStamp: GenerationSettingsStamp = {
+      schemaVersion: 1, source: "creative-dna", createdAt, reusedFromJobId: retryOfJobId,
+      prompt, provider: "development-renderer", modality: input.modality, workflow: null,
+      parameters: { prompt }, models: [], inputAssetIds: [],
+    };
     const job: Job = {
       id: makeId("job"),
       projectId: input.projectId,
@@ -196,7 +217,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       modality: input.modality,
       status: "queued",
       progress: 4,
-      prompt: dna.generationPrompts[input.modality],
+      prompt,
       provider: "development-renderer",
       upstreamId: null,
       artifactId: null,
@@ -205,6 +226,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       createdAt,
       updatedAt: createdAt,
       completedAt: null,
+      settingsStamp,
     };
     state.jobs.unshift(job);
     state.idempotencyKeys[input.idempotencyKey] = job.id;
@@ -308,6 +330,21 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         idempotencyKey,
       }, original.id);
     },
+    async reuseJob(jobId: string, idempotencyKey: string) {
+      const state = read();
+      const original = state.jobs.find((item) => item.id === jobId);
+      if (!original) throw new Error("job_not_found");
+      const reused = addJob(state, {
+        projectId: original.projectId,
+        dnaArtifactId: original.dnaArtifactId,
+        modality: original.modality,
+        idempotencyKey,
+      }, null);
+      reused.prompt = original.settingsStamp.prompt;
+      reused.settingsStamp = { ...original.settingsStamp, createdAt: now().toISOString(), reusedFromJobId: original.id, provider: reused.provider };
+      write(state);
+      return reused;
+    },
     async cancelJob(jobId: string) {
       const state = read();
       const job = state.jobs.find((item) => item.id === jobId);
@@ -339,11 +376,22 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         createdAt,
       };
       state.acceptances.unshift(acceptance);
+      const example = state.trainingExamples.find((item) => item.artifactId === artifactId);
+      if (example && decision !== "archived") {
+        example.status = decision === "accepted" ? "training-ready" : "excluded";
+        example.updatedAt = createdAt;
+      }
       write(state);
       return { artifact, acceptance };
     },
     async uploadMedia() {
       throw new Error("media_upload_requires_creative_studio_worker");
+    },
+    async uploadWorkflow() {
+      throw new Error("workflow_upload_requires_creative_studio_worker");
+    },
+    async saveWorkflowRevision() {
+      throw new Error("workflow_revision_requires_creative_studio_worker");
     },
   };
 }

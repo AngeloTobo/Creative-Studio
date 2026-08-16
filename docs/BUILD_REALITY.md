@@ -11,12 +11,16 @@ Last verified: 2026-08-16 (America/Chicago)
 - Placeholder-free first-run onboarding with explicit project create, edit, pause, and archive actions; neither the Worker nor development adapter seeds records.
 - Project-scoped CreativeDNA, queues, libraries, artifacts, portal summaries, and review-dock state.
 - Project-scoped image, audio, and video upload with a 100 MB limit, exact MIME allowlist, direct Creative Studio R2 retention, stored-size verification, D1 metadata, owner-scoped playback with byte ranges, and no AFDFW upload path.
+- Project-scoped ComfyUI workflow JSON import with a 1 MB limit, UI-graph/API-prompt detection, safe editable-control discovery, model inventory, SHA-256 content stamps, exact JSON export, and immutable revisions. No workflow is seeded or bundled as placeholder data.
+- The Workflow surface supports uploading an existing JSON and building a customized version from detected prompts, seeds, dimensions, durations, samplers, switches, and media filenames.
 - Each uploaded asset records explicit future-training eligibility and owner provenance. Upload does not start training, and current image/music generation remains truthfully CreativeDNA text-conditioned.
 - Deterministic CreativeDNA compilation, bounds, prompt translation, rights-safe provenance, root/parent/version lineage, and both music/image submission.
 - Queue-owned production submission and per-generation reconciliation continue after the originating browser request ends; a scheduled recovery sweep re-enqueues due work.
 - D1-backed idempotency, reconciliation leases, a 30-minute timeout, bounded retries, retry lineage, unique artifact creation, and explicit cancel controls.
 - Every real upstream completion enters a non-cancellable `retaining` state, streams to a deterministic Creative Studio R2 key, verifies stored size, and becomes completed/ready only after that verification. Interrupted retention retries without resubmitting generation.
 - Artifact history, lineage expansion, and explicit accept/reject/archive controls.
+- Every new generation job and artifact carries an immutable settings stamp. Reuse creates a new job from the recorded prompt, provider, and settings and records its source job instead of mutating history.
+- Every completed result creates a CreativeDNA training candidate containing the output artifact, prompt, and settings stamp. Accept promotes it to `training-ready`; reject marks it `excluded`; archive does not silently change its training judgment.
 - Exact AFDFW method/path allowlist with no generic proxy.
 - Same-account AFDFW service binding for identity handoff and generation; CreativeDNA remains product-owned in Creative Studio D1.
 - Accept, reject, and archive are decision-only operations for real results because retention is completed first; an interactive review request also repairs an older pending-retention artifact before recording a decision.
@@ -26,8 +30,8 @@ Last verified: 2026-08-16 (America/Chicago)
 ## Verified in this build
 
 - TypeScript, ESLint, Vitest, Vite production build, environment validation, and source secret scan pass.
-- Nine browser-domain unit tests cover CreativeDNA rights/lineage/project scope, empty development persistence, the no-fake-upload boundary, project lifecycle, idempotent generation, cancel/retry behavior, route rejection, and adapter configuration.
-- Fifteen Workers-runtime tests cover the Worker entrypoint, AFDFW target validation, unauthenticated access, Access-header relay, empty/project lifecycle behavior, malformed input, project ownership, owner-isolated review, verified owner-scoped media upload/list/playback/ranges, upload rejection, browser-independent background generation, idempotency, cancellation/retry, verified automatic R2 retention, retention interruption/resume without regeneration, pending-retention repair, append-only decisions, and generic-proxy rejection.
+- Eleven browser-domain unit tests cover CreativeDNA rights/lineage/project scope, empty development persistence, the no-fake-upload boundary, project lifecycle, idempotent generation, cancel/retry behavior, route rejection, adapter configuration, and ComfyUI API/UI graph inspection and safe editing.
+- Seventeen Workers-runtime tests cover the Worker entrypoint, AFDFW target validation, unauthenticated access, Access-header relay, empty/project lifecycle behavior, malformed input, project ownership, owner-isolated review, verified owner-scoped media upload/list/playback/ranges, workflow import/inspection/version/export, immutable settings reuse, CreativeDNA training-evidence state, browser-independent background generation, idempotency, cancellation/retry, verified automatic R2 retention, retention interruption/resume without regeneration, pending-retention repair, append-only decisions, and generic-proxy rejection.
 - Local D1 migration applies successfully.
 - A Worker API flow created DNA, completed a durable job, created an artifact, stored acceptance, rejected a generic proxy path, and preserved state across a Worker restart.
 - A real Chromium pass against the HTTP/BFF mode completed DNA save, image job, artifact lineage, acceptance, and reload persistence with no current console errors.
@@ -50,6 +54,7 @@ Last verified: 2026-08-16 (America/Chicago)
 - Cloudflare Access application `Creative Studio` protects `cs.angelotoborg.com/*` with policy `Angelo only` and a 24-hour session.
 - The top-level Wrangler configuration stays in development mode for isolated local tests; real bindings exist only under `env.production`.
 - The browser development adapter creates only clearly labeled local metadata and a non-media visual treatment for development job artifacts; it cannot upload or claim retained media.
+- This release includes the workflow library and migration `0005_workflow_library.sql`. Arbitrary workflow execution is intentionally not claimed yet: API-format graphs are ready for a future authenticated local runner, while UI-format graphs must first be exported from ComfyUI in API format.
 - Removal timing for any old AFDFW prototype remains a later owner decision.
 
 See `PRODUCTION_READINESS.md` for the verified release and rollback runbook.

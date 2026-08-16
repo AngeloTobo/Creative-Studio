@@ -21,6 +21,11 @@ import {
   type UpdateProjectRequest,
   type UpdateProjectResponse,
   type UploadMediaResponse,
+  type CreativeTrainingExample,
+  type ImportWorkflowResponse,
+  type SaveWorkflowRevisionRequest,
+  type SaveWorkflowRevisionResponse,
+  type WorkflowDefinition,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -55,15 +60,35 @@ async function uploadRequest(file: File, projectId: string, trainingEligible: bo
   return payload.asset;
 }
 
+async function uploadWorkflowRequest(file: File, projectId: string, name = "", description = "") {
+  const response = await fetch(CREATIVE_STUDIO_ROUTES.workflows, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      "x-cs-project-id": projectId,
+      "x-cs-file-name": encodeURIComponent(file.name),
+      "x-cs-file-size": String(file.size),
+      "x-cs-workflow-name": encodeURIComponent(name),
+      "x-cs-workflow-description": encodeURIComponent(description),
+    },
+    body: file,
+  });
+  const payload = await response.json() as ApiResult<ImportWorkflowResponse>;
+  if (!response.ok || !payload.ok) throw new Error(payload.ok ? `http_${response.status}` : payload.error);
+  return payload.workflow;
+}
+
 export function createHttpAdapter(): StudioAdapter {
   const load = async (): Promise<StudioSnapshot> => {
-    const [session, projects, dna, jobs, artifacts, media, capabilities] = await Promise.all([
+    const [session, projects, dna, jobs, artifacts, media, workflows, capabilities] = await Promise.all([
       request<{ session: StudioSession }>(CREATIVE_STUDIO_ROUTES.session),
       request<{ projects: Project[] }>(CREATIVE_STUDIO_ROUTES.projects),
       request<{ artifacts: CreativeDnaArtifact[] }>(CREATIVE_STUDIO_ROUTES.dna),
       request<{ jobs: Job[] }>(CREATIVE_STUDIO_ROUTES.jobs),
-      request<{ artifacts: Artifact[]; acceptances: StudioSnapshot["acceptances"] }>(CREATIVE_STUDIO_ROUTES.artifacts),
+      request<{ artifacts: Artifact[]; acceptances: StudioSnapshot["acceptances"]; trainingExamples: CreativeTrainingExample[] }>(CREATIVE_STUDIO_ROUTES.artifacts),
       request<{ assets: MediaAsset[] }>(CREATIVE_STUDIO_ROUTES.media),
+      request<{ workflows: WorkflowDefinition[] }>(CREATIVE_STUDIO_ROUTES.workflows),
       request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
     ]);
     return {
@@ -74,6 +99,8 @@ export function createHttpAdapter(): StudioAdapter {
       jobs: jobs.jobs,
       artifacts: artifacts.artifacts,
       mediaAssets: media.assets,
+      workflows: workflows.workflows,
+      trainingExamples: artifacts.trainingExamples,
       acceptances: artifacts.acceptances,
       capabilities: capabilities.capabilities,
       refreshedAt: new Date().toISOString(),
@@ -126,6 +153,13 @@ export function createHttpAdapter(): StudioAdapter {
       });
       return result.job;
     },
+    async reuseJob(jobId: string, idempotencyKey: string) {
+      const result = await request<RetryJobResponse>(`${CREATIVE_STUDIO_ROUTES.jobs}/${encodeURIComponent(jobId)}/reuse`, {
+        method: "POST",
+        body: JSON.stringify({ idempotencyKey }),
+      });
+      return result.job;
+    },
     async cancelJob(jobId: string) {
       const result = await request<SubmitJobResponse>(`${CREATIVE_STUDIO_ROUTES.jobs}/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST",
@@ -141,6 +175,16 @@ export function createHttpAdapter(): StudioAdapter {
     },
     async uploadMedia(projectId: string, file: File, trainingEligible: boolean) {
       return uploadRequest(file, projectId, trainingEligible);
+    },
+    async uploadWorkflow(projectId: string, file: File, name = "", description = "") {
+      return uploadWorkflowRequest(file, projectId, name, description);
+    },
+    async saveWorkflowRevision(workflowId: string, input: SaveWorkflowRevisionRequest) {
+      const result = await request<SaveWorkflowRevisionResponse>(`${CREATIVE_STUDIO_ROUTES.workflows}/${encodeURIComponent(workflowId)}/revisions`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.workflow;
     },
   };
 }

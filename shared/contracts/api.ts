@@ -9,8 +9,10 @@ import type {
   MediaAsset,
   Project,
   StudioSession,
+  CreativeTrainingExample,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput } from "./creativeDna";
+import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
 
 export const CREATIVE_STUDIO_API_PREFIX = "/api/creative-studio" as const;
 
@@ -21,6 +23,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   jobs: `${CREATIVE_STUDIO_API_PREFIX}/jobs`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
+  workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
 } as const;
 
@@ -28,7 +31,8 @@ export type CreativeStudioRoute =
   | "session" | "projects" | "project-create" | "project-update" | "project-archive"
   | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
   | "artifacts-list" | "artifact-review" | "artifact-media"
-  | "media-list" | "media-upload" | "media-content" | "capabilities";
+  | "media-list" | "media-upload" | "media-content" | "capabilities"
+  | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
   if (method === "GET" && pathname === "/api/creative-studio/session") return "session";
@@ -42,12 +46,17 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/jobs") return "jobs-create";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/retry$/i.test(pathname)) return "job-retry";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "job-cancel";
+  if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/reuse$/i.test(pathname)) return "job-reuse";
   if (method === "GET" && pathname === "/api/creative-studio/artifacts") return "artifacts-list";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/media$/i.test(pathname)) return "artifact-media";
   if (method === "POST" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/(accepted|rejected|archived)$/i.test(pathname)) return "artifact-review";
   if (method === "GET" && pathname === "/api/creative-studio/media") return "media-list";
   if (method === "POST" && pathname === "/api/creative-studio/media") return "media-upload";
   if (method === "GET" && /^\/api\/creative-studio\/media\/[a-z0-9_]+\/content$/i.test(pathname)) return "media-content";
+  if (method === "GET" && pathname === "/api/creative-studio/workflows") return "workflows-list";
+  if (method === "POST" && pathname === "/api/creative-studio/workflows") return "workflow-import";
+  if (method === "POST" && /^\/api\/creative-studio\/workflows\/[a-z0-9_]+\/revisions$/i.test(pathname)) return "workflow-revision-create";
+  if (method === "GET" && /^\/api\/creative-studio\/workflows\/[a-z0-9_]+\/content$/i.test(pathname)) return "workflow-content";
   if (method === "GET" && pathname === "/api/creative-studio/capabilities") return "capabilities";
   return null;
 }
@@ -60,6 +69,8 @@ export type StudioSnapshot = {
   jobs: Job[];
   artifacts: Artifact[];
   mediaAssets: MediaAsset[];
+  workflows: WorkflowDefinition[];
+  trainingExamples: CreativeTrainingExample[];
   capabilities: Capability[];
   acceptances: Acceptance[];
   refreshedAt: string;
@@ -103,6 +114,9 @@ export type ReviewArtifactResponse = {
 };
 
 export type UploadMediaResponse = { asset: MediaAsset };
+export type ImportWorkflowResponse = { workflow: WorkflowDefinition };
+export type SaveWorkflowRevisionResponse = { workflow: WorkflowDefinition };
+export type { SaveWorkflowRevisionRequest };
 
 export type ApiSuccess<T> = { ok: true } & T;
 export type ApiFailure = { ok: false; error: string; message?: string };

@@ -77,6 +77,9 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_training_examples"),
+    env.DB.prepare("delete from creative_workflow_revisions"),
+    env.DB.prepare("delete from creative_workflows"),
     env.DB.prepare("delete from creative_media_assets"),
     env.DB.prepare("delete from creative_acceptances"),
     env.DB.prepare("delete from creative_artifacts"),
@@ -262,6 +265,59 @@ describe("Creative Studio Worker API", () => {
     expect(await result(wrongOwner)).toMatchObject({ error: "media_not_found" });
   });
 
+  it("imports API workflow JSON, detects safe controls, versions edits, and exports exact revisions", async () => {
+    const ownerId = "owner-workflow";
+    const project = await testProject(ownerId, "Workflow Study");
+    const local = workerEnv("afdfw", afdfwFor(ownerId));
+    const graph = {
+      "1": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" }, _meta: { title: "Load model" } },
+      "2": { class_type: "PrimitiveStringMultiline", inputs: { value: "A glass object in quiet light" }, _meta: { title: "Prompt" } },
+      "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] }, _meta: { title: "Sampler" } },
+      "4": { class_type: "SaveImage", inputs: { filename_prefix: "result", images: ["3", 0] }, _meta: { title: "Save image" } },
+    };
+    const raw = JSON.stringify(graph, null, 2);
+    const imported = await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "cf-access-authenticated-user-email": "workflow@example.com",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("z-image-base.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(raw).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("Z Image Base"),
+        "x-cs-workflow-description": encodeURIComponent("Owner-supplied working graph"),
+      },
+      body: raw,
+    }), local);
+    expect(imported.status).toBe(201);
+    const importedPayload = await result(imported) as { workflow: { id: string; currentRevision: { id: string; version: number; format: string; contentHash: string; parameters: Array<{ id: string; value: unknown }>; models: string[] } } };
+    expect(importedPayload.workflow.currentRevision).toMatchObject({ version: 1, format: "comfyui-api" });
+    expect(importedPayload.workflow.currentRevision.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(importedPayload.workflow.currentRevision.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "2::value", value: "A glass object in quiet light" }),
+      expect.objectContaining({ id: "3::seed", value: 42 }),
+      expect.objectContaining({ id: "3::steps", value: 8 }),
+    ]));
+    expect(importedPayload.workflow.currentRevision.models).toContain("z_image_turbo_bf16.safetensors");
+
+    const revised = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify({ baseRevisionId: importedPayload.workflow.currentRevision.id, values: { "2::value": "A chrome object in warm light", "3::seed": 99 } }),
+    }), local);
+    expect(revised.status).toBe(201);
+    const revisedPayload = await result(revised) as { workflow: { currentRevision: { id: string; version: number; parentRevisionId: string; contentHash: string } } };
+    expect(revisedPayload.workflow.currentRevision).toMatchObject({ version: 2, parentRevisionId: importedPayload.workflow.currentRevision.id });
+    expect(revisedPayload.workflow.currentRevision.contentHash).not.toBe(importedPayload.workflow.currentRevision.contentHash);
+
+    const exported = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/content?revision=${revisedPayload.workflow.currentRevision.id}`, {
+      headers: { "cf-access-authenticated-user-email": "workflow@example.com" },
+    }), local);
+    expect(exported.status).toBe(200);
+    expect(exported.headers.get("x-creative-studio-workflow-hash")).toBe(revisedPayload.workflow.currentRevision.contentHash);
+    expect(await exported.json()).toMatchObject({ "2": { inputs: { value: "A chrome object in warm light" } }, "3": { inputs: { seed: 99 } } });
+  });
+
   it("rejects unsupported media before writing R2", async () => {
     const ownerId = "owner-unsupported-media";
     const project = await testProject(ownerId, "Unsupported Media");
@@ -323,9 +379,35 @@ describe("Creative Studio Worker API", () => {
     expect(reject.status).toBe(200);
 
     const history = await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local);
-    const historyPayload = await result(history) as { artifacts: Array<{ status: string }>; acceptances: Array<{ decision: string }> };
+    const historyPayload = await result(history) as { artifacts: Array<{ status: string; settingsStamp: { prompt: string; source: string } }>; acceptances: Array<{ decision: string }>; trainingExamples: Array<{ status: string; prompt: string; settingsStamp: { source: string } }> };
     expect(historyPayload.artifacts[0]?.status).toBe("rejected");
+    expect(historyPayload.artifacts[0]?.settingsStamp).toMatchObject({ source: "creative-dna", prompt: dnaPayload.artifact.generationPrompts.image });
     expect(historyPayload.acceptances.map((item) => item.decision)).toEqual(expect.arrayContaining(["accepted", "rejected"]));
+    expect(historyPayload.trainingExamples[0]).toMatchObject({ status: "excluded", prompt: dnaPayload.artifact.generationPrompts.image, settingsStamp: { source: "creative-dna" } });
+  });
+
+  it("reuses an immutable settings stamp and records the source job", async () => {
+    const local = workerEnv("development");
+    const project = await testProject("development-angelo", "Settings Stamp");
+    const dna = await createLocalDna(env, "development-angelo", {
+      projectId: project.id,
+      name: "Stamped Study",
+      directive: "A precise iridescent object against deep shadow.",
+      targetModality: "image",
+    });
+    const original = await createDevelopmentJob(env, "development-angelo", project.id, dna, "image", "stamp_original_0001");
+    const reusedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${original.id}/reuse`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "stamp_reuse_000001" }),
+    }), local);
+    expect(reusedResponse.status).toBe(202);
+    expect(await result(reusedResponse)).toMatchObject({
+      job: {
+        prompt: original.prompt,
+        settingsStamp: { source: "creative-dna", prompt: original.prompt, reusedFromJobId: original.id },
+      },
+    });
   });
 
   it("submits and reconciles production generation after the browser request has ended", async () => {

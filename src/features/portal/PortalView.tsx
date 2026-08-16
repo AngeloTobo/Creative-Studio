@@ -9,7 +9,7 @@ const NODES: Array<{ id: StudioView; label: string; sub: string; icon: IconName;
   { id: "library", label: "Library", sub: "DNA, rules, and memory", icon: "library", accent: "var(--blue)", angle: 136 },
   { id: "projects", label: "Projects", sub: "Your worlds and systems", icon: "projects", accent: "var(--teal)", angle: 92 },
   { id: "gallery", label: "Gallery", sub: "Review retained artifacts", icon: "gallery", accent: "var(--amber)", angle: 50 },
-  { id: "flows", label: "Flows", sub: "Reveal the execution graph", icon: "flows", accent: "var(--rose)", angle: 8 },
+  { id: "flows", label: "Workflows", sub: "Import or build a ComfyUI graph", icon: "flows", accent: "var(--rose)", angle: 8 },
   { id: "queue", label: "Queue", sub: "Durable generation state", icon: "queue", accent: "var(--violet)", angle: 312 },
 ];
 

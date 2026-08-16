@@ -10,6 +10,8 @@ import type {
   Project,
   CreateProjectRequest,
   UpdateProjectRequest,
+  SaveWorkflowRevisionRequest,
+  WorkflowDefinition,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -22,7 +24,10 @@ export interface StudioAdapter {
   saveCreativeDna(input: CreateCreativeDnaRequest): Promise<CreativeDnaArtifact>;
   submitJob(input: SubmitJobRequest): Promise<Job>;
   retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
+  reuseJob(jobId: string, idempotencyKey: string): Promise<Job>;
   cancelJob(jobId: string): Promise<Job>;
   reviewArtifact(artifactId: string, decision: AcceptanceDecision, note?: string): Promise<ReviewArtifactResponse>;
   uploadMedia(projectId: string, file: File, trainingEligible: boolean): Promise<MediaAsset>;
+  uploadWorkflow(projectId: string, file: File, name?: string, description?: string): Promise<WorkflowDefinition>;
+  saveWorkflowRevision(workflowId: string, input: SaveWorkflowRevisionRequest): Promise<WorkflowDefinition>;
 }
