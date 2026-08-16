@@ -5,9 +5,6 @@ import {
   matchCreativeStudioRoute,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaTrainingJobRequest,
-  type ClaimCreativeDnaTrainingJobRequest,
-  type CompleteCreativeDnaTrainingJobRequest,
-  type FailCreativeDnaTrainingJobRequest,
   type GenerationModality,
   type RetryJobRequest,
   type SaveWorkflowRevisionRequest,
@@ -17,6 +14,8 @@ import {
   type RunnerHeartbeatRequest,
   type RunnerJobHeartbeatRequest,
   type RunnerFailJobRequest,
+  type RunnerTrainingHeartbeatRequest,
+  type RunnerCompleteTrainingRequest,
 } from "../../shared/contracts";
 import {
   afdfwGenerations,
@@ -68,11 +67,11 @@ import {
 } from "../runner";
 import {
   cancelCreativeDnaTrainingJob,
-  claimCreativeDnaTrainingJob,
-  completeCreativeDnaTrainingJob,
+  claimLocalRunnerTrainingJob,
+  completeLocalRunnerTrainingJob,
   createCreativeDnaTrainingJob,
-  creativeDnaTrainingBundle,
-  failCreativeDnaTrainingJob,
+  failLocalRunnerTrainingJob,
+  heartbeatLocalRunnerTrainingJob,
   listCreativeDnaTrainingJobs,
 } from "../training";
 
@@ -121,6 +120,14 @@ function workflowJobModality(value: string): GenerationModality {
   throw new Error("workflow_modality_not_supported");
 }
 
+function supportsEvidenceTrainer(version: string | null) {
+  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 1 || (major === 1 && minor >= 1);
+}
+
 async function capabilities(env: Env, request: Request, session: OwnerSession): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
   if (developmentMode(env)) {
@@ -148,12 +155,13 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
   const state = (result: PromiseSettledResult<unknown>) => result.status === "fulfilled" ? "available" : "unavailable";
   const runnerList = runners.status === "fulfilled" ? runners.value : [];
   const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
+  const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsEvidenceTrainer(runner.version));
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
     { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Workflow JSON, detected controls, models, revisions, and content hashes remain product-owned.", checkedAt },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
-    { key: "creative-dna-training", label: "CreativeDNA training", state: "degraded", provider: "Creative Studio D1 + local runner", detail: "The site can start durable upload-based training jobs. Jobs remain visibly waiting until an authenticated local runner claims and completes them.", checkedAt },
+    { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + local evidence trainer", detail: trainingRunnerAvailable ? "The paired machine measures selected consented media and accepted results, then writes an immutable CreativeDNA version with source-level evidence." : "Training jobs remain durable until a paired Local Runner 1.1 or newer comes online.", checkedAt },
     { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Windows agent", detail: runnerAvailable ? "A paired machine is online and can claim ComfyUI workflow jobs without an open browser." : "Pair and start the Windows agent in Settings to execute imported API-format workflows.", checkedAt },
     { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },
@@ -203,6 +211,27 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/media\/([a-z0-9_]+)$/i);
     if (!match) throw new Error("invalid_runner_request");
     return localRunnerMedia(env, runner, match[1]);
+  }
+  if (route === "runner-training-claim") {
+    return json({ ok: true, bundle: await claimLocalRunnerTrainingJob(env, runner) });
+  }
+  if (route === "runner-training-heartbeat") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/training\/([a-z0-9_]+)\/heartbeat$/i);
+    const input = await body<RunnerTrainingHeartbeatRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, ...await heartbeatLocalRunnerTrainingJob(env, runner, match[1], input.progress) });
+  }
+  if (route === "runner-training-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/training\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<RunnerCompleteTrainingRequest>(request);
+    if (!match || !input?.dna || !input.analysis) throw new Error("invalid_runner_request");
+    return json({ ok: true, trainingJob: await completeLocalRunnerTrainingJob(env, runner, match[1], input) });
+  }
+  if (route === "runner-training-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/training\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<RunnerFailJobRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, trainingJob: await failLocalRunnerTrainingJob(env, runner, match[1], input.error) });
   }
   throw new Error("creative_studio_route_not_found");
 }
@@ -480,29 +509,6 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         idempotencyKey: idempotencyKey(input.idempotencyKey),
       });
       return json({ ok: true, trainingJob }, { status: 202 });
-    }
-    if (route === "training-job-bundle") {
-      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/bundle$/i);
-      if (!match) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
-      return json({ ok: true, ...await creativeDnaTrainingBundle(env, session.userId, match[1]) });
-    }
-    if (route === "training-job-claim") {
-      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/claim$/i);
-      const input = await body<ClaimCreativeDnaTrainingJobRequest>(request);
-      if (!match || !input) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
-      return json({ ok: true, trainingJob: await claimCreativeDnaTrainingJob(env, session.userId, match[1], input.runnerId) });
-    }
-    if (route === "training-job-complete") {
-      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/complete$/i);
-      const input = await body<CompleteCreativeDnaTrainingJobRequest>(request);
-      if (!match || !input?.dna) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
-      return json({ ok: true, trainingJob: await completeCreativeDnaTrainingJob(env, session.userId, match[1], input) });
-    }
-    if (route === "training-job-fail") {
-      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/fail$/i);
-      const input = await body<FailCreativeDnaTrainingJobRequest>(request);
-      if (!match || !input) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
-      return json({ ok: true, trainingJob: await failCreativeDnaTrainingJob(env, session.userId, match[1], input) });
     }
     if (route === "training-job-cancel") {
       const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/cancel$/i);

@@ -21,14 +21,16 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/workflows/workflow_123/content")).toBe("workflow-content");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/training-jobs")).toBe("training-jobs-list");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs")).toBe("training-job-create");
-    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs/dnatraining_123/claim")).toBe("training-job-claim");
-    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/training-jobs/dnatraining_123/bundle")).toBe("training-job-bundle");
-    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs/dnatraining_123/complete")).toBe("training-job-complete");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/claim")).toBe("runner-training-claim");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/heartbeat")).toBe("runner-training-heartbeat");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/complete")).toBe("runner-training-complete");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/fail")).toBe("runner-training-fail");
   });
 
   it("does not become a generic AFDFW proxy", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/admin")) .toBeNull();
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/proxy/api/profile")) .toBeNull();
     expect(matchCreativeStudioRoute("GET", "/api/profile-image/generations")) .toBeNull();
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs/dnatraining_123/complete")) .toBeNull();
   });
 });

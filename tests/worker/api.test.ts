@@ -281,6 +281,14 @@ describe("Creative Studio Worker API", () => {
   it("starts an upload-based CreativeDNA training run and preserves runner lineage", async () => {
     const ownerId = "owner-training";
     const project = await testProject(ownerId, "Training Study");
+    const baseDna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Rights-safe base",
+      directive: "Use only abstract composition and atmosphere from the labeled reference.",
+      targetModality: "image",
+      sourceKind: "commercial_reference",
+      referenceLabel: "Labeled commercial reference",
+    });
     const { bucket } = memoryBucket();
     const production = workerEnv("afdfw", afdfwFor(ownerId), bucket);
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -301,6 +309,7 @@ describe("Creative Studio Worker API", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         projectId: project.id,
+        baseDnaArtifactId: baseDna.artifactId,
         name: "Trained visual language",
         targetModality: "image",
         assetIds: [uploaded.asset.id],
@@ -312,40 +321,81 @@ describe("Creative Studio Worker API", () => {
     const startedPayload = await result(started) as { trainingJob: { id: string; status: string; assetIds: string[] } };
     expect(startedPayload.trainingJob).toMatchObject({ status: "waiting-for-runner", assetIds: [uploaded.asset.id] });
 
-    const bundle = await result(await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/bundle`), production)) as {
-      assets: Array<{ id: string; trainingEligible: boolean }>;
-    };
-    expect(bundle.assets).toEqual([expect.objectContaining({ id: uploaded.asset.id, trainingEligible: true })]);
-
-    const claimed = await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/claim`, {
+    const enrolled = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ runnerId: "local-3090" }),
+      body: JSON.stringify({ name: "Training test runner" }),
+    }), production)) as { runner: { id: string }; token: string };
+
+    const runnerRequest = (path: string, body: object) => routeCreativeStudioApi(request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${enrolled.token}` },
+      body: JSON.stringify(body),
     }), production);
-    expect(await result(claimed)).toMatchObject({ trainingJob: { status: "running", runnerId: "local-3090" } });
+    const claimed = await result(await runnerRequest("/api/creative-studio/runner/training/claim", {})) as {
+      bundle: { trainingJob: { id: string; status: string; runnerId: string }; assets: Array<{ id: string; trainingEligible: boolean }> };
+    };
+    expect(claimed.bundle.trainingJob).toMatchObject({ id: startedPayload.trainingJob.id, status: "running", runnerId: enrolled.runner.id });
+    expect(claimed.bundle.assets).toEqual([expect.objectContaining({ id: uploaded.asset.id, trainingEligible: true })]);
 
-    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/complete`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        runnerId: "local-3090",
+    const heartbeat = await result(await runnerRequest(`/api/creative-studio/runner/training/${startedPayload.trainingJob.id}/heartbeat`, { progress: 62 }));
+    expect(heartbeat).toMatchObject({ continue: true, trainingJob: { progress: 62 } });
+
+    const dimensionKeys = ["energy", "tension", "contrast", "warmth", "spaciousness", "rhythmicity", "organicity", "polish"];
+    const dimensions = Object.fromEntries(dimensionKeys.map((key, index) => [key, {
+      value: 48 + index,
+      confidence: 0.86,
+      sourceIds: [uploaded.asset.id],
+    }]));
+
+    const completed = await runnerRequest(`/api/creative-studio/runner/training/${startedPayload.trainingJob.id}/complete`, {
         dna: {
           directive: "A trained visual language with luminous structure and restrained warmth.",
           targetModality: "image",
           dimensions: { contrast: 72, warmth: 42, polish: 66 },
         },
-      }),
-    }), production);
+        analysis: {
+          schemaVersion: "creative-dna-training-analysis/1.0",
+          createdAt: "2020-01-01T00:00:00.000Z",
+          summary: "Measured one consented image source and synthesized its reusable visual dimensions.",
+          sources: [{
+            sourceId: uploaded.asset.id,
+            mediaId: "untrusted-media-id",
+            sourceType: "accepted-artifact",
+            kind: "video",
+            label: "Untrusted label",
+            observations: ["Measured image pixels."],
+            metrics: { width: 2048, warmth: 42.25 },
+            dimensions: Object.fromEntries(dimensionKeys.map((key, index) => [key, 48 + index])),
+            confidence: 0.86,
+          }],
+          dimensions,
+        },
+      });
     const completedPayload = await result(completed) as { trainingJob: { status: string; resultDnaArtifactId: string } };
     expect(completedPayload.trainingJob.status).toBe("completed");
     expect(completedPayload.trainingJob.resultDnaArtifactId).toBeTruthy();
 
     const dna = await result(await routeCreativeStudioApi(request("/api/creative-studio/dna"), production)) as {
-      artifacts: Array<{ artifactId: string; training: null | { jobId: string; runnerId: string; assetIds: string[] } }>;
+      artifacts: Array<{ artifactId: string; source: { kind: string; referenceLabel: string | null }; rights: { policy: string }; lineage: { parentArtifactId: string | null }; training: null | { jobId: string; runnerId: string; assetIds: string[]; analysis: { sources: Array<{ mediaId: string; sourceType: string; kind: string; label: string }>; dimensions: Record<string, { confidence: number }> } }; evidence: Array<{ path: string; class: string }> }>;
     };
     expect(dna.artifacts[0]).toMatchObject({
       artifactId: completedPayload.trainingJob.resultDnaArtifactId,
-      training: { jobId: startedPayload.trainingJob.id, runnerId: "local-3090", assetIds: [uploaded.asset.id] },
+      training: { jobId: startedPayload.trainingJob.id, runnerId: enrolled.runner.id, assetIds: [uploaded.asset.id] },
+    });
+    expect(dna.artifacts[0].training?.analysis.sources[0]).toMatchObject({
+      mediaId: uploaded.asset.id,
+      sourceType: "upload",
+      kind: "image",
+      label: "Training Source",
+    });
+    expect(dna.artifacts[0].evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "training.analysis.dimensions.warmth", class: "derived/translated" }),
+    ]));
+    expect(dna.artifacts[0]).toMatchObject({
+      source: { kind: "commercial_reference", referenceLabel: "Labeled commercial reference" },
+      rights: { policy: "abstract-attributes-only" },
+      lineage: { parentArtifactId: baseDna.artifactId },
     });
   });
 

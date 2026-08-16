@@ -37,7 +37,7 @@ $startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -ConfigPath `"$configPath`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName "Creative Studio Local Runner" -Action $action -Trigger $trigger -Settings $settings -Description "Runs authenticated Creative Studio ComfyUI jobs without an open browser." -Force | Out-Null
+Register-ScheduledTask -TaskName "Creative Studio Local Runner" -Action $action -Trigger $trigger -Settings $settings -Description "Runs authenticated Creative Studio ComfyUI jobs and CreativeDNA evidence synthesis without an open browser." -Force | Out-Null
 Start-ScheduledTask -TaskName "Creative Studio Local Runner"
 Write-Host "Creative Studio Local Runner installed and started."
 Write-Host "Config: $configPath"

@@ -18,6 +18,30 @@ export type CreativeDnaTarget = "music" | "image";
 export type CreativeDnaSourceKind = "original" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
 
+export type CreativeDnaTrainingSourceAnalysis = {
+  sourceId: string;
+  mediaId: string;
+  sourceType: "upload" | "accepted-artifact";
+  kind: "image" | "audio" | "video";
+  label: string;
+  observations: string[];
+  metrics: Record<string, string | number | boolean>;
+  dimensions: Partial<CreativeDnaDimensions>;
+  confidence: number;
+};
+
+export type CreativeDnaTrainingAnalysis = {
+  schemaVersion: "creative-dna-training-analysis/1.0";
+  createdAt: string;
+  summary: string;
+  sources: CreativeDnaTrainingSourceAnalysis[];
+  dimensions: Record<CreativeDnaDimensionKey, {
+    value: number;
+    confidence: number;
+    sourceIds: string[];
+  }>;
+};
+
 export type CreativeDnaInfluence = {
   angeloCore: number;
   currentProject: number;
@@ -91,6 +115,7 @@ export type CreativeDnaArtifact = {
     runnerId: string;
     assetIds: string[];
     trainingExampleIds: string[];
+    analysis: CreativeDnaTrainingAnalysis;
   };
 };
 

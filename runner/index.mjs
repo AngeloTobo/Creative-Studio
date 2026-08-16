@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import sharp from "sharp";
+import { analyzeAudio, analyzeImage, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.0.1";
+export const RUNNER_VERSION = "1.1.0";
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -67,6 +69,21 @@ async function downloadInput(config, asset) {
   });
   if (!response.ok) throw new Error(`runner_input_download_${response.status}`);
   return new Blob([await response.arrayBuffer()], { type: asset.mimeType });
+}
+
+async function downloadTrainingMedia(config, mediaId) {
+  const response = await fetch(`${config.apiBase}/api/creative-studio/runner/media/${encodeURIComponent(mediaId)}`, {
+    headers: { authorization: `Bearer ${config.token}` },
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) throw new Error(`training_input_download_${response.status}`);
+  const disposition = response.headers.get("content-disposition") || "";
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    mimeType: response.headers.get("content-type") || "application/octet-stream",
+    name: encodedName ? decodeURIComponent(encodedName) : mediaId,
+  };
 }
 
 async function uploadComfyInput(config, asset) {
@@ -266,16 +283,55 @@ async function executeBundle(config, bundle) {
   }
 }
 
+async function executeTrainingBundle(config, bundle) {
+  try {
+    const result = await synthesizeCreativeDna(bundle, {
+      download: (mediaId) => downloadTrainingMedia(config, mediaId),
+      heartbeat: async (progress) => {
+        const response = await runnerRequest(config, `/api/creative-studio/runner/training/${bundle.trainingJob.id}/heartbeat`, {
+          method: "POST",
+          body: JSON.stringify({ progress }),
+        });
+        if (!response.continue) throw new Error("training_cancelled");
+      },
+    });
+    await runnerRequest(config, `/api/creative-studio/runner/training/${bundle.trainingJob.id}/complete`, {
+      method: "POST",
+      body: JSON.stringify(result),
+    });
+    process.stdout.write(`[Creative Studio Runner] completed CreativeDNA evidence synthesis ${bundle.trainingJob.id}\n`);
+  } catch (caught) {
+    const error = (caught instanceof Error ? caught.message : "creative_dna_training_failed").slice(0, 500);
+    try {
+      await runnerRequest(config, `/api/creative-studio/runner/training/${bundle.trainingJob.id}/fail`, {
+        method: "POST",
+        body: JSON.stringify({ error }),
+      });
+    } catch (reportError) {
+      process.stderr.write(`[Creative Studio Runner] could not report training ${bundle.trainingJob.id}: ${reportError.message}\n`);
+    }
+    process.stderr.write(`[Creative Studio Runner] failed training ${bundle.trainingJob.id}: ${error}\n`);
+  } finally {
+    await machineHeartbeat(config, null).catch(() => undefined);
+  }
+}
+
 export async function runOnce(config, heartbeat = true) {
   if (heartbeat) await machineHeartbeat(config);
   const result = await runnerRequest(config, "/api/creative-studio/runner/jobs/claim", { method: "POST", body: "{}" });
-  if (!result.bundle) return false;
-  process.stdout.write(`[Creative Studio Runner] claimed ${result.bundle.job.id}: ${result.bundle.workflow.name}\n`);
-  await executeBundle(config, result.bundle);
+  if (result.bundle) {
+    process.stdout.write(`[Creative Studio Runner] claimed ${result.bundle.job.id}: ${result.bundle.workflow.name}\n`);
+    await executeBundle(config, result.bundle);
+    return true;
+  }
+  const training = await runnerRequest(config, "/api/creative-studio/runner/training/claim", { method: "POST", body: "{}" });
+  if (!training.bundle) return false;
+  process.stdout.write(`[Creative Studio Runner] claimed CreativeDNA evidence synthesis ${training.bundle.trainingJob.id}\n`);
+  await executeTrainingBundle(config, training.bundle);
   return true;
 }
 
-function selfTest() {
+async function selfTest() {
   const graph = { "1": { class_type: "LoadImage", inputs: { image: "old.png" } } };
   const parameters = [{ id: "1::image", kind: "media", binding: { format: "comfyui-api", nodeId: "1", inputName: "image" } }];
   const patched = applyInputFilenames(graph, parameters, { "1::image": "new.png" });
@@ -290,6 +346,33 @@ function selfTest() {
   if (output?.filename !== "result.png") throw new Error("runner_self_test_output_failed");
   if (!isTransientComfyPollError({ name: "TimeoutError" }) || isTransientComfyPollError(new Error("invalid_history"))) {
     throw new Error("runner_self_test_transient_poll_failed");
+  }
+  const testImage = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: { r: 220, g: 120, b: 40 } },
+  }).png().toBuffer();
+  const measured = await analyzeImage(testImage, "Self-test image");
+  if (!Number.isFinite(measured.dimensions.warmth) || measured.metrics.width !== 8) throw new Error("runner_self_test_training_analysis_failed");
+  const sampleRate = 16000;
+  const sampleCount = sampleRate;
+  const testAudio = Buffer.alloc(44 + sampleCount * 2);
+  testAudio.write("RIFF", 0);
+  testAudio.writeUInt32LE(36 + sampleCount * 2, 4);
+  testAudio.write("WAVEfmt ", 8);
+  testAudio.writeUInt32LE(16, 16);
+  testAudio.writeUInt16LE(1, 20);
+  testAudio.writeUInt16LE(1, 22);
+  testAudio.writeUInt32LE(sampleRate, 24);
+  testAudio.writeUInt32LE(sampleRate * 2, 28);
+  testAudio.writeUInt16LE(2, 32);
+  testAudio.writeUInt16LE(16, 34);
+  testAudio.write("data", 36);
+  testAudio.writeUInt32LE(sampleCount * 2, 40);
+  for (let index = 0; index < sampleCount; index += 1) {
+    testAudio.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * index / sampleRate) * 8000), 44 + index * 2);
+  }
+  const measuredAudio = await analyzeAudio(testAudio, "self-test.wav", "audio/wav", "Self-test audio");
+  if (measuredAudio.metrics.sampleRate !== sampleRate || !Number.isFinite(measuredAudio.dimensions.energy)) {
+    throw new Error("runner_self_test_audio_analysis_failed");
   }
   process.stdout.write("Creative Studio Local Runner self-test passed.\n");
 }

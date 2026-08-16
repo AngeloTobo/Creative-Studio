@@ -14,8 +14,8 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Custom domain: `cs.angelotoborg.com`
 - Local Runner API domain: `runner.cs.angelotoborg.com` (runner routes only; no shell)
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-16: `ffa2919b-4b9b-4f98-b746-8c91448f2296`
-- Installed runner: `Angelo RTX 3090 workstation`, runner `1.0.0`, ComfyUI `0.33.0`, RTX 3090 heartbeat healthy
+- Production Worker version verified on 2026-08-16: `c6384719-31da-473f-afe3-9d4fa7adbd53`
+- Installed runner: `Angelo RTX 3090 workstation`, runner `1.1.0`, ComfyUI `0.33.0`, RTX 3090 heartbeat healthy
 
 ## Release sequence
 
@@ -33,8 +33,8 @@ This runs the complete local verification suite, validates the production contra
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
 6. `runner.cs.angelotoborg.com/` returns `404`; its unauthenticated claim route returns `401`; the main product root still redirects through Cloudflare Access.
-7. An authenticated Runtime-page check reports Local Runner and video generation available while its recent heartbeat is healthy. CreativeDNA training remains truthfully `degraded` until the separate profile-synthesis trainer is implemented.
-8. Remote D1 has no pending migration after `0007_local_runner_v1.sql`; runner registration exists and generated job/artifact tables contain no deployment fixtures.
+7. An authenticated Runtime-page check reports Local Runner, video generation, and CreativeDNA training available while a recent Local Runner 1.1 heartbeat is healthy.
+8. Remote D1 has no pending migration after `0008_creative_dna_trainer_v1.sql`; runner registration exists and generated job/artifact tables contain no deployment fixtures.
 9. Windows Scheduled Task `Creative Studio Local Runner` is running, its config ACL permits only the current user and SYSTEM, and D1 reports no runner error.
 
 ## Rollback

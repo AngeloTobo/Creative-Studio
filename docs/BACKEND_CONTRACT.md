@@ -60,8 +60,12 @@ The separate runner hostname accepts only bearer-authenticated machine routes:
 - `POST /api/creative-studio/runner/jobs/:id/complete`
 - `POST /api/creative-studio/runner/jobs/:id/fail`
 - `GET /api/creative-studio/runner/media/:id`
+- `POST /api/creative-studio/runner/training/claim`
+- `POST /api/creative-studio/runner/training/:id/heartbeat`
+- `POST /api/creative-studio/runner/training/:id/complete`
+- `POST /api/creative-studio/runner/training/:id/fail`
 
-Tokens are generated with 256 bits of randomness, returned once, stored only as SHA-256 hashes in D1, owner-scoped, and revocable. A claim carries an immutable API-format workflow revision plus only the retained inputs bound in its settings stamp. Leases expire after two minutes unless renewed. Completion accepts only allowlisted image, audio, or video MIME types up to 100 MB, writes to a deterministic R2 key, verifies the byte count, and only then completes the D1 job and training candidate. The runner hostname returns `404` for the product shell and every non-runner route.
+Tokens are generated with 256 bits of randomness, returned once, stored only as SHA-256 hashes in D1, owner-scoped, and revocable. A generation claim carries an immutable API-format workflow revision plus only the retained inputs bound in its settings stamp. A training claim carries only its selected consented uploads, training-ready accepted-result records, and optional base DNA. Both job types use renewable two-minute leases. Generation completion accepts only allowlisted image, audio, or video MIME types up to 100 MB, writes to a deterministic R2 key, verifies the byte count, and only then completes the D1 job and training candidate. Training completion must contain complete bounded source evidence for the claimed bundle; the Worker replaces runner-supplied identity labels with canonical D1 metadata before writing an immutable trained DNA artifact. The runner hostname returns `404` for the product shell and every non-runner route.
 
 ## Runtime validation
 

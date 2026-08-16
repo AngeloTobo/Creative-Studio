@@ -85,6 +85,10 @@ export async function revokeLocalRunner(env: Env, ownerId: string, runnerId: str
     env.DB.prepare(`update creative_jobs set status = 'queued', progress = 1, runner_id = null, runner_lease_until = null,
       error = null, updated_at = ? where owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
       .bind(now, ownerId, runnerId),
+    env.DB.prepare(`update creative_dna_training_jobs set status = 'waiting-for-runner', progress = 0,
+      runner_id = null, runner_lease_until = null, error = null, updated_at = ?, started_at = null
+      where owner_id = ? and runner_id = ? and status = 'running'`)
+      .bind(now, ownerId, runnerId),
   ]);
   const row = await env.DB.prepare(`select ${RUNNER_COLUMNS} from creative_runners where id = ? and owner_id = ?`)
     .bind(runnerId, ownerId).first<RunnerRow>();
@@ -201,7 +205,9 @@ export async function localRunnerMedia(env: Env, runner: RunnerIdentity, mediaId
 
 export function isLocalRunnerRoute(route: string) {
   return route === "runner-heartbeat" || route === "runner-job-claim" || route === "runner-job-heartbeat"
-    || route === "runner-job-complete" || route === "runner-job-fail" || route === "runner-media-content";
+    || route === "runner-job-complete" || route === "runner-job-fail" || route === "runner-media-content"
+    || route === "runner-training-claim" || route === "runner-training-heartbeat"
+    || route === "runner-training-complete" || route === "runner-training-fail";
 }
 
 export function localRunnerJobLabel(job: Job) {

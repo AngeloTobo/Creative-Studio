@@ -30,7 +30,7 @@ flowchart LR
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
-- Local Runner v1 owns browser-independent execution of API-format ComfyUI workflows. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
+- Local Runner 1.1 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
 
 ## CreativeDNA vertical slice
 
@@ -56,6 +56,15 @@ flowchart LR
 3. The Worker streams the body to a project-scoped R2 key and verifies its stored size.
 4. D1 metadata is committed only after verification, then the asset becomes available through an owner-scoped content route.
 5. Consent and provenance make the asset eligible for a later training workflow. Intake itself never starts training. Narrow AFDFW image/music generation remains CreativeDNA text-conditioned; imported local ComfyUI workflows may explicitly bind compatible retained uploads or generated artifacts to detected media inputs.
+
+## CreativeDNA evidence synthesis
+
+1. The owner starts an idempotent durable run from selected consented uploads, all explicitly training-ready accepted results in the project, and an optional base DNA version.
+2. An authenticated Local Runner 1.1 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
+3. The runner measures image pixels with Sharp, decodes bounded audio/video segments with the bundled local FFmpeg binary, inspects container metadata, and folds retained accepted-result prompt/settings context into the corresponding source profile.
+4. Each source produces bounded observations, primitive metrics, eight dimension values, and confidence. The runner aggregates those values deterministically, with the optional base DNA as a small lineage prior.
+5. The Worker canonicalizes source identity from D1, rejects missing, duplicate, foreign, or malformed evidence, preserves commercial-reference rights from the base version, and writes a new immutable DNA version with per-dimension provenance.
+6. This phase is evidence-backed profile synthesis, not model-weight, LoRA, or foundation-model fine-tuning. Human comparison/approval before activating a trained version is a later review phase.
 
 ## Job lifecycle guarantees
 

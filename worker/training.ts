@@ -1,9 +1,14 @@
 import type {
   CompleteCreativeDnaTrainingJobRequest,
   CreateCreativeDnaTrainingJobRequest,
+  CreativeDnaTrainingAnalysis,
   CreativeDnaTrainingJob,
+  CreativeDnaTrainingSourceAnalysis,
+  CreativeTrainingExample,
   FailCreativeDnaTrainingJobRequest,
+  MediaAsset,
 } from "../shared/contracts";
+import { CREATIVE_DNA_DIMENSION_KEYS } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
 import {
   createLocalDna,
@@ -12,6 +17,7 @@ import {
   listTrainingExamples,
   projectById,
 } from "./repository";
+import type { RunnerIdentity } from "./runner";
 import type { Env } from "./types";
 
 type TrainingRow = {
@@ -27,6 +33,7 @@ type TrainingRow = {
   assetIdsJson: string;
   trainingExampleIdsJson: string;
   runnerId: string | null;
+  runnerLeaseUntil: string | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -37,8 +44,8 @@ type TrainingRow = {
 const TRAINING_COLUMNS = `id, project_id as projectId, base_dna_artifact_id as baseDnaArtifactId,
   result_dna_artifact_id as resultDnaArtifactId, name, target_modality as targetModality, status,
   progress, provider, asset_ids_json as assetIdsJson, training_example_ids_json as trainingExampleIdsJson,
-  runner_id as runnerId, error, created_at as createdAt, updated_at as updatedAt,
-  started_at as startedAt, completed_at as completedAt`;
+  runner_id as runnerId, runner_lease_until as runnerLeaseUntil, error, created_at as createdAt,
+  updated_at as updatedAt, started_at as startedAt, completed_at as completedAt`;
 
 function ids(value: string) {
   try {
@@ -50,11 +57,13 @@ function ids(value: string) {
 }
 
 function mapTrainingJob(row: TrainingRow): CreativeDnaTrainingJob {
+  const { assetIdsJson, trainingExampleIdsJson, runnerLeaseUntil: _runnerLeaseUntil, ...job } = row;
+  void _runnerLeaseUntil;
   return {
-    ...row,
+    ...job,
     progress: Number(row.progress || 0),
-    assetIds: ids(row.assetIdsJson),
-    trainingExampleIds: ids(row.trainingExampleIdsJson),
+    assetIds: ids(assetIdsJson),
+    trainingExampleIds: ids(trainingExampleIdsJson),
   };
 }
 
@@ -107,8 +116,8 @@ export async function createCreativeDnaTrainingJob(
   await env.DB.prepare(`insert into creative_dna_training_jobs (
     id, owner_id, project_id, base_dna_artifact_id, result_dna_artifact_id, name, target_modality,
     status, progress, provider, asset_ids_json, training_example_ids_json, idempotency_key,
-    runner_id, error, created_at, updated_at, started_at, completed_at
-  ) values (?, ?, ?, ?, null, ?, ?, 'waiting-for-runner', 0, 'local-creative-dna-runner', ?, ?, ?, null, null, ?, ?, null, null)`)
+    runner_id, runner_lease_until, error, created_at, updated_at, started_at, completed_at
+  ) values (?, ?, ?, ?, null, ?, ?, 'waiting-for-runner', 0, 'local-creative-dna-runner', ?, ?, ?, null, null, null, ?, ?, null, null)`)
     .bind(jobId, ownerId, input.projectId, base?.artifactId ?? null, name, input.targetModality,
       JSON.stringify(requestedAssetIds), JSON.stringify(trainingExamples.map((example) => example.id)), input.idempotencyKey, now, now).run();
   const created = await trainingRow(env, ownerId, jobId);
@@ -126,8 +135,8 @@ export async function creativeDnaTrainingBundle(env: Env, ownerId: string, jobId
   return {
     trainingJob,
     baseDna: trainingJob.baseDnaArtifactId ? allDna.find((artifact) => artifact.artifactId === trainingJob.baseDnaArtifactId) ?? null : null,
-    assets: trainingJob.assetIds.map((assetId) => allAssets.find((asset) => asset.id === assetId)).filter((asset) => Boolean(asset)),
-    trainingExamples: trainingJob.trainingExampleIds.map((exampleId) => allExamples.find((example) => example.id === exampleId)).filter((example) => Boolean(example)),
+    assets: trainingJob.assetIds.map((assetId) => allAssets.find((asset) => asset.id === assetId)).filter((asset): asset is MediaAsset => Boolean(asset)),
+    trainingExamples: trainingJob.trainingExampleIds.map((exampleId) => allExamples.find((example) => example.id === exampleId)).filter((example): example is CreativeTrainingExample => Boolean(example)),
   };
 }
 
@@ -137,32 +146,155 @@ function runnerId(value: unknown) {
   return runner;
 }
 
-export async function claimCreativeDnaTrainingJob(env: Env, ownerId: string, jobId: string, requestedRunnerId: unknown) {
-  const runner = runnerId(requestedRunnerId);
-  const now = new Date().toISOString();
-  const result = await env.DB.prepare(`update creative_dna_training_jobs set status = 'running', progress = 5,
-    runner_id = ?, started_at = coalesce(started_at, ?), updated_at = ?, error = null
-    where id = ? and owner_id = ? and status = 'waiting-for-runner'`)
-    .bind(runner, now, now, jobId, ownerId).run();
-  if (!result.meta.changes) {
-    const current = await trainingRow(env, ownerId, jobId);
-    if (!current) throw new Error("training_job_not_found");
-    throw new Error("training_job_not_claimable");
-  }
-  return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
+function leaseUntil(now: Date) {
+  return new Date(now.getTime() + 2 * 60_000).toISOString();
+}
+
+export async function claimLocalRunnerTrainingJob(env: Env, runner: RunnerIdentity) {
+  const now = new Date();
+  const nowValue = now.toISOString();
+  const candidate = await env.DB.prepare(`select id from creative_dna_training_jobs
+    where owner_id = ? and status in ('waiting-for-runner', 'running')
+      and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
+    order by case when runner_id = ? then 0 else 1 end, created_at limit 1`)
+    .bind(runner.ownerId, nowValue, runner.id, runner.id).first<{ id: string }>();
+  if (!candidate) return null;
+  const changed = await env.DB.prepare(`update creative_dna_training_jobs set status = 'running', progress = max(progress, 5),
+    runner_id = ?, runner_lease_until = ?, started_at = coalesce(started_at, ?), updated_at = ?, error = null
+    where id = ? and owner_id = ? and status in ('waiting-for-runner', 'running')
+      and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)`)
+    .bind(runner.id, leaseUntil(now), nowValue, nowValue, candidate.id, runner.ownerId, nowValue, runner.id).run();
+  if (!changed.meta.changes) return null;
+  await env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
+    .bind(candidate.id, nowValue, runner.id, runner.ownerId).run();
+  return creativeDnaTrainingBundle(env, runner.ownerId, candidate.id);
+}
+
+export async function heartbeatLocalRunnerTrainingJob(env: Env, runner: RunnerIdentity, jobId: string, progressValue: unknown) {
+  const progress = Math.max(5, Math.min(94, Math.round(Number(progressValue) || 5)));
+  const now = new Date();
+  const changed = await env.DB.prepare(`update creative_dna_training_jobs set progress = max(progress, ?),
+    runner_lease_until = ?, updated_at = ? where id = ? and owner_id = ? and runner_id = ? and status = 'running'`)
+    .bind(progress, leaseUntil(now), now.toISOString(), jobId, runner.ownerId, runner.id).run();
+  const row = await trainingRow(env, runner.ownerId, jobId);
+  if (!row) throw new Error("training_job_not_found");
+  return { continue: Boolean(changed.meta.changes), trainingJob: mapTrainingJob(row) };
 }
 
 export async function cancelCreativeDnaTrainingJob(env: Env, ownerId: string, jobId: string) {
   const now = new Date().toISOString();
   const result = await env.DB.prepare(`update creative_dna_training_jobs set status = 'cancelled', error = 'cancelled_by_user',
-    updated_at = ?, completed_at = ? where id = ? and owner_id = ? and status in ('waiting-for-runner', 'running')`)
+    runner_lease_until = null, updated_at = ?, completed_at = ?
+    where id = ? and owner_id = ? and status in ('waiting-for-runner', 'running')`)
     .bind(now, now, jobId, ownerId).run();
   if (!result.meta.changes) {
     const current = await trainingRow(env, ownerId, jobId);
     if (!current) throw new Error("training_job_not_found");
     throw new Error("training_job_not_cancellable");
   }
+  await env.DB.prepare("update creative_runners set active_job_id = null where owner_id = ? and active_job_id = ?")
+    .bind(ownerId, jobId).run();
   return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
+}
+
+function boundedConfidence(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) throw new Error("invalid_training_analysis");
+  return Math.max(0, Math.min(1, Math.round(numeric * 1000) / 1000));
+}
+
+function boundedDimension(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) throw new Error("invalid_training_analysis");
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function safeMetrics(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_training_analysis");
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 40) throw new Error("invalid_training_analysis");
+  return entries.reduce<Record<string, string | number | boolean>>((result, [rawKey, rawValue]) => {
+    const key = boundedText(rawKey, 48);
+    if (!/^[a-z][a-z0-9_.-]{0,47}$/i.test(key)) throw new Error("invalid_training_analysis");
+    if (typeof rawValue === "boolean") result[key] = rawValue;
+    else if (typeof rawValue === "number" && Number.isFinite(rawValue)) result[key] = Math.round(rawValue * 1000) / 1000;
+    else if (typeof rawValue === "string") result[key] = boundedText(rawValue, 200);
+    else throw new Error("invalid_training_analysis");
+    return result;
+  }, {});
+}
+
+function safeSourceDimensions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_training_analysis");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !CREATIVE_DNA_DIMENSION_KEYS.includes(key as typeof CREATIVE_DNA_DIMENSION_KEYS[number]))) {
+    throw new Error("invalid_training_analysis");
+  }
+  return CREATIVE_DNA_DIMENSION_KEYS.reduce<CreativeDnaTrainingSourceAnalysis["dimensions"]>((result, key) => {
+    if (record[key] !== undefined) result[key] = boundedDimension(record[key]);
+    return result;
+  }, {});
+}
+
+function canonicalSources(assets: MediaAsset[], examples: CreativeTrainingExample[]) {
+  return new Map<string, Omit<CreativeDnaTrainingSourceAnalysis, "observations" | "metrics" | "dimensions" | "confidence">>([
+    ...assets.map((asset) => [asset.id, {
+      sourceId: asset.id,
+      mediaId: asset.id,
+      sourceType: "upload" as const,
+      kind: asset.kind,
+      label: asset.name,
+    }] as const),
+    ...examples.map((example) => [example.id, {
+      sourceId: example.id,
+      mediaId: example.artifactId,
+      sourceType: "accepted-artifact" as const,
+      kind: example.kind === "music" ? "audio" as const : example.kind === "video" ? "video" as const : "image" as const,
+      label: `Accepted ${example.kind} result`,
+    }] as const),
+  ]);
+}
+
+function sanitizeTrainingAnalysis(
+  value: CreativeDnaTrainingAnalysis,
+  assets: MediaAsset[],
+  examples: CreativeTrainingExample[],
+): CreativeDnaTrainingAnalysis {
+  if (!value || value.schemaVersion !== "creative-dna-training-analysis/1.0" || !Array.isArray(value.sources)) {
+    throw new Error("invalid_training_analysis");
+  }
+  const expected = canonicalSources(assets, examples);
+  if (value.sources.length !== expected.size || value.sources.length > 96) throw new Error("invalid_training_analysis");
+  const seen = new Set<string>();
+  const sources = value.sources.map((source) => {
+    const sourceId = boundedText(source?.sourceId, 100);
+    const canonical = expected.get(sourceId);
+    if (!canonical || seen.has(sourceId)) throw new Error("invalid_training_analysis");
+    seen.add(sourceId);
+    if (!Array.isArray(source.observations) || source.observations.length > 16) throw new Error("invalid_training_analysis");
+    return {
+      ...canonical,
+      observations: source.observations.map((observation) => boundedText(observation, 240)).filter(Boolean),
+      metrics: safeMetrics(source.metrics),
+      dimensions: safeSourceDimensions(source.dimensions),
+      confidence: boundedConfidence(source.confidence),
+    } satisfies CreativeDnaTrainingSourceAnalysis;
+  });
+  if (seen.size !== expected.size) throw new Error("invalid_training_analysis");
+
+  if (!value.dimensions || typeof value.dimensions !== "object") throw new Error("invalid_training_analysis");
+  const dimensions = CREATIVE_DNA_DIMENSION_KEYS.reduce<CreativeDnaTrainingAnalysis["dimensions"]>((result, key) => {
+    const input = value.dimensions[key];
+    if (!input || !Array.isArray(input.sourceIds)) throw new Error("invalid_training_analysis");
+    const sourceIds = [...new Set(input.sourceIds.map((sourceId) => boundedText(sourceId, 100)))];
+    if (!sourceIds.length || sourceIds.some((sourceId) => !expected.has(sourceId))) throw new Error("invalid_training_analysis");
+    result[key] = { value: boundedDimension(input.value), confidence: boundedConfidence(input.confidence), sourceIds };
+    return result;
+  }, {} as CreativeDnaTrainingAnalysis["dimensions"]);
+
+  const summary = boundedText(value.summary, 1200);
+  if (summary.length < 20) throw new Error("invalid_training_analysis");
+  return { schemaVersion: "creative-dna-training-analysis/1.0", createdAt: new Date().toISOString(), summary, sources, dimensions };
 }
 
 export async function completeCreativeDnaTrainingJob(
@@ -176,6 +308,9 @@ export async function completeCreativeDnaTrainingJob(
   const job = mapTrainingJob(row);
   const runner = runnerId(input.runnerId);
   if (job.status !== "running" || job.runnerId !== runner) throw new Error("training_job_not_completable");
+  const bundle = await creativeDnaTrainingBundle(env, ownerId, jobId);
+  const analysis = sanitizeTrainingAnalysis(input.analysis, bundle.assets, bundle.trainingExamples);
+  const baseDna = bundle.baseDna;
 
   const artifact = await createLocalDna(env, ownerId, {
     ...input.dna,
@@ -183,24 +318,47 @@ export async function completeCreativeDnaTrainingJob(
     parentArtifactId: job.baseDnaArtifactId,
     name: boundedText(input.dna.name, 80) || job.name,
     targetModality: job.targetModality,
-    sourceKind: "original",
-    referenceLabel: undefined,
+    sourceKind: baseDna?.source.kind ?? "original",
+    referenceLabel: baseDna?.source.referenceLabel ?? undefined,
   });
+  const overallConfidence = CREATIVE_DNA_DIMENSION_KEYS.reduce((total, key) => total + analysis.dimensions[key].confidence, 0)
+    / CREATIVE_DNA_DIMENSION_KEYS.length;
   const trainedArtifact = {
     ...artifact,
-    training: { jobId: job.id, runnerId: runner, assetIds: job.assetIds, trainingExampleIds: job.trainingExampleIds },
-    evidence: [...artifact.evidence, { path: "training", class: "derived/translated" as const, confidence: 0.8, downstream: true }],
+    training: { jobId: job.id, runnerId: runner, assetIds: job.assetIds, trainingExampleIds: job.trainingExampleIds, analysis },
+    evidence: [
+      ...artifact.evidence.map((entry) => entry.path === "source.directive" || entry.path === "shared"
+        ? { ...entry, class: "derived/translated" as const, confidence: Math.round(overallConfidence * 1000) / 1000 }
+        : entry),
+      ...CREATIVE_DNA_DIMENSION_KEYS.map((key) => ({
+        path: `training.analysis.dimensions.${key}`,
+        class: "derived/translated" as const,
+        confidence: analysis.dimensions[key].confidence,
+        downstream: true,
+      })),
+    ],
   };
   const now = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare("update creative_dna_artifacts set dna_json = ? where id = ? and owner_id = ?")
       .bind(JSON.stringify(trainedArtifact), trainedArtifact.artifactId, ownerId),
     env.DB.prepare(`update creative_dna_training_jobs set status = 'completed', progress = 100,
-      result_dna_artifact_id = ?, error = null, updated_at = ?, completed_at = ?
+      result_dna_artifact_id = ?, error = null, updated_at = ?, completed_at = ?, runner_lease_until = null
       where id = ? and owner_id = ? and status = 'running' and runner_id = ?`)
       .bind(trainedArtifact.artifactId, now, now, jobId, ownerId, runner),
+    env.DB.prepare("update creative_runners set active_job_id = null, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
+      .bind(now, runner, ownerId),
   ]);
   return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
+}
+
+export async function completeLocalRunnerTrainingJob(
+  env: Env,
+  runner: RunnerIdentity,
+  jobId: string,
+  input: Omit<CompleteCreativeDnaTrainingJobRequest, "runnerId">,
+) {
+  return completeCreativeDnaTrainingJob(env, runner.ownerId, jobId, { ...input, runnerId: runner.id });
 }
 
 export async function failCreativeDnaTrainingJob(
@@ -213,8 +371,15 @@ export async function failCreativeDnaTrainingJob(
   const error = boundedText(input.error, 500) || "training_runner_failed";
   const now = new Date().toISOString();
   const result = await env.DB.prepare(`update creative_dna_training_jobs set status = 'failed', error = ?,
-    updated_at = ?, completed_at = ? where id = ? and owner_id = ? and status = 'running' and runner_id = ?`)
+    updated_at = ?, completed_at = ?, runner_lease_until = null
+    where id = ? and owner_id = ? and status = 'running' and runner_id = ?`)
     .bind(error, now, now, jobId, ownerId, runner).run();
   if (!result.meta.changes) throw new Error("training_job_not_completable");
+  await env.DB.prepare("update creative_runners set active_job_id = null, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ?")
+    .bind(error, now, runner, ownerId).run();
   return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
+}
+
+export async function failLocalRunnerTrainingJob(env: Env, runner: RunnerIdentity, jobId: string, error: unknown) {
+  return failCreativeDnaTrainingJob(env, runner.ownerId, jobId, { runnerId: runner.id, error: boundedText(error, 500) });
 }
