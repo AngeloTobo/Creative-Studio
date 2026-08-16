@@ -1,5 +1,6 @@
 import {
   compileCreativeDna,
+  deriveProjectProductionLoop,
   PROJECT_HUES,
   type Acceptance,
   type AcceptanceDecision,
@@ -98,6 +99,7 @@ function capabilitySnapshot(now: string): Capability[] {
 }
 
 function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
+  const projects = state.projects.map((project) => ({ ...project, activeDnaArtifactId: project.activeDnaArtifactId ?? null }));
   return {
     adapter: {
       id: "development-local-storage",
@@ -106,7 +108,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
       durableScope: "browser",
     },
     session: { status: "development", userId: "development-angelo", displayName: "Angelo" },
-    projects: state.projects.map((project) => ({ ...project, activeDnaArtifactId: project.activeDnaArtifactId ?? null })),
+    projects,
     dnaArtifacts: [...state.dnaArtifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     jobs: [...state.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     artifacts: [...state.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -115,6 +117,16 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingReviews: [...(state.trainingReviews ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    productionLoops: projects.map((project) => deriveProjectProductionLoop({
+      project,
+      dnaArtifacts: state.dnaArtifacts,
+      jobs: state.jobs,
+      artifacts: state.artifacts,
+      trainingExamples: state.trainingExamples ?? [],
+      trainingJobs: state.trainingJobs ?? [],
+      trainingReviews: state.trainingReviews ?? [],
+      computedAt: now,
+    })),
     runners: [],
     capabilities: capabilitySnapshot(now),
     acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -321,6 +333,8 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         createdAt: now().toISOString(),
       });
       state.dnaArtifacts.unshift(artifact);
+      project.activeDnaArtifactId = artifact.artifactId;
+      project.updatedAt = artifact.createdAt;
       write(state);
       return artifact;
     },

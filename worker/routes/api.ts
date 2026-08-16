@@ -1,4 +1,5 @@
 import {
+  deriveProjectProductionLoop,
   type AcceptanceDecision,
   type Capability,
   type CreateProjectRequest,
@@ -68,6 +69,7 @@ import {
 } from "../runner";
 import {
   cancelCreativeDnaTrainingJob,
+  creativeDnaTrainingEvidencePool,
   assertCreativeDnaReviewed,
   claimLocalRunnerTrainingJob,
   completeLocalRunnerTrainingJob,
@@ -102,7 +104,7 @@ function statusFor(error: string) {
   if (error === "invalid_media_range") return 416;
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable"
     || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable"
-    || error === "training_review_required" || error === "training_review_not_ready") return 409;
+    || error === "training_review_required" || error === "training_review_not_ready" || error === "training_evidence_already_reserved") return 409;
   if (error === "runner_job_not_completable") return 409;
   return 400;
 }
@@ -519,6 +521,28 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         listCreativeDnaTrainingReviews(env, session.userId),
       ]);
       return json({ ok: true, trainingJobs, trainingReviews });
+    }
+    if (route === "production-loops") {
+      await syncJobs(env, session.userId);
+      const [projects, dnaArtifacts, jobs, artifacts, trainingExamples, trainingJobs, trainingReviews] = await Promise.all([
+        listProjects(env, session.userId),
+        listLocalDna(env, session.userId),
+        listJobs(env, session.userId),
+        listArtifacts(env, session.userId),
+        listTrainingExamples(env, session.userId),
+        listCreativeDnaTrainingJobs(env, session.userId),
+        listCreativeDnaTrainingReviews(env, session.userId),
+      ]);
+      const computedAt = new Date().toISOString();
+      const evidencePools = await Promise.all(projects.map((project) => creativeDnaTrainingEvidencePool(env, session.userId, project.id)));
+      return json({
+        ok: true,
+        productionLoops: projects.map((project, index) => deriveProjectProductionLoop({
+          project, dnaArtifacts, jobs, artifacts, trainingExamples, trainingJobs, trainingReviews,
+          reservedTrainingExampleIds: evidencePools[index].reservedIds,
+          computedAt,
+        })),
+      });
     }
     if (route === "training-job-create") {
       const input = await body<CreateCreativeDnaTrainingJobRequest>(request);

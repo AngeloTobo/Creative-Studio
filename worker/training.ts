@@ -105,6 +105,24 @@ export async function listCreativeDnaTrainingReviews(env: Env, ownerId: string):
   return (result.results ?? []) as CreativeDnaTrainingReview[];
 }
 
+export async function creativeDnaTrainingEvidencePool(env: Env, ownerId: string, projectId: string) {
+  const [allExamples, reservations] = await Promise.all([
+    listTrainingExamples(env, ownerId),
+    env.DB.prepare(`select training_example_ids_json as trainingExampleIdsJson from creative_dna_training_jobs
+      where owner_id = ? and project_id = ? and status in ('waiting-for-runner', 'running', 'completed')`)
+      .bind(ownerId, projectId).all<{ trainingExampleIdsJson: string }>(),
+  ]);
+  const reservedIds = [...new Set((reservations.results ?? []).flatMap((row) => ids(row.trainingExampleIdsJson)))];
+  const reserved = new Set(reservedIds);
+  const ready = allExamples.filter((example) => example.projectId === projectId && example.status === "training-ready");
+  return {
+    ready,
+    fresh: ready.filter((example) => !reserved.has(example.id)),
+    used: ready.filter((example) => reserved.has(example.id)),
+    reservedIds,
+  };
+}
+
 async function latestTrainingReview(env: Env, ownerId: string, dnaArtifactId: string) {
   return env.DB.prepare(`select ${TRAINING_REVIEW_COLUMNS} from creative_dna_training_reviews
     where owner_id = ? and dna_artifact_id = ? order by created_at desc, rowid desc limit 1`)
@@ -146,20 +164,39 @@ export async function createCreativeDnaTrainingJob(
   if (base) await assertCreativeDnaReviewed(env, ownerId, base);
 
   const trainingExamples = input.includeTrainingExamples
-    ? (await listTrainingExamples(env, ownerId)).filter((example) => example.projectId === input.projectId && example.status === "training-ready")
+    ? (await creativeDnaTrainingEvidencePool(env, ownerId, input.projectId)).fresh
     : [];
   if (!requestedAssetIds.length && !trainingExamples.length) throw new Error("training_inputs_required");
 
   const now = new Date().toISOString();
   const jobId = id("dnatraining");
   const name = boundedText(input.name, 80) || `${project.name} CreativeDNA`;
-  await env.DB.prepare(`insert into creative_dna_training_jobs (
-    id, owner_id, project_id, base_dna_artifact_id, result_dna_artifact_id, name, target_modality,
-    status, progress, provider, asset_ids_json, training_example_ids_json, idempotency_key,
-    runner_id, runner_lease_until, error, created_at, updated_at, started_at, completed_at
-  ) values (?, ?, ?, ?, null, ?, ?, 'waiting-for-runner', 0, 'local-creative-dna-runner', ?, ?, ?, null, null, null, ?, ?, null, null)`)
-    .bind(jobId, ownerId, input.projectId, base?.artifactId ?? null, name, input.targetModality,
-      JSON.stringify(requestedAssetIds), JSON.stringify(trainingExamples.map((example) => example.id)), input.idempotencyKey, now, now).run();
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`insert into creative_dna_training_jobs (
+        id, owner_id, project_id, base_dna_artifact_id, result_dna_artifact_id, name, target_modality,
+        status, progress, provider, asset_ids_json, training_example_ids_json, idempotency_key,
+        runner_id, runner_lease_until, error, created_at, updated_at, started_at, completed_at
+      ) values (?, ?, ?, ?, null, ?, ?, 'waiting-for-runner', 0, 'local-creative-dna-runner', ?, ?, ?, null, null, null, ?, ?, null, null)`)
+        .bind(jobId, ownerId, input.projectId, base?.artifactId ?? null, name, input.targetModality,
+          JSON.stringify(requestedAssetIds), JSON.stringify(trainingExamples.map((example) => example.id)), input.idempotencyKey, now, now),
+      ...trainingExamples.map((example) => env.DB.prepare(`insert into creative_dna_training_evidence_reservations
+        (training_example_id, owner_id, project_id, training_job_id, created_at) values (?, ?, ?, ?, ?)`)
+        .bind(example.id, ownerId, input.projectId, jobId, now)),
+    ]);
+  } catch (error) {
+    const winner = await env.DB.prepare(`select ${TRAINING_COLUMNS} from creative_dna_training_jobs where owner_id = ? and idempotency_key = ?`)
+      .bind(ownerId, input.idempotencyKey).first<TrainingRow>();
+    if (winner) return mapTrainingJob(winner);
+    if (trainingExamples.length) {
+      const placeholders = trainingExamples.map(() => "?").join(",");
+      const reservation = await env.DB.prepare(`select training_example_id from creative_dna_training_evidence_reservations
+        where training_example_id in (${placeholders}) limit 1`)
+        .bind(...trainingExamples.map((example) => example.id)).first<{ training_example_id: string }>();
+      if (reservation) throw new Error("training_evidence_already_reserved", { cause: error });
+    }
+    throw error;
+  }
   const created = await trainingRow(env, ownerId, jobId);
   if (!created) throw new Error("training_job_not_found");
   return mapTrainingJob(created);
@@ -223,17 +260,22 @@ export async function heartbeatLocalRunnerTrainingJob(env: Env, runner: RunnerId
 
 export async function cancelCreativeDnaTrainingJob(env: Env, ownerId: string, jobId: string) {
   const now = new Date().toISOString();
-  const result = await env.DB.prepare(`update creative_dna_training_jobs set status = 'cancelled', error = 'cancelled_by_user',
-    runner_lease_until = null, updated_at = ?, completed_at = ?
-    where id = ? and owner_id = ? and status in ('waiting-for-runner', 'running')`)
-    .bind(now, now, jobId, ownerId).run();
+  const [result] = await env.DB.batch([
+    env.DB.prepare(`update creative_dna_training_jobs set status = 'cancelled', error = 'cancelled_by_user',
+      runner_lease_until = null, updated_at = ?, completed_at = ?
+      where id = ? and owner_id = ? and status in ('waiting-for-runner', 'running')`)
+      .bind(now, now, jobId, ownerId),
+    env.DB.prepare(`delete from creative_dna_training_evidence_reservations where training_job_id = ?
+      and exists (select 1 from creative_dna_training_jobs where id = ? and owner_id = ? and status in ('failed', 'cancelled'))`)
+      .bind(jobId, jobId, ownerId),
+    env.DB.prepare("update creative_runners set active_job_id = null where owner_id = ? and active_job_id = ?")
+      .bind(ownerId, jobId),
+  ]);
   if (!result.meta.changes) {
     const current = await trainingRow(env, ownerId, jobId);
     if (!current) throw new Error("training_job_not_found");
     throw new Error("training_job_not_cancellable");
   }
-  await env.DB.prepare("update creative_runners set active_job_id = null where owner_id = ? and active_job_id = ?")
-    .bind(ownerId, jobId).run();
   return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
 }
 
@@ -462,13 +504,18 @@ export async function failCreativeDnaTrainingJob(
   const runner = runnerId(input.runnerId);
   const error = boundedText(input.error, 500) || "training_runner_failed";
   const now = new Date().toISOString();
-  const result = await env.DB.prepare(`update creative_dna_training_jobs set status = 'failed', error = ?,
-    updated_at = ?, completed_at = ?, runner_lease_until = null
-    where id = ? and owner_id = ? and status = 'running' and runner_id = ?`)
-    .bind(error, now, now, jobId, ownerId, runner).run();
+  const [result] = await env.DB.batch([
+    env.DB.prepare(`update creative_dna_training_jobs set status = 'failed', error = ?,
+      updated_at = ?, completed_at = ?, runner_lease_until = null
+      where id = ? and owner_id = ? and status = 'running' and runner_id = ?`)
+      .bind(error, now, now, jobId, ownerId, runner),
+    env.DB.prepare(`delete from creative_dna_training_evidence_reservations where training_job_id = ?
+      and exists (select 1 from creative_dna_training_jobs where id = ? and owner_id = ? and status in ('failed', 'cancelled'))`)
+      .bind(jobId, jobId, ownerId),
+    env.DB.prepare("update creative_runners set active_job_id = null, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ?")
+      .bind(error, now, runner, ownerId),
+  ]);
   if (!result.meta.changes) throw new Error("training_job_not_completable");
-  await env.DB.prepare("update creative_runners set active_job_id = null, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ?")
-    .bind(error, now, runner, ownerId).run();
   return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
 }
 

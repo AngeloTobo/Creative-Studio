@@ -79,6 +79,7 @@ async function clearData() {
   await env.DB.batch([
     env.DB.prepare("delete from creative_runners"),
     env.DB.prepare("delete from creative_dna_training_reviews"),
+    env.DB.prepare("delete from creative_dna_training_evidence_reservations"),
     env.DB.prepare("delete from creative_dna_training_jobs"),
     env.DB.prepare("delete from creative_training_examples"),
     env.DB.prepare("delete from creative_workflow_revisions"),
@@ -1036,6 +1037,116 @@ describe("Creative Studio Worker API", () => {
     expect(chainedComplete.status).toBe(200);
     const chainedHistory = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; lineage: { sourceArtifactIds: string[] } }> };
     expect(chainedHistory.artifacts[0].lineage.sourceArtifactIds).toEqual([history.artifacts[0].id]);
+  });
+
+  it("derives the durable production loop and captures accepted evidence only once per live training run", async () => {
+    const local = workerEnv("development");
+    const project = await testProject("development-angelo", "Production Loop");
+    const dna = await createLocalDna(env, "development-angelo", {
+      projectId: project.id,
+      name: "Production blueprint",
+      directive: "An original luminous image with precise contrast and a tactile edge.",
+      targetModality: "image",
+    });
+    const loop = async () => {
+      const payload = await result(await routeCreativeStudioApi(request("/api/creative-studio/production-loops"), local)) as {
+        productionLoops: Array<Record<string, unknown>>;
+      };
+      return payload.productionLoops[0];
+    };
+
+    expect(await loop()).toMatchObject({
+      stage: "ready-to-generate",
+      activeDnaArtifactId: dna.artifactId,
+      nextAction: { surface: "generation" },
+    });
+
+    const generated = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        idempotencyKey: "production_loop_generation_001",
+      }),
+    }), local)) as { job: { id: string } };
+    expect(await loop()).toMatchObject({ stage: "generation-running", activeGenerationJobId: generated.job.id });
+
+    await env.DB.prepare("update creative_jobs set created_at = ? where id = ?")
+      .bind("2020-01-01T00:00:00.000Z", generated.job.id).run();
+    expect(await loop()).toMatchObject({ stage: "review-output", counts: { outputsReadyForReview: 1 } });
+
+    const artifacts = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as {
+      artifacts: Array<{ id: string }>;
+    };
+    const artifactId = artifacts.artifacts[0].id;
+    const accepted = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifactId}/accepted`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "Carry the precise contrast and tactile edge into the next DNA version." }),
+    }), local);
+    expect(accepted.status).toBe(200);
+    const evidenceReady = await loop();
+    expect(evidenceReady).toMatchObject({ stage: "evidence-ready", counts: { evidenceFresh: 1, evidenceUsed: 0 } });
+    const freshExampleId = (evidenceReady.freshTrainingExampleIds as string[])[0];
+
+    const started = await result(await routeCreativeStudioApi(request("/api/creative-studio/training-jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        baseDnaArtifactId: dna.artifactId,
+        name: "Production blueprint evolved",
+        targetModality: "image",
+        assetIds: [],
+        includeTrainingExamples: true,
+        idempotencyKey: "production_loop_training_001",
+      }),
+    }), local)) as { trainingJob: { id: string; trainingExampleIds: string[] } };
+    expect(started.trainingJob.trainingExampleIds).toEqual([freshExampleId]);
+    expect(await loop()).toMatchObject({
+      stage: "training-running",
+      activeTrainingJobId: started.trainingJob.id,
+      freshTrainingExampleIds: [],
+      usedTrainingExampleIds: [freshExampleId],
+    });
+
+    const cancelled = await routeCreativeStudioApi(request(`/api/creative-studio/training-jobs/${started.trainingJob.id}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }), local);
+    expect(cancelled.status).toBe(200);
+    expect(await loop()).toMatchObject({
+      stage: "evidence-ready",
+      freshTrainingExampleIds: [freshExampleId],
+      usedTrainingExampleIds: [],
+    });
+
+    const competingRequest = (idempotencyKey: string) => routeCreativeStudioApi(request("/api/creative-studio/training-jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        baseDnaArtifactId: dna.artifactId,
+        name: "Concurrent evidence capture",
+        targetModality: "image",
+        assetIds: [],
+        includeTrainingExamples: true,
+        idempotencyKey,
+      }),
+    }), local);
+    const competing = await Promise.all([
+      competingRequest("production_loop_race_001"),
+      competingRequest("production_loop_race_002"),
+    ]);
+    expect(competing.map((response) => response.status).sort()).toEqual([202, 409]);
+    const conflict = competing.find((response) => response.status === 409)!;
+    expect(await result(conflict)).toMatchObject({ error: "training_evidence_already_reserved" });
+    const reservationCount = await env.DB.prepare("select count(*) as count from creative_dna_training_evidence_reservations where training_example_id = ?")
+      .bind(freshExampleId).first<{ count: number }>();
+    expect(Number(reservationCount?.count)).toBe(1);
   });
 
   it("does not expose a generic proxy route", async () => {

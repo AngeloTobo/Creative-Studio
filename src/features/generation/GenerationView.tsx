@@ -51,7 +51,7 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
   const workflowReady = Boolean(workflow) && mediaParameters.every((parameter) => Boolean(inputBindings[parameter.id]));
 
   return (
-    <section className={`generation-section${embedded ? " embedded" : " fade-up"}`} aria-labelledby="generation-title">
+    <section className={`generation-section${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-labelledby="generation-title">
       <header className="generation-section-head"><div><span className="eyebrow">DNA-to-output translation</span><h2 id="generation-title">Generate</h2><p>Queue image, music, or an imported local workflow from the selected immutable CreativeDNA version.</p></div></header>
       <div className="generation-workspace">
       <section className="generation-dna glass">

@@ -116,7 +116,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onReview }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [expanded, setExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -142,12 +142,13 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview }: { artifact: A
           <button className="btn artifact-reject" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>
           <button className="btn btn-ghost" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "archived" })}><Icon name="archive" size={16} /> Archive</button>
         </div>
+        {training?.status === "training-ready" ? <button className="btn btn-primary artifact-continue-loop" onClick={onContinueLoop}><Icon name="dna" size={16} /> Continue production loop</button> : null}
       </div>
     </article>
   );
 }
 
-export function ArtifactsView({ onQueued }: { onQueued: () => void }) {
+export function ArtifactsView({ onQueued, onContinueLoop }: { onQueued: () => void; onContinueLoop: () => void }) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
@@ -159,7 +160,7 @@ export function ArtifactsView({ onQueued }: { onQueued: () => void }) {
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid">
-        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} />)}
+        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} />)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}

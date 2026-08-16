@@ -57,10 +57,10 @@ export function App() {
     if (!activeProjectId && view !== "projects" && view !== "runtime" && view !== "settings") return <ProjectsView />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
-      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} onMedia={() => navigate("media")} />;
+      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} />;
       case "media": return <MediaView onGenerate={() => navigate("dna")} />;
       case "queue": return <QueueView />;
-      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} />;
+      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} />;
       case "library": return <LibraryView />;
       case "projects": return <ProjectsView />;
       case "runtime": return <RuntimeView />;

@@ -242,8 +242,12 @@ export async function createLocalDna(env: Env, ownerId: string, input: CreateCre
     parentArtifactId: parent?.id ?? null,
     createdAt,
   });
-  await env.DB.prepare(`insert into creative_dna_artifacts (id, owner_id, project_id, root_artifact_id, parent_artifact_id, version, dna_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(artifactId, ownerId, input.projectId, artifact.lineage.rootArtifactId, artifact.lineage.parentArtifactId, artifact.version, JSON.stringify(artifact), createdAt).run();
+  await env.DB.batch([
+    env.DB.prepare(`insert into creative_dna_artifacts (id, owner_id, project_id, root_artifact_id, parent_artifact_id, version, dna_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(artifactId, ownerId, input.projectId, artifact.lineage.rootArtifactId, artifact.lineage.parentArtifactId, artifact.version, JSON.stringify(artifact), createdAt),
+    env.DB.prepare("update creative_projects set active_dna_artifact_id = ?, updated_at = ? where id = ? and owner_id = ?")
+      .bind(artifactId, createdAt, input.projectId, ownerId),
+  ]);
   return artifact;
 }
 

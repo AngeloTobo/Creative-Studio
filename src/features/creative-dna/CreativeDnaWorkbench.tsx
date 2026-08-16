@@ -14,6 +14,7 @@ import { creativeDnaCanGenerate, creativeDnaReviewDecision, useStudio } from "..
 import { Icon } from "../../components/Icon";
 import { GenerationView } from "../generation/GenerationView";
 import { DnaTrainingPanel } from "./DnaTrainingPanel";
+import { ProductionLoopPanel } from "./ProductionLoopPanel";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   energy: "Energy",
@@ -31,7 +32,7 @@ function savedLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "Saved" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => void; onMedia: () => void }) {
+export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void }) {
   const { snapshot, activeProjectId, activeDna, selectDna, saveDna, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const [name, setName] = useState(activeDna?.name ?? "");
@@ -42,9 +43,21 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
   const [dimensions, setDimensions] = useState<CreativeDnaDimensions>({ ...(activeDna?.shared ?? DEFAULT_CREATIVE_DNA_DIMENSIONS) });
   const [influence, setInfluence] = useState<CreativeDnaInfluence>({ ...(activeDna?.influence ?? DEFAULT_CREATIVE_DNA_INFLUENCE) });
   const [copied, setCopied] = useState(false);
+  const [requestedReviewJobId, setRequestedReviewJobId] = useState("");
   const activeReview = snapshot && activeDna ? creativeDnaReviewDecision(snapshot, activeDna) : null;
   const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
   const projectActiveDnaId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
+  const productionLoop = snapshot?.productionLoops.find((loop) => loop.projectId === activeProjectId) ?? null;
+
+  const productionAction = (surface: "author" | "generation" | "queue" | "artifacts" | "training") => {
+    if (surface === "queue") return onQueued();
+    if (surface === "artifacts") return onArtifacts();
+    if (surface === "training" && productionLoop?.pendingTrainingReviewJobId) {
+      setRequestedReviewJobId(productionLoop.pendingTrainingReviewJobId);
+    }
+    const id = surface === "author" ? "creative-dna-authoring" : surface === "generation" ? "creative-dna-generation" : "creative-dna-training";
+    window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   const load = (artifact: CreativeDnaArtifact) => {
     selectDna(artifact);
@@ -101,8 +114,10 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
         <button className="btn btn-ghost" onClick={startNew}><Icon name="plus" size={16} /> New DNA</button>
       </div>
 
+      {productionLoop ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} /> : null}
+
       <div className="dna-layout">
-        <div className="form-card glass dna-compose">
+        <div className="form-card glass dna-compose" id="creative-dna-authoring">
           <div className="fc-head">
             <div className="fc-ic" style={{ "--ta": "var(--pink)" } as React.CSSProperties}><Icon name="dna" size={24} /></div>
             <div><div className="fc-title">Direction</div><div className="fc-sub">Original intent, provenance, and primary output.</div></div>
@@ -151,7 +166,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
         </div>
       </div>
 
-      <DnaTrainingPanel onMedia={onMedia} />
+      <DnaTrainingPanel onMedia={onMedia} reviewJobId={requestedReviewJobId} onReviewJobHandled={() => setRequestedReviewJobId("")} />
       <GenerationView onQueued={onQueued} onMedia={onMedia} embedded />
 
       <div className="dna-history glass">
