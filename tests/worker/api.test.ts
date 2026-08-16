@@ -800,13 +800,25 @@ describe("Creative Studio Worker API", () => {
     }), local)) as { bundle: { job: { upstreamId: string } } };
     expect(resumed.bundle.job.upstreamId).toBe("comfy-prompt-h3-001");
 
+    await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/fail`, {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ error: "The operation was aborted due to timeout" }),
+    }), local);
+    const retried = await result(await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${created.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "runner_video_retry_001" }),
+    }), local)) as { job: { id: string; upstreamId: string; retryOfJobId: string } };
+    expect(retried.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", retryOfJobId: created.job.id });
+    const retriedClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { id: string; upstreamId: string } } };
+    expect(retriedClaim.bundle.job).toMatchObject({ id: retried.job.id, upstreamId: "comfy-prompt-h3-001" });
+
     const runnerMedia = await routeCreativeStudioApi(request(`/api/creative-studio/runner/media/${uploaded.asset.id}`, {
       headers: { authorization: `Bearer ${enrollment.token}` },
     }), local);
     expect([...new Uint8Array(await runnerMedia.arrayBuffer())]).toEqual([...inputBytes]);
 
     const outputBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
-    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/complete`, {
+    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${retried.job.id}/complete`, {
       method: "POST",
       headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "video/mp4", "x-cs-file-size": String(outputBytes.byteLength) },
       body: outputBytes,
@@ -814,9 +826,67 @@ describe("Creative Studio Worker API", () => {
     expect(completed.status).toBe(200);
     expect(await result(completed)).toMatchObject({ job: { status: "completed", modality: "video", provider: "local-comfyui" } });
     expect(values.size).toBe(2);
-    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ kind: string; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
+    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; kind: string; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
     expect(history.artifacts[0]).toMatchObject({ kind: "video", retention: { state: "retained", size: outputBytes.byteLength } });
     expect(history.trainingExamples[0]).toMatchObject({ kind: "video", status: "candidate" });
+
+    const remixGraph = JSON.stringify({
+      "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },
+      "11": { class_type: "SaveVideo", inputs: { video: ["10", 0] } },
+    });
+    const remixWorkflow = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("video-remix-api.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(remixGraph).byteLength),
+      },
+      body: remixGraph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string; parameters: Array<{ id: string; kind: string; mediaKind: string }> } } };
+    const videoInput = remixWorkflow.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "media");
+    expect(videoInput).toMatchObject({ id: "10::video", mediaKind: "video" });
+
+    const chained = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        idempotencyKey: "runner_video_chain_001",
+        workflow: {
+          workflowId: remixWorkflow.workflow.id,
+          revisionId: remixWorkflow.workflow.currentRevision.id,
+          inputBindings: { [videoInput!.id]: history.artifacts[0].id },
+        },
+      }),
+    }), local)) as { job: { id: string; settingsStamp: { inputAssetIds: string[]; inputArtifactIds: string[]; inputSources: Array<{ id: string; source: string }> } } };
+    expect(chained.job.settingsStamp).toMatchObject({
+      inputAssetIds: [],
+      inputArtifactIds: [history.artifacts[0].id],
+      inputSources: [{ id: history.artifacts[0].id, source: "artifact" }],
+    });
+
+    const chainedClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { inputs: Array<{ id: string; source: string; kind: string }> } };
+    expect(chainedClaim.bundle.inputs).toEqual([expect.objectContaining({ id: history.artifacts[0].id, source: "artifact", kind: "video" })]);
+    const chainedInput = await routeCreativeStudioApi(request(`/api/creative-studio/runner/media/${history.artifacts[0].id}`, {
+      headers: { authorization: `Bearer ${enrollment.token}` },
+    }), local);
+    expect(chainedInput.headers.get("content-type")).toBe("video/mp4");
+    expect([...new Uint8Array(await chainedInput.arrayBuffer())]).toEqual([...outputBytes]);
+
+    const chainedOutput = new Uint8Array([...outputBytes, 1]);
+    const chainedComplete = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${chained.job.id}/complete`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "video/mp4", "x-cs-file-size": String(chainedOutput.byteLength) },
+      body: chainedOutput,
+    }), local);
+    expect(chainedComplete.status).toBe(200);
+    const chainedHistory = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; lineage: { sourceArtifactIds: string[] } }> };
+    expect(chainedHistory.artifacts[0].lineage.sourceArtifactIds).toEqual([history.artifacts[0].id]);
   });
 
   it("does not expose a generic proxy route", async () => {

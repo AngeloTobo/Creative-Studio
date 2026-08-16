@@ -73,6 +73,12 @@ export type GenerationSettingsStamp = {
   parameters: Record<string, string | number | boolean>;
   models: string[];
   inputAssetIds: string[];
+  inputArtifactIds?: string[];
+  inputSources?: Array<{
+    id: string;
+    source: "upload" | "artifact";
+    kind: MediaKind;
+  }>;
   inputBindings?: Record<string, string>;
 };
 

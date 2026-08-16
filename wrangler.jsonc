@@ -26,6 +26,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "creative-studio-artifacts"
+    }
+  ],
   "env": {
     "production": {
       "name": "creative-studio",

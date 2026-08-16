@@ -117,15 +117,19 @@ function apiInspection(graph: RecordValue): WorkflowGraphInspection {
     types.push(nodeType);
     collectModels(rawNode, models);
     if (!record(rawNode.inputs)) continue;
-    if (nodeType === "LoadImage" && typeof rawNode.inputs.image === "string") {
+    const inputs = rawNode.inputs;
+    const mediaInput = (["image", "audio", "video"] as const).find((kind) =>
+      typeof inputs[kind] === "string"
+      && new RegExp(`(?:load|input|upload).*${kind}|${kind}.*(?:load|input|upload)`, "i").test(nodeType));
+    if (mediaInput) {
       parameters.push({
-        id: `${nodeId}::image`, label: title || "Input image", kind: "media", value: rawNode.inputs.image,
-        mediaKind: "image", binding: { format: "comfyui-api", nodeId, inputName: "image" },
+        id: `${nodeId}::${mediaInput}`, label: title || `Input ${mediaInput}`, kind: "media", value: inputs[mediaInput] as string,
+        mediaKind: mediaInput, binding: { format: "comfyui-api", nodeId, inputName: mediaInput },
       });
       continue;
     }
     if (/loader|save|preview|markdown/i.test(nodeType)) continue;
-    for (const [inputName, value] of Object.entries(rawNode.inputs)) {
+    for (const [inputName, value] of Object.entries(inputs)) {
       if (!SAFE_API_INPUTS.has(inputName) || !scalar(value)) continue;
       const parameterLabel = inputName === "value" && title ? title : `${title}: ${label(inputName)}`;
       parameters.push({

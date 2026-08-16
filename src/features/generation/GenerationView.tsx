@@ -2,18 +2,26 @@ import { useState } from "react";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
-import type { GenerationModality } from "../../../shared/contracts";
+import type { GenerationModality, WorkflowScalar } from "../../../shared/contracts";
+import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
+import { sameWorkflowValue } from "../workflows/workflowValues";
 
 export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueued: () => void; onMedia: () => void; embedded?: boolean }) {
-  const { snapshot, activeProjectId, activeDna, selectDna, submitJob, submitWorkflowJob, busy, error } = useStudio();
+  const { snapshot, activeProjectId, activeDna, selectDna, submitJob, submitWorkflowJob, saveWorkflowRevision, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const selected = activeDna ?? projectDna[0] ?? null;
   const projectMedia = snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [];
+  const projectArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.retention.state === "retained") ?? [];
   const workflows = snapshot?.workflows.filter((workflow) => workflow.projectId === activeProjectId && workflow.executionState === "ready" && workflow.modality !== "3d") ?? [];
   const [workflowId, setWorkflowId] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
+  const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
+  const [valuesRevisionId, setValuesRevisionId] = useState("");
   const workflow = workflows.find((item) => item.id === workflowId) ?? workflows[0] ?? null;
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
+  const scalarParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind !== "media") ?? [];
+  const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
+  const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value));
   const runnerOnline = snapshot?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
 
   const submit = async (modality: GenerationModality) => {
@@ -26,7 +34,16 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
   const submitWorkflow = async () => {
     if (!selected || !workflow) return;
     selectDna(selected);
-    await submitWorkflowJob(workflow, inputBindings, selected.artifactId);
+    let runWorkflow = workflow;
+    if (settingsChanged) {
+      const modified = Object.fromEntries(scalarParameters
+        .filter((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value))
+        .map((parameter) => [parameter.id, effectiveValues[parameter.id]]));
+      runWorkflow = await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified);
+      setValuesRevisionId(runWorkflow.currentRevision.id);
+      setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+    }
+    await submitWorkflowJob(runWorkflow, inputBindings, selected.artifactId);
     onQueued();
   };
 
@@ -48,18 +65,38 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
           <section className="workflow-generate">
             <header><span><Icon name="flows" size={18} /><strong>Run a local ComfyUI workflow</strong></span><em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em></header>
             {workflows.length ? <>
-              <label className="field"><span>Immutable workflow revision</span><select value={workflow?.id ?? ""} disabled={busy} onChange={(event) => { setWorkflowId(event.target.value); setInputBindings({}); }}>
+              <label className="field"><span>Workflow</span><select value={workflow?.id ?? ""} disabled={busy} onChange={(event) => { setWorkflowId(event.target.value); setInputBindings({}); setWorkflowValues({}); setValuesRevisionId(""); }}>
                 {workflows.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.currentRevision.version} · {item.modality}</option>)}
               </select></label>
               {mediaParameters.map((parameter) => {
-                const choices = projectMedia.filter((asset) => !parameter.mediaKind || asset.kind === parameter.mediaKind);
+                const uploadChoices = projectMedia.filter((asset) => !parameter.mediaKind || asset.kind === parameter.mediaKind)
+                  .map((asset) => ({ id: asset.id, label: `Upload · ${asset.name} · ${asset.originalFileName}` }));
+                const artifactChoices = projectArtifacts.filter((artifact) => {
+                  const artifactKind = artifact.kind === "music" ? "audio" : artifact.kind;
+                  return !parameter.mediaKind || artifactKind === parameter.mediaKind;
+                }).map((artifact) => ({ id: artifact.id, label: `Generated · ${artifact.name} · ${artifact.status}` }));
+                const choices = [...artifactChoices, ...uploadChoices];
                 return <label className="field" key={parameter.id}><span>{parameter.label}</span><select value={inputBindings[parameter.id] ?? ""} onChange={(event) => setInputBindings((current) => ({ ...current, [parameter.id]: event.target.value }))}>
                   <option value="">Select retained {parameter.mediaKind ?? "media"}</option>
-                  {choices.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {asset.originalFileName}</option>)}
+                  {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
                 </select>{!choices.length ? <small>Upload matching project media first.</small> : null}</label>;
               })}
+              {scalarParameters.length ? <details className="workflow-run-settings" open>
+                <summary><span>Run settings</span><em>{settingsChanged ? `Will save as v${workflow!.currentRevision.version + 1}` : `Using v${workflow!.currentRevision.version}`}</em></summary>
+                <div className="workflow-run-parameters">
+                  {scalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={effectiveValues[parameter.id] ?? parameter.value} showBinding={false} onChange={(value) => {
+                    if (valuesRevisionId !== workflow!.currentRevision.id) {
+                      setValuesRevisionId(workflow!.currentRevision.id);
+                      setWorkflowValues({ ...Object.fromEntries(scalarParameters.map((item) => [item.id, item.value])), [parameter.id]: value });
+                    } else {
+                      setWorkflowValues((current) => ({ ...current, [parameter.id]: value }));
+                    }
+                  }} />)}
+                </div>
+                <button type="button" className="btn btn-ghost workflow-run-reset" disabled={!settingsChanged || busy} onClick={() => { setValuesRevisionId(workflow!.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Reset to v{workflow!.currentRevision.version}</button>
+              </details> : null}
               <div className="workflow-generate-meta"><span>{workflow?.currentRevision.nodeCount} nodes</span><span>{workflow?.currentRevision.contentHash.slice(0, 12)}</span><span>{workflow?.currentRevision.models.length ?? 0} models</span></div>
-              <button className="btn btn-primary" disabled={busy || !workflowReady || snapshot?.adapter.development} onClick={() => void submitWorkflow()}><Icon name="send" size={16} /> Queue {workflow?.modality} workflow</button>
+              <button className="btn btn-primary" disabled={busy || !workflowReady || snapshot?.adapter.development} onClick={() => void submitWorkflow()}><Icon name="send" size={16} /> {settingsChanged ? `Save v${workflow!.currentRevision.version + 1} & queue` : `Queue ${workflow?.modality} workflow`}</button>
             </> : <div className="workflow-generate-empty"><span>No API-ready workflows in this project.</span><small>Import an API-format ComfyUI JSON in Workflows first.</small></div>}
           </section>
           {selected.rights.referenceStoredAsProvenanceOnly ? <div className="rights-panel"><Icon name="shield" size={20} /><div><strong>Reference identity is lineage-only</strong><p>{selected.rights.blockedDownstream.join(", ")} are blocked downstream.</p></div></div> : null}

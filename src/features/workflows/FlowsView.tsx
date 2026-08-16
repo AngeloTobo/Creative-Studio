@@ -1,31 +1,9 @@
 import { useRef, useState } from "react";
-import type { WorkflowParameter, WorkflowScalar } from "../../../shared/contracts";
+import type { WorkflowScalar } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
-
-function sameValue(left: WorkflowScalar, right: WorkflowScalar) {
-  return typeof left === typeof right && left === right;
-}
-
-function ParameterField({ parameter, value, onChange }: {
-  parameter: WorkflowParameter;
-  value: WorkflowScalar;
-  onChange: (value: WorkflowScalar) => void;
-}) {
-  if (parameter.kind === "boolean") {
-    return <label className="workflow-toggle"><input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} /><span><strong>{parameter.label}</strong><small>{parameter.id}</small></span></label>;
-  }
-  if (parameter.kind === "number") {
-    return <label className="field workflow-field"><span>{parameter.label}</span><input type="number" value={Number(value)} onChange={(event) => onChange(Number(event.target.value))} /><small>{parameter.id}</small></label>;
-  }
-  const text = String(value);
-  const multiline = text.length > 100 || /prompt|lyrics|caption/i.test(parameter.label);
-  return <label className="field workflow-field"><span>{parameter.label}</span>{multiline
-    ? <textarea value={text} onChange={(event) => onChange(event.target.value)} />
-    : <input value={text} onChange={(event) => onChange(event.target.value)} />}
-    <small>{parameter.kind === "media" ? "ComfyUI input filename" : parameter.id}</small>
-  </label>;
-}
+import { WorkflowParameterField } from "./WorkflowParameterField";
+import { sameWorkflowValue } from "./workflowValues";
 
 export function FlowsView() {
   const { snapshot, activeProjectId, busy, error, uploadWorkflow, saveWorkflowRevision } = useStudio();
@@ -40,7 +18,7 @@ export function FlowsView() {
   const [valuesRevisionId, setValuesRevisionId] = useState("");
 
   const effectiveValues = selected && valuesRevisionId === selected.currentRevision.id ? values : {};
-  const changed = selected?.currentRevision.parameters.some((parameter) => !sameValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value)) ?? false;
+  const changed = selected?.currentRevision.parameters.some((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value)) ?? false;
 
   const importFile = async () => {
     if (!file) return;
@@ -57,7 +35,7 @@ export function FlowsView() {
   const saveVersion = async () => {
     if (!selected || !changed) return;
     const modified = Object.fromEntries(selected.currentRevision.parameters
-      .filter((parameter) => !sameValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value))
+      .filter((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value))
       .map((parameter) => [parameter.id, effectiveValues[parameter.id]]));
     await saveWorkflowRevision(selected.id, selected.currentRevision.id, modified);
   };
@@ -103,7 +81,7 @@ export function FlowsView() {
           <div className="workflow-facts"><span><small>Revision</small><strong>v{selected.currentRevision.version}</strong></span><span><small>Nodes</small><strong>{selected.currentRevision.nodeCount}</strong></span><span><small>Editable</small><strong>{selected.currentRevision.parameters.length}</strong></span><span className="workflow-hash"><small>SHA-256</small><code>{selected.currentRevision.contentHash}</code></span></div>
           {selected.executionState === "api-export-required" ? <div className="workflow-notice"><Icon name="external" size={18} /><span><strong>This is a ComfyUI UI graph.</strong><small>You can version, edit, and download it here. Local automated execution will require its API-format export.</small></span></div> : null}
           <div className="workflow-parameters">
-            {selected.currentRevision.parameters.map((parameter) => <ParameterField key={parameter.id} parameter={parameter} value={effectiveValues[parameter.id] ?? parameter.value} onChange={(value) => {
+            {selected.currentRevision.parameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={effectiveValues[parameter.id] ?? parameter.value} onChange={(value) => {
               if (valuesRevisionId !== selected.currentRevision.id) {
                 setValuesRevisionId(selected.currentRevision.id);
                 setValues({ ...Object.fromEntries(selected.currentRevision.parameters.map((item) => [item.id, item.value])), [parameter.id]: value });

@@ -46,7 +46,7 @@ flowchart LR
 ## Adapters
 
 - `development-local-storage` is deliberately visible and browser-scoped. Its media is a gradient placeholder.
-- `creative-studio-bff` is backend-scoped. In Worker development mode, D1 metadata is durable across process restarts while generated media remains a placeholder.
+- `creative-studio-bff` is backend-scoped. In Worker development mode, D1 and the Wrangler-local R2 store are durable across process restarts. Local ComfyUI workflow jobs retain real outputs; only the explicitly labeled development renderer remains non-media.
 - Production uses the `AFDFW` same-account service binding, dedicated D1/R2/Queue bindings, a five-minute recovery trigger, and Cloudflare Access over `cs.angelotoborg.com/*`.
 
 ## Media intake and training boundary
@@ -55,7 +55,7 @@ flowchart LR
 2. The Worker validates ownership, project state, type, and the 100 MB limit before writing.
 3. The Worker streams the body to a project-scoped R2 key and verifies its stored size.
 4. D1 metadata is committed only after verification, then the asset becomes available through an owner-scoped content route.
-5. Consent and provenance make the asset eligible for a later training workflow. Intake itself never starts training and current image/music generation remains CreativeDNA text-conditioned until an explicit source-conditioned contract is implemented.
+5. Consent and provenance make the asset eligible for a later training workflow. Intake itself never starts training. Narrow AFDFW image/music generation remains CreativeDNA text-conditioned; imported local ComfyUI workflows may explicitly bind compatible retained uploads or generated artifacts to detected media inputs.
 
 ## Job lifecycle guarantees
 
@@ -67,4 +67,15 @@ flowchart LR
 - Cancel stops Creative Studio tracking only before a completed result enters retention. Once a result exists, retention cannot be cancelled.
 - Local workflow jobs use a separate `local-comfyui` execution target, never enter the AFDFW queue consumer, and remain queued while the runner is offline.
 - A paired runner claims one job with a two-minute renewable lease. A restart or lost heartbeat makes the job reclaimable; deterministic artifact IDs and R2 keys prevent duplicate retained results.
+- ComfyUI history polling treats a temporarily busy or timed-out localhost endpoint as transient while continuing Creative Studio heartbeats. A retry after an eligible runner, output-download, or retention failure carries the prior ComfyUI prompt ID into a new lineage-linked job, avoiding duplicate GPU work.
 - Exact workflow revision, SHA-256 hash, parameters, model names, media-parameter-to-asset bindings, DNA lineage, and retry lineage remain stamped on the job and artifact.
+
+## Workflow-backed generation
+
+1. Generate lists only executable API-format workflows for the active project and modality.
+2. Scalar prompt, seed, dimension, duration, sampler, scheduler, switch, and choice controls are editable in context. Changed values are saved as a new immutable workflow revision before the job is queued.
+3. Every detected media input must bind to a compatible retained upload or retained generated artifact owned by the same project.
+4. The job stores the exact revision ID, content hash, parameter values, models, input bindings, and normalized upload/artifact input sources.
+5. The runner downloads only those allowlisted inputs, patches only their detected API bindings, and submits the immutable graph to localhost ComfyUI.
+6. Output selection prefers the modality-compatible save node from the submitted graph, so preview-node files cannot silently replace the intended result.
+7. Completion writes and size-verifies the result in Creative Studio R2 before exposing review, reuse, or CreativeDNA training evidence.

@@ -13,6 +13,7 @@ import {
   type MediaAsset,
   type MediaKind,
   type Project,
+  type RunnerMediaInput,
   type UpdateProjectRequest,
 } from "../shared/contracts";
 import type { AfdfwGeneration } from "./adapters/afdfw";
@@ -142,6 +143,42 @@ export async function mediaObjectById(env: Env, ownerId: string, mediaId: string
   return env.DB.prepare(`select r2_key as r2Key, mime_type as mimeType, size, original_file_name as originalFileName
     from creative_media_assets where id = ? and owner_id = ?`)
     .bind(mediaId, ownerId).first<{ r2Key: string; mimeType: string; size: number; originalFileName: string }>();
+}
+
+export type RunnerInputObject = RunnerMediaInput & { r2Key: string };
+
+function retainedFileName(idValue: string, mimeType: string) {
+  const extension = ({
+    "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+    "audio/wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac", "audio/ogg": "ogg",
+    "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
+  } as Record<string, string>)[mimeType] ?? "bin";
+  return `creative-studio-${idValue}.${extension}`;
+}
+
+export async function runnerInputById(env: Env, ownerId: string, inputId: string): Promise<RunnerInputObject | null> {
+  const upload = await env.DB.prepare(`select id, project_id as projectId, kind, name,
+    original_file_name as originalFileName, mime_type as mimeType, size, r2_key as r2Key
+    from creative_media_assets where id = ? and owner_id = ? and status = 'retained'`)
+    .bind(inputId, ownerId).first<Omit<RunnerInputObject, "source">>();
+  if (upload) return { ...upload, size: Number(upload.size), source: "upload" };
+
+  const artifact = await env.DB.prepare(`select id, project_id as projectId, kind, name,
+    retained_content_type as mimeType, retained_size as size, retained_key as r2Key
+    from creative_artifacts where id = ? and owner_id = ? and retained_key is not null and retained_size > 0`)
+    .bind(inputId, ownerId).first<{
+      id: string; projectId: string; kind: Artifact["kind"]; name: string;
+      mimeType: string; size: number; r2Key: string;
+    }>();
+  if (!artifact) return null;
+  const kind: RunnerMediaInput["kind"] = artifact.kind === "music" ? "audio" : artifact.kind;
+  return {
+    ...artifact,
+    kind,
+    size: Number(artifact.size),
+    originalFileName: retainedFileName(artifact.id, artifact.mimeType),
+    source: "artifact",
+  };
 }
 
 export async function updateProject(env: Env, ownerId: string, projectId: string, input: UpdateProjectRequest) {
@@ -301,6 +338,7 @@ export async function createQueuedJob(
     executionTarget?: "afdfw" | "local-comfyui";
     workflowId?: string | null;
     workflowRevisionId?: string | null;
+    upstreamId?: string | null;
   },
 ) {
   const existing = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -334,7 +372,7 @@ export async function createQueuedJob(
     progress: 1,
     prompt,
     provider: input.provider,
-    upstreamId: null,
+    upstreamId: input.upstreamId ?? null,
     artifactId: null,
     retryOfJobId: input.retryOfJobId ?? null,
     error: null,
@@ -349,9 +387,9 @@ export async function createQueuedJob(
       upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, completed_at,
       reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at, settings_stamp_json,
       execution_target, workflow_id, workflow_revision_id
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
       .bind(job.id, ownerId, input.projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress,
-        job.prompt, job.provider, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
+        job.prompt, job.provider, job.upstreamId, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
         JSON.stringify(job.settingsStamp), input.executionTarget ?? "afdfw", input.workflowId ?? null, input.workflowRevisionId ?? null).run();
     return { job, created: true };
   } catch (error) {
@@ -601,6 +639,7 @@ export async function reconcileDevelopmentJobs(env: Env, ownerId: string) {
   const jobs = await listJobs(env, ownerId);
   const now = new Date();
   for (const job of jobs) {
+    if (job.provider !== "development-worker" || job.settingsStamp.source !== "creative-dna") continue;
     if (job.status !== "queued" && job.status !== "running") continue;
     const age = now.getTime() - new Date(job.createdAt).getTime();
     if (age >= 3_200) {
@@ -621,18 +660,21 @@ type ArtifactRow = {
 
 export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
   const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, created_at as createdAt, updated_at as updatedAt, settings_stamp_json as settingsStampJson from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
-  return (result.results ?? []).map((row) => ({
-    id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
-    name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
-    preview: { kind: row.previewKind, url: row.previewUrl, colors: [row.previewFrom, row.previewTo] },
-    lineage: { sourceArtifactIds: [row.dnaArtifactId], parentArtifactId: row.parentArtifactId },
-    retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
-    settingsStamp: parseSettingsStamp(row.settingsStampJson, {
+  return (result.results ?? []).map((row) => {
+    const settingsStamp = parseSettingsStamp(row.settingsStampJson, {
       source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
       provider: row.provider, modality: row.kind, workflow: null, parameters: { prompt: row.prompt }, models: [], inputAssetIds: [],
-    }),
-    createdAt: row.createdAt, updatedAt: row.updatedAt,
-  }));
+    });
+    return {
+      id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
+      name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
+      preview: { kind: row.previewKind, url: row.previewUrl, colors: [row.previewFrom, row.previewTo] },
+      lineage: { sourceArtifactIds: settingsStamp.inputArtifactIds ?? [], parentArtifactId: row.parentArtifactId },
+      retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
+      settingsStamp,
+      createdAt: row.createdAt, updatedAt: row.updatedAt,
+    };
+  });
 }
 
 export async function listAcceptances(env: Env, ownerId: string): Promise<Acceptance[]> {

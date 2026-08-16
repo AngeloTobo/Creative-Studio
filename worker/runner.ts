@@ -5,7 +5,7 @@ import type {
   RunnerJobHeartbeatRequest,
 } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
-import { completeLocalRunnerJob, jobById, listMediaAssets, mediaObjectById } from "./repository";
+import { completeLocalRunnerJob, jobById, runnerInputById } from "./repository";
 import type { Env } from "./types";
 import { workflowExecutionPlan } from "./workflows";
 
@@ -139,11 +139,10 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   if (!job?.settingsStamp.workflow) throw new Error("runner_workflow_missing");
   const plan = await workflowExecutionPlan(env, runner.ownerId, job.settingsStamp.workflow.workflowId, job.settingsStamp.workflow.revisionId);
   const inputIds = [...new Set(Object.values(job.settingsStamp.inputBindings ?? {}))];
-  const assets = await listMediaAssets(env, runner.ownerId);
-  const inputs = inputIds.map((assetId) => assets.find((asset) => asset.id === assetId));
-  if (inputs.some((asset) => !asset)) throw new Error("runner_input_asset_not_found");
-  if (inputs.some((asset) => asset?.projectId !== job.projectId)) throw new Error("runner_input_project_mismatch");
-  return { job, workflow: plan.workflow, graph: plan.graph, inputs: inputs.filter((asset) => Boolean(asset)) };
+  const inputs = await Promise.all(inputIds.map((inputId) => runnerInputById(env, runner.ownerId, inputId)));
+  if (inputs.some((input) => !input)) throw new Error("runner_input_source_not_found");
+  if (inputs.some((input) => input?.projectId !== job.projectId)) throw new Error("runner_input_project_mismatch");
+  return { job, workflow: plan.workflow, graph: plan.graph, inputs: inputs.filter((input) => Boolean(input)) };
 }
 
 export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, jobId: string, input: RunnerJobHeartbeatRequest) {
@@ -186,7 +185,7 @@ export async function completeClaimedLocalRunnerJob(
 
 export async function localRunnerMedia(env: Env, runner: RunnerIdentity, mediaId: string) {
   if (!env.ARTIFACTS) throw new Error("artifact_storage_not_configured");
-  const media = await mediaObjectById(env, runner.ownerId, mediaId);
+  const media = await runnerInputById(env, runner.ownerId, mediaId);
   if (!media) throw new Error("media_not_found");
   const object = await env.ARTIFACTS.get(media.r2Key);
   if (!object) throw new Error("media_not_found");

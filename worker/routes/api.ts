@@ -46,6 +46,7 @@ import {
   projectById,
   reconcileDevelopmentJobs,
   reviewArtifact,
+  runnerInputById,
   updateProject,
 } from "../repository";
 import { retainCompletedArtifact } from "../retention";
@@ -275,15 +276,22 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           .filter(([parameterId, assetId]) => Boolean(parameterId && assetId))) as Record<string, string>;
         if (Object.keys(inputBindings).some((parameterId) => !allowedParameters.has(parameterId))) throw new Error("unknown_workflow_media_parameter");
         if (mediaParameters.some((parameter) => !inputBindings[parameter.id])) throw new Error("workflow_media_input_required");
-        const assets = await listMediaAssets(env, session.userId);
-        for (const parameter of mediaParameters) {
-          const asset = assets.find((item) => item.id === inputBindings[parameter.id]);
-          if (!asset) throw new Error("runner_input_asset_not_found");
-          if (asset.projectId !== input.projectId) throw new Error("runner_input_project_mismatch");
-          if (parameter.mediaKind && asset.kind !== parameter.mediaKind && !(parameter.mediaKind === "audio" && asset.kind === "audio")) {
+        const resolvedInputs = await Promise.all(mediaParameters.map(async (parameter) => ({
+          parameter,
+          input: await runnerInputById(env, session.userId, inputBindings[parameter.id]),
+        })));
+        for (const { parameter, input: resolvedInput } of resolvedInputs) {
+          if (!resolvedInput) throw new Error("runner_input_source_not_found");
+          if (resolvedInput.projectId !== input.projectId) throw new Error("runner_input_project_mismatch");
+          if (parameter.mediaKind && resolvedInput.kind !== parameter.mediaKind) {
             throw new Error("runner_input_media_mismatch");
           }
         }
+        const inputSources = resolvedInputs.map(({ input: resolvedInput }) => ({
+          id: resolvedInput!.id,
+          source: resolvedInput!.source,
+          kind: resolvedInput!.kind,
+        }));
         const parameterValues = Object.fromEntries(plan.workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
         const workflowPrompt = plan.workflow.currentRevision.parameters
           .filter((parameter) => parameter.kind === "text" && /prompt|caption|lyrics|text/i.test(`${parameter.label} ${parameter.id}`))
@@ -319,7 +327,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             },
             parameters: parameterValues,
             models: plan.workflow.currentRevision.models,
-            inputAssetIds: [...new Set(Object.values(inputBindings))],
+            inputAssetIds: inputSources.filter((inputSource) => inputSource.source === "upload").map((inputSource) => inputSource.id),
+            inputArtifactIds: inputSources.filter((inputSource) => inputSource.source === "artifact").map((inputSource) => inputSource.id),
+            inputSources,
             inputBindings,
           },
         });
@@ -361,7 +371,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         modality: original.modality,
         idempotencyKey: idempotencyKey(input.idempotencyKey),
         reconcileEmail: developmentMode(env) || localWorkflow ? null : reconciliationEmail(request),
-        provider: developmentMode(env) ? "development-worker" : original.provider,
+        provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
         promptOverride: original.settingsStamp.prompt,
         executionTarget: localWorkflow ? "local-comfyui" : "afdfw",
         workflowId: original.settingsStamp.workflow?.workflowId ?? null,
@@ -370,7 +380,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           ...original.settingsStamp,
           createdAt,
           reusedFromJobId: original.id,
-          provider: developmentMode(env) ? "development-worker" : original.provider,
+          provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
         },
       });
       if (!developmentMode(env) && !localWorkflow) {
@@ -391,6 +401,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!project) throw new Error("project_not_found");
       if (project.status === "archived") throw new Error("project_archived");
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
+      const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
+        && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
         projectId: original.projectId,
@@ -398,12 +410,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         modality: original.modality,
         idempotencyKey: idempotencyKey(input.idempotencyKey),
         reconcileEmail: developmentMode(env) || localWorkflow ? null : reconciliationEmail(request),
-        provider: developmentMode(env) ? "development-worker" : original.provider,
+        provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
         retryOfJobId: original.id,
         promptOverride: original.settingsStamp.prompt,
         executionTarget: localWorkflow ? "local-comfyui" : "afdfw",
         workflowId: original.settingsStamp.workflow?.workflowId ?? null,
         workflowRevisionId: original.settingsStamp.workflow?.revisionId ?? null,
+        upstreamId: resumeLocalUpstream ? original.upstreamId : null,
         settingsStampOverride: localWorkflow ? {
           ...original.settingsStamp,
           createdAt,

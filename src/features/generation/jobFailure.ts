@@ -16,6 +16,8 @@ const FAILURE_SUMMARIES: Record<string, string> = {
   artifact_retention_not_configured: "Creative Studio artifact storage is not connected. Restore the R2 binding before retrying.",
   artifact_retention_verification_failed: "Creative Studio received media bytes that did not match the provider's declared size. Check the upstream output, then retry retention through a new job.",
   generation_in_progress: "The provider already has an active generation for this capability. Let it finish or cancel it upstream before retrying.",
+  runner_input_source_not_found: "A bound upload or generated artifact is no longer retained. Choose a current retained input and queue a new run.",
+  runner_input_media_mismatch: "A bound workflow input has the wrong media type. Choose an image, audio file, or video that matches the workflow control.",
 };
 
 function sentence(value: string) {
@@ -35,7 +37,13 @@ export function jobIssuePresentation(status: JobStatus, error: string | null, mo
     };
   }
   const summary = FAILURE_SUMMARIES[raw]
-    ?? (raw.startsWith("afdfw_media_") ? "AFDFW could not serve the generated media. Check the AFDFW/ComfyUI media route, then retry." : sentence(raw));
+    ?? (raw.startsWith("afdfw_media_")
+      ? "AFDFW could not serve the generated media. Check the AFDFW/ComfyUI media route, then retry."
+      : raw.startsWith("comfyui_prompt_rejected")
+        ? "ComfyUI rejected the saved workflow before execution. Open the provider detail below, correct the named node or setting, save a new workflow version, and retry."
+        : raw.startsWith("comfyui_execution_failed")
+          ? "ComfyUI failed while executing the workflow. Review the provider detail and machine logs, correct the workflow or model state, then retry as a new durable job."
+          : sentence(raw));
   return {
     title: "Job failed",
     summary,

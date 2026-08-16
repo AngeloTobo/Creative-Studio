@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const RUNNER_VERSION = "1.0.0";
+export const RUNNER_VERSION = "1.0.1";
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -14,12 +14,13 @@ function configPath() {
 }
 
 export function loadConfig(path = configPath()) {
-  if (!existsSync(path)) throw new Error(`Runner config not found: ${path}`);
-  const parsed = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
-  const apiBase = String(parsed.apiBase || "").replace(/\/+$/, "");
-  const token = String(parsed.token || "");
-  const comfyUrl = String(parsed.comfyUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
-  const pollIntervalMs = Math.max(2_000, Math.min(60_000, Number(parsed.pollIntervalMs) || 5_000));
+  const hasEnvironmentConfig = Boolean(process.env.CS_RUNNER_API_BASE || process.env.CS_RUNNER_TOKEN || process.env.CS_COMFY_URL);
+  if (!existsSync(path) && !hasEnvironmentConfig) throw new Error(`Runner config not found: ${path}`);
+  const parsed = existsSync(path) ? JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) : {};
+  const apiBase = String(process.env.CS_RUNNER_API_BASE || parsed.apiBase || "").replace(/\/+$/, "");
+  const token = String(process.env.CS_RUNNER_TOKEN || parsed.token || "");
+  const comfyUrl = String(process.env.CS_COMFY_URL || parsed.comfyUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
+  const pollIntervalMs = Math.max(2_000, Math.min(60_000, Number(process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs) || 5_000));
   if (!/^https:\/\//.test(apiBase) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase)) throw new Error("Runner apiBase must use HTTPS or local HTTP.");
   if (!/^csr_[A-Za-z0-9_-]{40,80}$/.test(token)) throw new Error("Runner token is missing or invalid.");
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(comfyUrl)) throw new Error("ComfyUI must be bound to localhost.");
@@ -136,10 +137,28 @@ const EXTENSIONS = {
   video: [".mp4", ".webm", ".mov"],
 };
 
-export function findComfyOutput(historyEntry, modality) {
-  const files = allFileObjects(historyEntry?.outputs || {});
+const OUTPUT_NODE_PATTERNS = {
+  image: /save.*image|image.*save/i,
+  music: /save.*audio|audio.*save/i,
+  video: /save.*video|video.*save|video.*combine|combine.*video|saveanimatedwebp/i,
+};
+
+function matchingOutput(files, extensions, nodeId = null) {
+  const file = files.find((item) => extensions.some((extension) => item.filename.toLowerCase().endsWith(extension)));
+  return file ? { ...file, nodeId } : null;
+}
+
+export function findComfyOutput(historyEntry, modality, graph = null) {
   const extensions = EXTENSIONS[modality] || [];
-  return files.find((file) => extensions.some((extension) => file.filename.toLowerCase().endsWith(extension))) || null;
+  const outputs = historyEntry?.outputs || {};
+  const preferred = graph && typeof graph === "object" ? Object.entries(graph)
+    .filter(([, node]) => OUTPUT_NODE_PATTERNS[modality]?.test(String(node?.class_type || "")))
+    .map(([nodeId]) => nodeId) : [];
+  for (const nodeId of preferred) {
+    const output = matchingOutput(allFileObjects(outputs[nodeId] || {}), extensions, nodeId);
+    if (output) return output;
+  }
+  return matchingOutput(allFileObjects(outputs), extensions);
 }
 
 function historyError(entry) {
@@ -148,6 +167,10 @@ function historyError(entry) {
   const messages = Array.isArray(status.messages) ? status.messages : [];
   const execution = messages.find((item) => Array.isArray(item) && item[0] === "execution_error");
   return execution?.[1]?.exception_message || execution?.[1]?.exception_type || "comfyui_execution_failed";
+}
+
+export function isTransientComfyPollError(error) {
+  return error?.name === "TimeoutError" || error?.name === "AbortError" || error instanceof TypeError;
 }
 
 async function waitForOutput(config, bundle, promptId) {
@@ -165,13 +188,24 @@ async function waitForOutput(config, bundle, promptId) {
       if (!heartbeat.continue) throw new Error("creative_studio_job_cancelled");
       lastHeartbeat = Date.now();
     }
-    const response = await fetch(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, { signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) throw new Error(`comfyui_history_${response.status}`);
-    const history = await response.json();
+    let history;
+    try {
+      const response = await fetch(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, { signal: AbortSignal.timeout(15_000) });
+      if (response.status >= 500) {
+        await sleep(2_000);
+        continue;
+      }
+      if (!response.ok) throw new Error(`comfyui_history_${response.status}`);
+      history = await response.json();
+    } catch (error) {
+      if (!isTransientComfyPollError(error)) throw error;
+      await sleep(2_000);
+      continue;
+    }
     const entry = history[promptId];
     const error = historyError(entry);
     if (error) throw new Error(`comfyui_execution_failed:${error}`);
-    const output = findComfyOutput(entry, bundle.job.modality);
+    const output = findComfyOutput(entry, bundle.job.modality, bundle.graph);
     if (output) return output;
     await sleep(2_000);
   }
@@ -246,8 +280,17 @@ function selfTest() {
   const parameters = [{ id: "1::image", kind: "media", binding: { format: "comfyui-api", nodeId: "1", inputName: "image" } }];
   const patched = applyInputFilenames(graph, parameters, { "1::image": "new.png" });
   if (patched["1"].inputs.image !== "new.png" || graph["1"].inputs.image !== "old.png") throw new Error("runner_self_test_patch_failed");
-  const output = findComfyOutput({ outputs: { "9": { images: [{ filename: "result.png", type: "output" }] } } }, "image");
+  const output = findComfyOutput({ outputs: {
+    "2": { images: [{ filename: "preview.png", type: "temp" }] },
+    "9": { images: [{ filename: "result.png", type: "output" }] },
+  } }, "image", {
+    "2": { class_type: "PreviewImage" },
+    "9": { class_type: "SaveImage" },
+  });
   if (output?.filename !== "result.png") throw new Error("runner_self_test_output_failed");
+  if (!isTransientComfyPollError({ name: "TimeoutError" }) || isTransientComfyPollError(new Error("invalid_history"))) {
+    throw new Error("runner_self_test_transient_poll_failed");
+  }
   process.stdout.write("Creative Studio Local Runner self-test passed.\n");
 }
 

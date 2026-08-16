@@ -179,11 +179,22 @@ export type RunnerHeartbeatRequest = {
   error?: string | null;
 };
 
+export type RunnerMediaInput = {
+  id: string;
+  projectId: string;
+  kind: "image" | "audio" | "video";
+  name: string;
+  originalFileName: string;
+  mimeType: string;
+  size: number;
+  source: "upload" | "artifact";
+};
+
 export type RunnerJobBundle = {
   job: Job;
   workflow: WorkflowDefinition;
   graph: unknown;
-  inputs: MediaAsset[];
+  inputs: RunnerMediaInput[];
 };
 
 export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };

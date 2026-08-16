@@ -40,4 +40,17 @@ describe("ComfyUI workflow inspection", () => {
     const updated = applyWorkflowValues(graph, inspection.parameters, { "root:115::megapixels": 0.8 }) as typeof graph;
     expect(updated.nodes[1].widgets_values[1]).toBe(0.8);
   });
+
+  it("detects retained audio and video file inputs in API graphs", () => {
+    const inspection = inspectWorkflowGraph({
+      "1": { class_type: "LoadAudio", inputs: { audio: "voice.wav" }, _meta: { title: "Voice guide" } },
+      "2": { class_type: "VHS_LoadVideo", inputs: { video: "motion.mp4", force_rate: 0 } },
+      "3": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    expect(inspection.modality).toBe("video");
+    expect(inspection.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "1::audio", kind: "media", mediaKind: "audio" }),
+      expect.objectContaining({ id: "2::video", kind: "media", mediaKind: "video" }),
+    ]));
+  });
 });
