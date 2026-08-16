@@ -4,6 +4,7 @@ export type ProjectStatus = "active" | "paused" | "archived";
 
 export type Project = {
   id: string;
+  activeDnaArtifactId: string | null;
   name: string;
   type: string;
   status: ProjectStatus;
@@ -145,6 +146,20 @@ export type CreativeDnaTrainingJob = {
   updatedAt: IsoDateString;
   startedAt: IsoDateString | null;
   completedAt: IsoDateString | null;
+};
+
+export type CreativeDnaTrainingReviewDecision = "approved" | "rejected";
+
+export type CreativeDnaTrainingReview = {
+  id: string;
+  projectId: string;
+  trainingJobId: string;
+  dnaArtifactId: string;
+  decision: CreativeDnaTrainingReviewDecision;
+  note: string;
+  actor: "angelo" | "development-user";
+  activeDnaArtifactId: string | null;
+  createdAt: IsoDateString;
 };
 
 export type MediaKind = "image" | "audio" | "video";

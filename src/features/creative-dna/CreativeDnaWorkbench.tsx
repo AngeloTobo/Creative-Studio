@@ -10,7 +10,7 @@ import {
   type CreativeDnaSourceKind,
   type CreativeDnaTarget,
 } from "../../../shared/contracts";
-import { useStudio } from "../../app/StudioProvider";
+import { creativeDnaCanGenerate, creativeDnaReviewDecision, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { GenerationView } from "../generation/GenerationView";
 import { DnaTrainingPanel } from "./DnaTrainingPanel";
@@ -42,6 +42,9 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
   const [dimensions, setDimensions] = useState<CreativeDnaDimensions>({ ...(activeDna?.shared ?? DEFAULT_CREATIVE_DNA_DIMENSIONS) });
   const [influence, setInfluence] = useState<CreativeDnaInfluence>({ ...(activeDna?.influence ?? DEFAULT_CREATIVE_DNA_INFLUENCE) });
   const [copied, setCopied] = useState(false);
+  const activeReview = snapshot && activeDna ? creativeDnaReviewDecision(snapshot, activeDna) : null;
+  const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
+  const projectActiveDnaId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
 
   const load = (artifact: CreativeDnaArtifact) => {
     selectDna(artifact);
@@ -125,7 +128,8 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
 
           {sourceKind === "commercial_reference" ? <label className="field"><span>Reference identity · lineage only</span><input className="input" value={referenceLabel} maxLength={160} onChange={(event) => setReferenceLabel(event.target.value)} placeholder="Title / artist" /><small className="rights-note"><Icon name="shield" size={14} /> Identity is stored as provenance and excluded from generation prompts.</small></label> : null}
 
-          <button className="btn btn-primary dna-save" disabled={busy || invalid} onClick={() => void save()}><Icon name="wand" size={17} /> {busy ? "Saving…" : activeDna ? "Save new version" : "Build CreativeDNA"}</button>
+          <button className="btn btn-primary dna-save" disabled={busy || invalid || !activeDnaReviewed} onClick={() => void save()}><Icon name="wand" size={17} /> {busy ? "Saving…" : activeDna ? "Save new version" : "Build CreativeDNA"}</button>
+          {!activeDnaReviewed ? <p className="training-boundary">Review this trained version before creating a child version.</p> : null}
           {error ? <div className="inline-error" role="alert">{error}</div> : null}
         </div>
 
@@ -140,7 +144,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
           </div>
 
           {activeDna ? <div className="dna-result" role="status">
-            <div className="dna-result-title"><div><span className="badge active">Saved · v{activeDna.version}</span>{activeDna.rights.referenceStoredAsProvenanceOnly ? <span className="badge rights">Rights-safe</span> : null}<h3>{activeDna.name}</h3></div><button className="lc-act" aria-label="Copy active prompt" onClick={() => void copyPrompt()}><Icon name={copied ? "check" : "copy"} size={17} /></button></div>
+            <div className="dna-result-title"><div><span className="badge active">Saved · v{activeDna.version}</span>{activeReview ? <span className={`state-pill ${activeReview === "pending" ? "waiting-for-runner" : activeReview}`}>training {activeReview}</span> : null}{projectActiveDnaId === activeDna.artifactId ? <span className="badge active">Project active</span> : null}{activeDna.rights.referenceStoredAsProvenanceOnly ? <span className="badge rights">Rights-safe</span> : null}<h3>{activeDna.name}</h3></div><button className="lc-act" aria-label="Copy active prompt" onClick={() => void copyPrompt()}><Icon name={copied ? "check" : "copy"} size={17} /></button></div>
             <p>{activeDna.source.directive}</p>
             <small className="dna-result-next">Training and generation controls use this saved version below.</small>
           </div> : <div className="dna-empty"><Icon name="dna" size={30} /><strong>Your versioned blueprint appears here.</strong><span>Build it, reopen it, then evolve it without overwriting history.</span></div>}
@@ -153,7 +157,10 @@ export function CreativeDnaWorkbench({ onQueued, onMedia }: { onQueued: () => vo
       <div className="dna-history glass">
         <div className="dna-history-head"><div><span className="eyebrow">Lineage</span><h3>Version history</h3></div><span>{projectDna.length} saved</span></div>
         <div className="dna-history-strip">
-          {projectDna.map((artifact) => <button key={artifact.artifactId} className={`dna-history-item${activeDna?.artifactId === artifact.artifactId ? " on" : ""}`} onClick={() => load(artifact)}><span>{artifact.targetModality}</span><strong>{artifact.name}</strong><small>v{artifact.version} · {savedLabel(artifact.createdAt)}</small><em>{artifact.lineage.parentArtifactId ? "Evolved" : "Root"}</em></button>)}
+          {projectDna.map((artifact) => {
+            const review = snapshot ? creativeDnaReviewDecision(snapshot, artifact) : null;
+            return <button key={artifact.artifactId} className={`dna-history-item${activeDna?.artifactId === artifact.artifactId ? " on" : ""}`} onClick={() => load(artifact)}><span>{artifact.targetModality}</span><strong>{artifact.name}</strong><small>v{artifact.version} · {savedLabel(artifact.createdAt)}</small><em>{review ? `Training ${review}` : artifact.lineage.parentArtifactId ? "Evolved" : "Root"}</em></button>;
+          })}
           {!projectDna.length ? <span className="empty-copy">No saved DNA yet.</span> : null}
         </div>
       </div>

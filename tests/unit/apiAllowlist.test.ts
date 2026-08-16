@@ -21,6 +21,7 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/workflows/workflow_123/content")).toBe("workflow-content");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/training-jobs")).toBe("training-jobs-list");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs")).toBe("training-job-create");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs/dnatraining_123/review")).toBe("training-job-review");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/claim")).toBe("runner-training-claim");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/heartbeat")).toBe("runner-training-heartbeat");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/complete")).toBe("runner-training-complete");

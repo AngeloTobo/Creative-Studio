@@ -2,11 +2,15 @@ import type {
   CompleteCreativeDnaTrainingJobRequest,
   CreateCreativeDnaTrainingJobRequest,
   CreativeDnaTrainingAnalysis,
+  CreativeDnaArtifact,
   CreativeDnaTrainingJob,
+  CreativeDnaTrainingReview,
+  CreativeDnaTrainingReviewDecision,
   CreativeDnaTrainingSourceAnalysis,
   CreativeTrainingExample,
   FailCreativeDnaTrainingJobRequest,
   MediaAsset,
+  ReviewCreativeDnaTrainingRequest,
 } from "../shared/contracts";
 import { CREATIVE_DNA_DIMENSION_KEYS } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
@@ -41,11 +45,27 @@ type TrainingRow = {
   completedAt: string | null;
 };
 
+type TrainingReviewRow = {
+  id: string;
+  projectId: string;
+  trainingJobId: string;
+  dnaArtifactId: string;
+  decision: CreativeDnaTrainingReviewDecision;
+  note: string;
+  actor: CreativeDnaTrainingReview["actor"];
+  activeDnaArtifactId: string | null;
+  createdAt: string;
+};
+
 const TRAINING_COLUMNS = `id, project_id as projectId, base_dna_artifact_id as baseDnaArtifactId,
   result_dna_artifact_id as resultDnaArtifactId, name, target_modality as targetModality, status,
   progress, provider, asset_ids_json as assetIdsJson, training_example_ids_json as trainingExampleIdsJson,
   runner_id as runnerId, runner_lease_until as runnerLeaseUntil, error, created_at as createdAt,
   updated_at as updatedAt, started_at as startedAt, completed_at as completedAt`;
+
+const TRAINING_REVIEW_COLUMNS = `id, project_id as projectId, training_job_id as trainingJobId,
+  dna_artifact_id as dnaArtifactId, decision, note, actor,
+  active_dna_artifact_id as activeDnaArtifactId, created_at as createdAt`;
 
 function ids(value: string) {
   try {
@@ -78,6 +98,25 @@ export async function listCreativeDnaTrainingJobs(env: Env, ownerId: string) {
   return (result.results ?? []).map(mapTrainingJob);
 }
 
+export async function listCreativeDnaTrainingReviews(env: Env, ownerId: string): Promise<CreativeDnaTrainingReview[]> {
+  const result = await env.DB.prepare(`select ${TRAINING_REVIEW_COLUMNS} from creative_dna_training_reviews
+    where owner_id = ? order by created_at desc, rowid desc limit 250`)
+    .bind(ownerId).all<TrainingReviewRow>();
+  return (result.results ?? []) as CreativeDnaTrainingReview[];
+}
+
+async function latestTrainingReview(env: Env, ownerId: string, dnaArtifactId: string) {
+  return env.DB.prepare(`select ${TRAINING_REVIEW_COLUMNS} from creative_dna_training_reviews
+    where owner_id = ? and dna_artifact_id = ? order by created_at desc, rowid desc limit 1`)
+    .bind(ownerId, dnaArtifactId).first<TrainingReviewRow>();
+}
+
+export async function assertCreativeDnaReviewed(env: Env, ownerId: string, artifact: CreativeDnaArtifact) {
+  if (!artifact.training) return;
+  const review = await latestTrainingReview(env, ownerId, artifact.artifactId);
+  if (review?.decision !== "approved") throw new Error("training_review_required");
+}
+
 export async function createCreativeDnaTrainingJob(
   env: Env,
   ownerId: string,
@@ -104,6 +143,7 @@ export async function createCreativeDnaTrainingJob(
   const base = input.baseDnaArtifactId ? dna.find((artifact) => artifact.artifactId === input.baseDnaArtifactId) : null;
   if (input.baseDnaArtifactId && !base) throw new Error("creative_dna_not_found");
   if (base && base.projectId !== input.projectId) throw new Error("dna_project_mismatch");
+  if (base) await assertCreativeDnaReviewed(env, ownerId, base);
 
   const trainingExamples = input.includeTrainingExamples
     ? (await listTrainingExamples(env, ownerId)).filter((example) => example.projectId === input.projectId && example.status === "training-ready")
@@ -195,6 +235,58 @@ export async function cancelCreativeDnaTrainingJob(env: Env, ownerId: string, jo
   await env.DB.prepare("update creative_runners set active_job_id = null where owner_id = ? and active_job_id = ?")
     .bind(ownerId, jobId).run();
   return mapTrainingJob((await trainingRow(env, ownerId, jobId))!);
+}
+
+export async function reviewCreativeDnaTrainingJob(
+  env: Env,
+  ownerId: string,
+  jobId: string,
+  input: ReviewCreativeDnaTrainingRequest,
+  actor: CreativeDnaTrainingReview["actor"],
+) {
+  if (input.decision !== "approved" && input.decision !== "rejected") throw new Error("invalid_training_review");
+  const note = boundedText(input.note, 500);
+  if (!note) throw new Error("training_review_note_required");
+  const row = await trainingRow(env, ownerId, jobId);
+  if (!row) throw new Error("training_job_not_found");
+  const trainingJob = mapTrainingJob(row);
+  if (trainingJob.status !== "completed" || !trainingJob.resultDnaArtifactId) throw new Error("training_review_not_ready");
+  const project = await projectById(env, ownerId, trainingJob.projectId);
+  if (!project) throw new Error("project_not_found");
+  if (project.status === "archived") throw new Error("project_archived");
+  const artifact = (await listLocalDna(env, ownerId)).find((item) => item.artifactId === trainingJob.resultDnaArtifactId);
+  if (!artifact?.training || artifact.training.jobId !== trainingJob.id) throw new Error("training_result_not_found");
+
+  const activeDnaArtifactId = input.decision === "approved"
+    ? artifact.artifactId
+    : project.activeDnaArtifactId === artifact.artifactId
+      ? trainingJob.baseDnaArtifactId
+      : project.activeDnaArtifactId;
+  const createdAt = new Date().toISOString();
+  const review: CreativeDnaTrainingReview = {
+    id: id("dnareview"),
+    projectId: trainingJob.projectId,
+    trainingJobId: trainingJob.id,
+    dnaArtifactId: artifact.artifactId,
+    decision: input.decision,
+    note,
+    actor,
+    activeDnaArtifactId,
+    createdAt,
+  };
+  await env.DB.batch([
+    env.DB.prepare(`insert into creative_dna_training_reviews (
+      id, owner_id, project_id, training_job_id, dna_artifact_id, decision, note, actor,
+      active_dna_artifact_id, created_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(review.id, ownerId, review.projectId, review.trainingJobId, review.dnaArtifactId,
+        review.decision, review.note, review.actor, review.activeDnaArtifactId, review.createdAt),
+    env.DB.prepare("update creative_projects set active_dna_artifact_id = ?, updated_at = ? where id = ? and owner_id = ?")
+      .bind(activeDnaArtifactId, createdAt, trainingJob.projectId, ownerId),
+  ]);
+  const updatedProject = await projectById(env, ownerId, trainingJob.projectId);
+  if (!updatedProject) throw new Error("project_not_found");
+  return { trainingJob, review, project: updatedProject, artifact };
 }
 
 function boundedConfidence(value: unknown) {

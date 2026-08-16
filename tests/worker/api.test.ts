@@ -78,6 +78,7 @@ function memoryBucket() {
 async function clearData() {
   await env.DB.batch([
     env.DB.prepare("delete from creative_runners"),
+    env.DB.prepare("delete from creative_dna_training_reviews"),
     env.DB.prepare("delete from creative_dna_training_jobs"),
     env.DB.prepare("delete from creative_training_examples"),
     env.DB.prepare("delete from creative_workflow_revisions"),
@@ -397,6 +398,104 @@ describe("Creative Studio Worker API", () => {
       rights: { policy: "abstract-attributes-only" },
       lineage: { parentArtifactId: baseDna.artifactId },
     });
+
+    const trainedDnaArtifactId = completedPayload.trainingJob.resultDnaArtifactId;
+    const postJson = (path: string, body: object) => routeCreativeStudioApi(request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "training@example.com" },
+      body: JSON.stringify(body),
+    }), production);
+
+    const pendingState = await result(await routeCreativeStudioApi(request("/api/creative-studio/training-jobs"), production)) as {
+      trainingReviews: unknown[];
+    };
+    expect(pendingState.trainingReviews).toEqual([]);
+
+    const pendingGeneration = await postJson("/api/creative-studio/jobs", {
+      projectId: project.id,
+      dnaArtifactId: trainedDnaArtifactId,
+      modality: "image",
+      idempotencyKey: "training_review_pending_generation_001",
+    });
+    expect(pendingGeneration.status).toBe(409);
+    expect(await result(pendingGeneration)).toMatchObject({ error: "training_review_required" });
+
+    const pendingChild = await postJson("/api/creative-studio/dna", {
+      projectId: project.id,
+      parentArtifactId: trainedDnaArtifactId,
+      name: "Blocked child",
+      directive: "This derivative must wait for review.",
+      targetModality: "image",
+    });
+    expect(pendingChild.status).toBe(409);
+    expect(await result(pendingChild)).toMatchObject({ error: "training_review_required" });
+
+    const pendingTraining = await postJson("/api/creative-studio/training-jobs", {
+      projectId: project.id,
+      baseDnaArtifactId: trainedDnaArtifactId,
+      name: "Blocked training child",
+      targetModality: "image",
+      assetIds: [uploaded.asset.id],
+      includeTrainingExamples: false,
+      idempotencyKey: "training_review_pending_training_001",
+    });
+    expect(pendingTraining.status).toBe(409);
+    expect(await result(pendingTraining)).toMatchObject({ error: "training_review_required" });
+
+    const missingNote = await postJson(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/review`, {
+      decision: "approved",
+      note: "   ",
+    });
+    expect(missingNote.status).toBe(400);
+    expect(await result(missingNote)).toMatchObject({ error: "training_review_note_required" });
+
+    const approved = await postJson(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/review`, {
+      decision: "approved",
+      note: "The trained warmth and contrast match the consented source evidence.",
+    });
+    expect(approved.status).toBe(201);
+    expect(await result(approved)).toMatchObject({
+      review: {
+        decision: "approved",
+        note: "The trained warmth and contrast match the consented source evidence.",
+        actor: "angelo",
+        activeDnaArtifactId: trainedDnaArtifactId,
+      },
+      project: { activeDnaArtifactId: trainedDnaArtifactId },
+    });
+
+    const approvedGeneration = await postJson("/api/creative-studio/jobs", {
+      projectId: project.id,
+      dnaArtifactId: trainedDnaArtifactId,
+      modality: "image",
+      idempotencyKey: "training_review_approved_generation_001",
+    });
+    expect(approvedGeneration.status).toBe(202);
+
+    const rejected = await postJson(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/review`, {
+      decision: "rejected",
+      note: "The measured direction now overstates polish; return to the prior baseline.",
+    });
+    expect(rejected.status).toBe(201);
+    expect(await result(rejected)).toMatchObject({
+      review: { decision: "rejected", actor: "angelo", activeDnaArtifactId: baseDna.artifactId },
+      project: { activeDnaArtifactId: baseDna.artifactId },
+    });
+
+    const rejectedGeneration = await postJson("/api/creative-studio/jobs", {
+      projectId: project.id,
+      dnaArtifactId: trainedDnaArtifactId,
+      modality: "image",
+      idempotencyKey: "training_review_rejected_generation_001",
+    });
+    expect(rejectedGeneration.status).toBe(409);
+    expect(await result(rejectedGeneration)).toMatchObject({ error: "training_review_required" });
+
+    const reviewedState = await result(await routeCreativeStudioApi(request("/api/creative-studio/training-jobs"), production)) as {
+      trainingReviews: Array<{ decision: string; actor: string; note: string }>;
+    };
+    expect(reviewedState.trainingReviews).toHaveLength(2);
+    expect(reviewedState.trainingReviews.map((review) => review.decision)).toEqual(["rejected", "approved"]);
   });
 
   it("imports API workflow JSON, detects safe controls, versions edits, and exports exact revisions", async () => {

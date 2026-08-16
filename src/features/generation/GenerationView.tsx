@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useStudio } from "../../app/StudioProvider";
+import { creativeDnaCanGenerate, creativeDnaReviewDecision, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
 import type { GenerationModality, WorkflowScalar } from "../../../shared/contracts";
@@ -9,7 +9,8 @@ import { sameWorkflowValue } from "../workflows/workflowValues";
 export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueued: () => void; onMedia: () => void; embedded?: boolean }) {
   const { snapshot, activeProjectId, activeDna, selectDna, submitJob, submitWorkflowJob, saveWorkflowRevision, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
-  const selected = activeDna ?? projectDna[0] ?? null;
+  const availableDna = snapshot ? projectDna.filter((artifact) => creativeDnaCanGenerate(snapshot, artifact)) : [];
+  const selected = snapshot && activeDna && creativeDnaCanGenerate(snapshot, activeDna) ? activeDna : availableDna[0] ?? null;
   const projectMedia = snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [];
   const projectArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.retention.state === "retained") ?? [];
   const workflows = snapshot?.workflows.filter((workflow) => workflow.projectId === activeProjectId && workflow.executionState === "ready" && workflow.modality !== "3d") ?? [];
@@ -109,7 +110,11 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
         <p className="generation-media-note">Direct generation uses the saved DNA prompt. Local workflows use their exact saved prompt, settings, and bound media inputs.</p>
         <span className="eyebrow">Saved DNA</span>
         <div className="generation-dna-list">
-          {projectDna.map((artifact) => <button key={artifact.artifactId} className={selected?.artifactId === artifact.artifactId ? "on" : ""} onClick={() => selectDna(artifact)}><Icon name={artifact.targetModality} size={16} /><span><strong>{artifact.name}</strong><small>v{artifact.version} · {artifact.source.kind === "commercial_reference" ? "reference-safe" : "original"}</small></span></button>)}
+          {projectDna.map((artifact) => {
+            const usable = snapshot ? creativeDnaCanGenerate(snapshot, artifact) : false;
+            const review = snapshot ? creativeDnaReviewDecision(snapshot, artifact) : null;
+            return <button key={artifact.artifactId} disabled={!usable} className={`${selected?.artifactId === artifact.artifactId ? "on" : ""}${!usable ? " review-locked" : ""}`} onClick={() => selectDna(artifact)}><Icon name={artifact.targetModality} size={16} /><span><strong>{artifact.name}</strong><small>v{artifact.version} · {review ? `training ${review}` : artifact.source.kind === "commercial_reference" ? "reference-safe" : "original"}</small></span></button>;
+          })}
         </div>
         <div className="queue-mini">
           <span className="eyebrow">Active jobs</span>

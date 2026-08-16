@@ -16,6 +16,7 @@ import {
   type RunnerFailJobRequest,
   type RunnerTrainingHeartbeatRequest,
   type RunnerCompleteTrainingRequest,
+  type ReviewCreativeDnaTrainingRequest,
 } from "../../shared/contracts";
 import {
   afdfwGenerations,
@@ -67,12 +68,15 @@ import {
 } from "../runner";
 import {
   cancelCreativeDnaTrainingJob,
+  assertCreativeDnaReviewed,
   claimLocalRunnerTrainingJob,
   completeLocalRunnerTrainingJob,
   createCreativeDnaTrainingJob,
   failLocalRunnerTrainingJob,
   heartbeatLocalRunnerTrainingJob,
   listCreativeDnaTrainingJobs,
+  listCreativeDnaTrainingReviews,
+  reviewCreativeDnaTrainingJob,
 } from "../training";
 
 function developmentMode(env: Env) {
@@ -97,7 +101,8 @@ function statusFor(error: string) {
   if (error === "media_upload_verification_failed") return 502;
   if (error === "invalid_media_range") return 416;
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable"
-    || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable") return 409;
+    || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable"
+    || error === "training_review_required" || error === "training_review_not_ready") return 409;
   if (error === "runner_job_not_completable") return 409;
   return 400;
 }
@@ -271,6 +276,11 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     if (route === "dna-create") {
       const input = await body<CreateCreativeDnaRequest>(request);
       if (!input) return json({ ok: false, error: "invalid_json" }, { status: 400 });
+      if (input.parentArtifactId) {
+        const parent = (await listLocalDna(env, session.userId)).find((artifact) => artifact.artifactId === input.parentArtifactId);
+        if (!parent) throw new Error("parent_artifact_not_found");
+        await assertCreativeDnaReviewed(env, session.userId, parent);
+      }
       const artifact = await createLocalDna(env, session.userId, input);
       return json({ ok: true, artifact }, { status: 201 });
     }
@@ -289,6 +299,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const project = await projectById(env, session.userId, input.projectId);
       if (!project) return json({ ok: false, error: "project_not_found" }, { status: 404 });
       if (project.status === "archived") return json({ ok: false, error: "project_archived" }, { status: 400 });
+      await assertCreativeDnaReviewed(env, session.userId, dna);
       const modality = input.modality as GenerationModality;
       if (input.workflow) {
         if (!input.workflow.workflowId || !input.workflow.revisionId || !input.workflow.inputBindings || typeof input.workflow.inputBindings !== "object") {
@@ -392,6 +403,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const project = await projectById(env, session.userId, original.projectId);
       if (!project) throw new Error("project_not_found");
       if (project.status === "archived") throw new Error("project_archived");
+      await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
@@ -429,6 +441,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const project = await projectById(env, session.userId, original.projectId);
       if (!project) throw new Error("project_not_found");
       if (project.status === "archived") throw new Error("project_archived");
+      await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
         && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
@@ -500,7 +513,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!match) return json({ ok: false, error: "invalid_runner_request" }, { status: 400 });
       return json({ ok: true, runner: await revokeLocalRunner(env, session.userId, match[1]) });
     }
-    if (route === "training-jobs-list") return json({ ok: true, trainingJobs: await listCreativeDnaTrainingJobs(env, session.userId) });
+    if (route === "training-jobs-list") {
+      const [trainingJobs, trainingReviews] = await Promise.all([
+        listCreativeDnaTrainingJobs(env, session.userId),
+        listCreativeDnaTrainingReviews(env, session.userId),
+      ]);
+      return json({ ok: true, trainingJobs, trainingReviews });
+    }
     if (route === "training-job-create") {
       const input = await body<CreateCreativeDnaTrainingJobRequest>(request);
       if (!input || !Array.isArray(input.assetIds)) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
@@ -514,6 +533,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/cancel$/i);
       if (!match) return json({ ok: false, error: "invalid_training_job_request" }, { status: 400 });
       return json({ ok: true, trainingJob: await cancelCreativeDnaTrainingJob(env, session.userId, match[1]) });
+    }
+    if (route === "training-job-review") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/training-jobs\/([a-z0-9_]+)\/review$/i);
+      const input = await body<ReviewCreativeDnaTrainingRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_training_review" }, { status: 400 });
+      const actor = developmentMode(env) ? "development-user" : "angelo";
+      return json({ ok: true, ...await reviewCreativeDnaTrainingJob(env, session.userId, match[1], input, actor) }, { status: 201 });
     }
     if (route === "artifact-review") {
       const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/(accepted|rejected|archived)$/i);

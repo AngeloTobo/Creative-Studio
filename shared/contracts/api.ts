@@ -11,6 +11,8 @@ import type {
   StudioSession,
   CreativeTrainingExample,
   CreativeDnaTrainingJob,
+  CreativeDnaTrainingReview,
+  CreativeDnaTrainingReviewDecision,
   LocalRunner,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis } from "./creativeDna";
@@ -38,7 +40,7 @@ export type CreativeStudioRoute =
   | "artifacts-list" | "artifact-review" | "artifact-media"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
-  | "training-jobs-list" | "training-job-create" | "training-job-cancel"
+  | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-fail" | "runner-media-content"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail";
@@ -69,6 +71,7 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "GET" && pathname === "/api/creative-studio/training-jobs") return "training-jobs-list";
   if (method === "POST" && pathname === "/api/creative-studio/training-jobs") return "training-job-create";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "training-job-cancel";
+  if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/review$/i.test(pathname)) return "training-job-review";
   if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
   if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
   if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
@@ -97,6 +100,7 @@ export type StudioSnapshot = {
   workflows: WorkflowDefinition[];
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
+  trainingReviews: CreativeDnaTrainingReview[];
   runners: LocalRunner[];
   capabilities: Capability[];
   acceptances: Acceptance[];
@@ -158,6 +162,13 @@ export type CreateCreativeDnaTrainingJobRequest = {
 export type CompleteCreativeDnaTrainingJobRequest = { runnerId: string; dna: CreativeDnaInput; analysis: CreativeDnaTrainingAnalysis };
 export type FailCreativeDnaTrainingJobRequest = { runnerId: string; error: string };
 export type CreativeDnaTrainingJobResponse = { trainingJob: CreativeDnaTrainingJob };
+export type ReviewCreativeDnaTrainingRequest = { decision: CreativeDnaTrainingReviewDecision; note: string };
+export type ReviewCreativeDnaTrainingResponse = {
+  trainingJob: CreativeDnaTrainingJob;
+  review: CreativeDnaTrainingReview;
+  project: Project;
+  artifact: CreativeDnaArtifact;
+};
 export type CreativeDnaTrainingBundleResponse = {
   trainingJob: CreativeDnaTrainingJob;
   baseDna: CreativeDnaArtifact | null;

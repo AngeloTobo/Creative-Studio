@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import type { CreativeDnaTarget } from "../../../shared/contracts";
-import { useStudio } from "../../app/StudioProvider";
+import { creativeDnaCanGenerate, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
+import { TrainingReviewPanel } from "./TrainingReviewPanel";
 
 function statusLabel(status: string) {
   if (status === "waiting-for-runner") return "Waiting for local trainer";
@@ -9,7 +10,7 @@ function statusLabel(status: string) {
 }
 
 export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
-  const { snapshot, activeProjectId, activeDna, startDnaTraining, cancelDnaTraining, busy, error } = useStudio();
+  const { snapshot, activeProjectId, activeDna, startDnaTraining, cancelDnaTraining, reviewDnaTraining, busy, error } = useStudio();
   const eligibleAssets = useMemo(() => snapshot?.mediaAssets
     .filter((asset) => asset.projectId === activeProjectId && asset.trainingEligible) ?? [], [activeProjectId, snapshot?.mediaAssets]);
   const trainingExamples = snapshot?.trainingExamples
@@ -19,6 +20,7 @@ export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
   const [name, setName] = useState("");
   const [targetModality, setTargetModality] = useState<CreativeDnaTarget>(activeDna?.targetModality ?? "image");
   const [includeExamples, setIncludeExamples] = useState(true);
+  const [reviewingJobId, setReviewingJobId] = useState("");
   const selectedAssetIds = selected.filter((assetId) => eligibleAssets.some((asset) => asset.id === assetId));
 
   const toggle = (assetId: string) => setSelected((current) => current.includes(assetId)
@@ -38,6 +40,18 @@ export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
   };
 
   const hasInputs = selectedAssetIds.length > 0 || (includeExamples && trainingExamples.length > 0);
+  const reviewingJob = jobs.find((job) => job.id === reviewingJobId && job.status === "completed" && job.resultDnaArtifactId) ?? null;
+  const reviewingArtifact = reviewingJob
+    ? snapshot?.dnaArtifacts.find((artifact) => artifact.artifactId === reviewingJob.resultDnaArtifactId) ?? null
+    : null;
+  const reviewingBase = reviewingJob?.baseDnaArtifactId
+    ? snapshot?.dnaArtifacts.find((artifact) => artifact.artifactId === reviewingJob.baseDnaArtifactId) ?? null
+    : null;
+  const reviewingDecisions = reviewingJob
+    ? snapshot?.trainingReviews.filter((review) => review.trainingJobId === reviewingJob.id) ?? []
+    : [];
+  const activeDnaArtifactId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
+  const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
 
   return <section className="dna-training glass" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
@@ -62,8 +76,8 @@ export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
         <div className="field"><span>Primary output</span><div className="seg">{(["image", "music"] as CreativeDnaTarget[]).map((target) => <button key={target} className={targetModality === target ? "on" : ""} onClick={() => setTargetModality(target)}><Icon name={target} size={15} /> {target}</button>)}</div></div>
         <label className="training-consent training-evidence-toggle"><input type="checkbox" checked={includeExamples} disabled={busy || !trainingExamples.length} onChange={(event) => setIncludeExamples(event.target.checked)} /><span><strong>Include accepted generation evidence</strong><small>{trainingExamples.length} prompt + exact-settings {trainingExamples.length === 1 ? "example" : "examples"} ready</small></span></label>
         <div className="training-base"><span className="eyebrow">Lineage</span><strong>{activeDna ? `Evolve ${activeDna.name} v${activeDna.version}` : "Create a new DNA root"}</strong><small>The completed runner result becomes a new immutable CreativeDNA version.</small></div>
-        <button className="btn btn-primary training-start" disabled={busy || !hasInputs || snapshot?.adapter.development} onClick={() => void start()}><Icon name="dna" size={17} /> Start training</button>
-        {snapshot?.adapter.development ? <p className="training-boundary">Real uploads and training runs require the Creative Studio Worker.</p> : <p className="training-boundary">The run is durable immediately. It remains visibly waiting until your authenticated local trainer claims it.</p>}
+        <button className="btn btn-primary training-start" disabled={busy || !hasInputs || snapshot?.adapter.development || !activeDnaReviewed} onClick={() => void start()}><Icon name="dna" size={17} /> Start training</button>
+        {snapshot?.adapter.development ? <p className="training-boundary">Real uploads and training runs require the Creative Studio Worker.</p> : !activeDnaReviewed ? <p className="training-boundary">Review the selected trained CreativeDNA before using it as another training baseline.</p> : <p className="training-boundary">The run is durable immediately. It remains visibly waiting until your authenticated local trainer claims it.</p>}
       </div>
     </div>
 
@@ -75,8 +89,20 @@ export function DnaTrainingPanel({ onMedia }: { onMedia: () => void }) {
         <span><strong>{job.name}</strong><small>{job.assetIds.length} uploads · {job.trainingExampleIds.length} accepted examples · {job.targetModality}</small></span>
         <span className="training-run-progress"><b>{job.progress}%</b><small>{job.resultDnaArtifactId ? `DNA ${job.resultDnaArtifactId}` : job.runnerId ? `runner ${job.runnerId}` : "runner not claimed"}</small></span>
         {job.status === "waiting-for-runner" || job.status === "running" ? <button className="btn btn-ghost" disabled={busy} onClick={() => void cancelDnaTraining(job.id)}>Cancel</button> : null}
+        {job.status === "completed" && job.resultDnaArtifactId ? <button className="btn btn-ghost" disabled={busy} onClick={() => setReviewingJobId(job.id)}>{snapshot?.trainingReviews.some((review) => review.trainingJobId === job.id) ? "Review history" : "Review result"}</button> : null}
       </article>)}
       {!jobs.length ? <p className="empty-copy">No training runs started for this project.</p> : null}
     </div>
+
+    {reviewingJob && reviewingArtifact ? <TrainingReviewPanel
+      job={reviewingJob}
+      artifact={reviewingArtifact}
+      baseArtifact={reviewingBase}
+      reviews={reviewingDecisions}
+      active={activeDnaArtifactId === reviewingArtifact.artifactId}
+      busy={busy}
+      onClose={() => setReviewingJobId("")}
+      onDecision={(decision, note) => reviewDnaTraining(reviewingJob.id, decision, note)}
+    /> : null}
   </section>;
 }

@@ -15,6 +15,7 @@ import type {
   WorkflowScalar,
   CreateCreativeDnaTrainingJobRequest,
   CreativeDnaTrainingJob,
+  CreativeDnaTrainingReviewDecision,
   EnrollLocalRunnerResponse,
   LocalRunner,
 } from "../../shared/contracts";
@@ -44,6 +45,7 @@ type StudioContextValue = {
   saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
   startDnaTraining: (input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => Promise<CreativeDnaTrainingJob>;
   cancelDnaTraining: (jobId: string) => Promise<void>;
+  reviewDnaTraining: (jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string) => Promise<void>;
   enrollLocalRunner: (name: string) => Promise<EnrollLocalRunnerResponse>;
   revokeLocalRunner: (runnerId: string) => Promise<LocalRunner>;
   refresh: () => Promise<void>;
@@ -57,6 +59,24 @@ function message(error: unknown) {
 
 function firstAvailableProject(snapshot: StudioSnapshot) {
   return snapshot.projects.find((project) => project.status !== "archived")?.id ?? "";
+}
+
+export function creativeDnaReviewDecision(snapshot: StudioSnapshot, artifact: CreativeDnaArtifact) {
+  if (!artifact.training) return null;
+  return snapshot.trainingReviews.find((review) => review.dnaArtifactId === artifact.artifactId)?.decision ?? "pending";
+}
+
+export function creativeDnaCanGenerate(snapshot: StudioSnapshot, artifact: CreativeDnaArtifact) {
+  return !artifact.training || creativeDnaReviewDecision(snapshot, artifact) === "approved";
+}
+
+function preferredProjectDna(snapshot: StudioSnapshot, projectId: string) {
+  const project = snapshot.projects.find((item) => item.id === projectId);
+  const projectDna = snapshot.dnaArtifacts.filter((artifact) => artifact.projectId === projectId);
+  const activated = project?.activeDnaArtifactId
+    ? projectDna.find((artifact) => artifact.artifactId === project.activeDnaArtifactId && creativeDnaCanGenerate(snapshot, artifact))
+    : null;
+  return activated ?? projectDna.find((artifact) => creativeDnaCanGenerate(snapshot, artifact)) ?? null;
 }
 
 function operationKey(prefix: string) {
@@ -79,8 +99,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         ? currentProjectId
         : firstAvailableProject(next);
       setActiveDna((currentDna) => {
-        if (currentDna?.projectId === projectId && next.dnaArtifacts.some((artifact) => artifact.artifactId === currentDna.artifactId)) return currentDna;
-        return next.dnaArtifacts.find((artifact) => artifact.projectId === projectId) ?? null;
+        const current = currentDna?.projectId === projectId
+          ? next.dnaArtifacts.find((artifact) => artifact.artifactId === currentDna.artifactId)
+          : null;
+        if (current) return current;
+        return preferredProjectDna(next, projectId);
       });
       return projectId;
     });
@@ -203,6 +226,17 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.cancelCreativeDnaTraining(jobId));
   }, [adapter, transact]);
 
+  const reviewDnaTraining = useCallback(async (jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string) => {
+    const result = await transact(() => adapter.reviewCreativeDnaTraining(jobId, decision, note));
+    if (decision === "approved") {
+      setActiveDna(result.artifact);
+    } else {
+      setActiveDna((current) => current?.artifactId === result.artifact.artifactId
+        ? snapshot?.dnaArtifacts.find((artifact) => artifact.artifactId === result.trainingJob.baseDnaArtifactId) ?? null
+        : current);
+    }
+  }, [adapter, snapshot?.dnaArtifacts, transact]);
+
   const enrollLocalRunner = useCallback((name: string) => transact(() => adapter.enrollLocalRunner(name)), [adapter, transact]);
   const revokeLocalRunner = useCallback((runnerId: string) => transact(() => adapter.revokeLocalRunner(runnerId)), [adapter, transact]);
 
@@ -223,8 +257,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const selectProject = useCallback((projectId: string) => {
     setActiveProjectId(projectId);
-    setActiveDna(snapshot?.dnaArtifacts.find((artifact) => artifact.projectId === projectId) ?? null);
-  }, [snapshot?.dnaArtifacts]);
+    setActiveDna(snapshot ? preferredProjectDna(snapshot, projectId) : null);
+  }, [snapshot]);
 
   const selectDna = useCallback((artifact: CreativeDnaArtifact | null) => {
     setActiveDna(artifact);
@@ -255,10 +289,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     saveWorkflowRevision,
     startDnaTraining,
     cancelDnaTraining,
+    reviewDnaTraining,
     enrollLocalRunner,
     revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, reviewDnaTraining, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

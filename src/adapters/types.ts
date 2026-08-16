@@ -14,6 +14,8 @@ import type {
   WorkflowDefinition,
   CreateCreativeDnaTrainingJobRequest,
   CreativeDnaTrainingJob,
+  CreativeDnaTrainingReviewDecision,
+  ReviewCreativeDnaTrainingResponse,
   EnrollLocalRunnerResponse,
   LocalRunner,
 } from "../../shared/contracts";
@@ -36,6 +38,7 @@ export interface StudioAdapter {
   saveWorkflowRevision(workflowId: string, input: SaveWorkflowRevisionRequest): Promise<WorkflowDefinition>;
   startCreativeDnaTraining(input: CreateCreativeDnaTrainingJobRequest): Promise<CreativeDnaTrainingJob>;
   cancelCreativeDnaTraining(jobId: string): Promise<CreativeDnaTrainingJob>;
+  reviewCreativeDnaTraining(jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string): Promise<ReviewCreativeDnaTrainingResponse>;
   enrollLocalRunner(name: string): Promise<EnrollLocalRunnerResponse>;
   revokeLocalRunner(runnerId: string): Promise<LocalRunner>;
 }

@@ -10,6 +10,7 @@ import {
   type CreativeDnaArtifact,
   type CreativeTrainingExample,
   type CreativeDnaTrainingJob,
+  type CreativeDnaTrainingReview,
   type GenerationSettingsStamp,
   type Job,
   type MediaAsset,
@@ -36,6 +37,7 @@ type DevelopmentState = {
   workflows: WorkflowDefinition[];
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
+  trainingReviews: CreativeDnaTrainingReview[];
   idempotencyKeys: Record<string, string>;
 };
 
@@ -50,7 +52,7 @@ function defaultId(prefix: string) {
 }
 
 function emptyState(): DevelopmentState {
-  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], acceptances: [], idempotencyKeys: {} };
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} };
 }
 
 function cleanText(value: unknown, limit: number) {
@@ -104,7 +106,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
       durableScope: "browser",
     },
     session: { status: "development", userId: "development-angelo", displayName: "Angelo" },
-    projects: state.projects,
+    projects: state.projects.map((project) => ({ ...project, activeDnaArtifactId: project.activeDnaArtifactId ?? null })),
     dnaArtifacts: [...state.dnaArtifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     jobs: [...state.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     artifacts: [...state.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -112,6 +114,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    trainingReviews: [...(state.trainingReviews ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     runners: [],
     capabilities: capabilitySnapshot(now),
     acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -255,6 +258,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       const createdAt = now().toISOString();
       const project: Project = {
         id: makeId("project"),
+        activeDnaArtifactId: null,
         status: "active",
         ...projectValues(input),
         createdAt,
@@ -405,6 +409,9 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       throw new Error("creative_dna_training_requires_creative_studio_worker");
     },
     async cancelCreativeDnaTraining() {
+      throw new Error("creative_dna_training_requires_creative_studio_worker");
+    },
+    async reviewCreativeDnaTraining() {
       throw new Error("creative_dna_training_requires_creative_studio_worker");
     },
     async enrollLocalRunner() {

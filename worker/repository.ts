@@ -48,19 +48,19 @@ function projectInput(input: CreateProjectRequest) {
 }
 
 export async function projectById(env: Env, ownerId: string, projectId: string) {
-  return env.DB.prepare(`select id, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where id = ? and owner_id = ?`)
+  return env.DB.prepare(`select id, active_dna_artifact_id as activeDnaArtifactId, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where id = ? and owner_id = ?`)
     .bind(projectId, ownerId).first<ProjectRow>();
 }
 
 export async function listProjects(env: Env, ownerId: string): Promise<Project[]> {
-  const result = await env.DB.prepare(`select id, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where owner_id = ? order by case when status = 'archived' then 1 else 0 end, created_at`).bind(ownerId).all<ProjectRow>();
+  const result = await env.DB.prepare(`select id, active_dna_artifact_id as activeDnaArtifactId, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where owner_id = ? order by case when status = 'archived' then 1 else 0 end, created_at`).bind(ownerId).all<ProjectRow>();
   return (result.results ?? []) as Project[];
 }
 
 export async function createProject(env: Env, ownerId: string, input: CreateProjectRequest) {
   const values = projectInput(input);
   const now = new Date().toISOString();
-  const project: Project = { id: id("project"), status: "active", ...values, createdAt: now, updatedAt: now };
+  const project: Project = { id: id("project"), activeDnaArtifactId: null, status: "active", ...values, createdAt: now, updatedAt: now };
   await env.DB.prepare(`insert into creative_projects (id, owner_id, name, type, status, description, note, hue, initials, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(project.id, ownerId, project.name, project.type, project.status, project.description, project.note, project.hue, project.initials, now, now).run();
   return project;

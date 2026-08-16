@@ -29,6 +29,9 @@ import {
   type CreativeDnaTrainingJob,
   type CreateCreativeDnaTrainingJobRequest,
   type CreativeDnaTrainingJobResponse,
+  type CreativeDnaTrainingReview,
+  type CreativeDnaTrainingReviewDecision,
+  type ReviewCreativeDnaTrainingResponse,
   type LocalRunner,
   type EnrollLocalRunnerResponse,
   type RevokeLocalRunnerResponse,
@@ -95,7 +98,7 @@ export function createHttpAdapter(): StudioAdapter {
       request<{ artifacts: Artifact[]; acceptances: StudioSnapshot["acceptances"]; trainingExamples: CreativeTrainingExample[] }>(CREATIVE_STUDIO_ROUTES.artifacts),
       request<{ assets: MediaAsset[] }>(CREATIVE_STUDIO_ROUTES.media),
       request<{ workflows: WorkflowDefinition[] }>(CREATIVE_STUDIO_ROUTES.workflows),
-      request<{ trainingJobs: CreativeDnaTrainingJob[] }>(CREATIVE_STUDIO_ROUTES.trainingJobs),
+      request<{ trainingJobs: CreativeDnaTrainingJob[]; trainingReviews: CreativeDnaTrainingReview[] }>(CREATIVE_STUDIO_ROUTES.trainingJobs),
       request<{ runners: LocalRunner[] }>(CREATIVE_STUDIO_ROUTES.runners),
       request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
     ]);
@@ -110,6 +113,7 @@ export function createHttpAdapter(): StudioAdapter {
       workflows: workflows.workflows,
       trainingExamples: artifacts.trainingExamples,
       trainingJobs: trainingJobs.trainingJobs,
+      trainingReviews: trainingJobs.trainingReviews,
       runners: runners.runners,
       acceptances: artifacts.acceptances,
       capabilities: capabilities.capabilities,
@@ -210,6 +214,13 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify({}),
       });
       return result.trainingJob;
+    },
+    async reviewCreativeDnaTraining(jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string) {
+      if (!note.trim()) throw new Error("training_review_note_required");
+      return request<ReviewCreativeDnaTrainingResponse>(`${CREATIVE_STUDIO_ROUTES.trainingJobs}/${encodeURIComponent(jobId)}/review`, {
+        method: "POST",
+        body: JSON.stringify({ decision, note }),
+      });
     },
     async enrollLocalRunner(name: string) {
       return request<EnrollLocalRunnerResponse>(`${CREATIVE_STUDIO_ROUTES.runners}/enroll`, {
