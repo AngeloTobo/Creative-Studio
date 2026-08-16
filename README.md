@@ -4,7 +4,7 @@ Creative Studio is a standalone creative workstation. It owns its React frontend
 
 ## Run locally
 
-Install dependencies and start the explicitly labeled browser-persistent development adapter:
+Install dependencies and start the explicitly labeled browser-persistent development adapter. It starts empty and creates no example projects or artifacts:
 
 ```powershell
 npm install
@@ -44,7 +44,7 @@ npm run check:env:production
 
 ## Runtime modes
 
-- `development`: explicitly labeled mock media, with real browser-local job/history persistence.
+- `development`: explicitly labeled simulated media, with real browser-local project, job, and history persistence. The first run contains no records.
 - `http`: the frontend calls only the Creative Studio BFF. The Worker uses standalone D1 and either its development renderer or narrow AFDFW adapters.
 - `BACKEND_MODE=development`: no AFDFW calls; suitable for local Worker verification.
 - `BACKEND_MODE=afdfw`: the production Worker uses the same-account `art-feed-dfw` service binding for approved-session handoff and generation only. Do not put tokens in Vite environment variables.
@@ -60,6 +60,8 @@ The independent production application is live at [cs.angelotoborg.com](https://
 - Generic `workers.dev` route: disabled in production
 
 CreativeDNA, projects, jobs, artifacts, and decisions remain in Creative Studio D1. AFDFW supplies the approved identity and allowlisted generation capabilities. Accepting generated media first retains it in Creative Studio R2.
+
+New accounts and cleared environments start empty. Projects are created, edited, paused, and archived only through explicit user actions; production code does not seed project or artifact records.
 
 To run the verified release sequence:
 

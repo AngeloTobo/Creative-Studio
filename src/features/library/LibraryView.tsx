@@ -2,11 +2,12 @@ import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 
 export function LibraryView() {
-  const { snapshot, selectDna } = useStudio();
+  const { snapshot, activeProjectId, selectDna } = useStudio();
+  const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   return (
     <section className="library-view fade-up">
       <div className="library-grid">
-        {snapshot?.dnaArtifacts.map((artifact) => <article className="lib-card glass" key={artifact.artifactId}>
+        {projectDna.map((artifact) => <article className="lib-card glass" key={artifact.artifactId}>
           <div className="lc-head"><span className="lc-tag">CreativeDNA · {artifact.targetModality}</span><Icon name={artifact.source.kind === "commercial_reference" ? "shield" : "dna"} size={18} /></div>
           <h3 className="lc-title">{artifact.name}</h3>
           <p className="lc-body">{artifact.source.directive}</p>
@@ -14,7 +15,7 @@ export function LibraryView() {
           <div className="lc-foot"><span className="lc-proj">v{artifact.version} · {artifact.lineage.parentArtifactId ? "evolved" : "root"}</span><button className="btn btn-ghost" onClick={() => selectDna(artifact)}>Open</button></div>
         </article>)}
       </div>
-      {!snapshot?.dnaArtifacts.length ? <div className="empty-state glass"><Icon name="library" size={34} /><h2>Library is empty</h2><p>Saved CreativeDNA versions will appear here.</p></div> : null}
+      {!projectDna.length ? <div className="empty-state glass"><Icon name="library" size={34} /><h2>Library is empty</h2><p>Saved CreativeDNA versions will appear here.</p></div> : null}
     </section>
   );
 }

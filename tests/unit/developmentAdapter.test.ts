@@ -16,16 +16,18 @@ describe("development adapter", () => {
     const adapter = createDevelopmentAdapter(options);
     const initial = await adapter.load();
     expect(initial.adapter.id).toBe("development-local-storage");
-    expect(initial.projects).toHaveLength(3);
+    expect(initial.projects).toHaveLength(0);
+
+    const project = await adapter.createProject({ name: "Durable Signal", type: "Visual System" });
 
     const dna = await adapter.saveCreativeDna({
-      projectId: "internet-dreams",
+      projectId: project.id,
       name: "Durable Signal",
       directive: "An electric midnight pulse that blooms into warm negative space.",
       targetModality: "image",
       sourceKind: "original",
     });
-    const job = await adapter.submitJob({ projectId: "internet-dreams", dnaArtifactId: dna.artifactId, modality: "image" });
+    const job = await adapter.submitJob({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image" });
     expect(job.status).toBe("queued");
 
     clock = new Date(clock.getTime() + 4_000);
@@ -41,5 +43,17 @@ describe("development adapter", () => {
     expect(reloaded.artifacts.find((item) => item.id === artifact.id)?.status).toBe("accepted");
     expect(reloaded.acceptances.some((item) => item.artifactId === artifact.id && item.decision === "accepted")).toBe(true);
     expect(reloaded.dnaArtifacts.some((item) => item.artifactId === dna.artifactId)).toBe(true);
+  });
+
+  it("creates, edits, and archives projects without seeded records", async () => {
+    const storage = new MemoryStorage();
+    let sequence = 0;
+    const adapter = createDevelopmentAdapter({ storage, id: (prefix) => `${prefix}_test_${++sequence}` });
+    expect((await adapter.load()).projects).toEqual([]);
+    const project = await adapter.createProject({ name: "Launch Identity", type: "Brand System", hue: "#22d3ee" });
+    const updated = await adapter.updateProject(project.id, { name: "Launch Identity System", status: "paused" });
+    expect(updated).toMatchObject({ name: "Launch Identity System", status: "paused", initials: "LI" });
+    const archived = await adapter.archiveProject(project.id);
+    expect(archived.status).toBe("archived");
   });
 });

@@ -1,20 +1,23 @@
 import {
   compileCreativeDna,
+  PROJECT_HUES,
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
   type Capability,
   type CreateCreativeDnaRequest,
+  type CreateProjectRequest,
   type CreativeDnaArtifact,
   type Job,
   type Project,
   type ReviewArtifactResponse,
   type StudioSnapshot,
   type SubmitJobRequest,
+  type UpdateProjectRequest,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
-const STORAGE_KEY = "creative-studio:development-adapter:v1";
+const STORAGE_KEY = "creative-studio:development-adapter:v2";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -36,105 +39,34 @@ function defaultId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
 }
 
-function seedState(now: Date): DevelopmentState {
-  const createdAt = now.toISOString();
-  const projectBase = { createdAt, updatedAt: createdAt };
-  const projects: Project[] = [
-    {
-      ...projectBase,
-      id: "rebecca",
-      name: "Rebecca",
-      type: "Character System",
-      status: "active",
-      description: "Nonbinary alien character and identity system.",
-      note: "Character Core groundwork in progress.",
-      hue: "var(--violet)",
-      initials: "RB",
-    },
-    {
-      ...projectBase,
-      id: "internet-dreams",
-      name: "Internet Dreams",
-      type: "Music / Visual",
-      status: "active",
-      description: "Music, covers, films, and nostalgic digital worlds.",
-      note: "Cross-media DNA ready to evolve.",
-      hue: "var(--pink)",
-      initials: "ID",
-    },
-    {
-      ...projectBase,
-      id: "easynews",
-      name: "EasyNews",
-      type: "Broadcast System",
-      status: "paused",
-      description: "Scripts, segments, graphics, and broadcast packages.",
-      note: "Paused after segment 07.",
-      hue: "var(--cyan)",
-      initials: "EN",
-    },
-  ];
+function emptyState(): DevelopmentState {
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], acceptances: [] };
+}
 
-  const dna = compileCreativeDna({
-    name: "Internet Dreams — luminous memory",
-    directive: "A nostalgic digital world that feels intimate, luminous, slightly degraded, and emotionally unresolved.",
-    targetModality: "image",
-    dimensions: { energy: 58, contrast: 72, warmth: 42, spaciousness: 76, polish: 64 },
-  }, {
-    artifactId: "dna_development_seed",
-    version: 1,
-    rootArtifactId: "dna_development_seed",
-    parentArtifactId: null,
-    createdAt,
-  });
+function cleanText(value: unknown, limit: number) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
+}
 
-  const artifact: Artifact = {
-    id: "artifact_development_seed",
-    projectId: "internet-dreams",
-    jobId: "job_development_seed",
-    dnaArtifactId: dna.artifactId,
-    kind: "image",
-    name: "Luminous Memory Study",
-    status: "accepted",
-    provider: "development-renderer",
-    prompt: dna.generationPrompts.image,
-    preview: { kind: "development-gradient", url: null, colors: ["#6d28d9", "#db2777"] },
-    lineage: { sourceArtifactIds: [dna.artifactId], parentArtifactId: null },
-    createdAt,
-    updatedAt: createdAt,
-  };
+function projectInitials(name: string) {
+  const words = name.split(/\s+/).filter(Boolean);
+  const value = words.length > 1 ? `${words[0][0]}${words[1][0]}` : words[0]?.slice(0, 2);
+  return (value || "CS").toUpperCase();
+}
 
-  const job: Job = {
-    id: "job_development_seed",
-    projectId: "internet-dreams",
-    dnaArtifactId: dna.artifactId,
-    capability: "IMAGE_GENERATE",
-    modality: "image",
-    status: "completed",
-    progress: 100,
-    prompt: dna.generationPrompts.image,
-    provider: "development-renderer",
-    upstreamId: null,
-    artifactId: artifact.id,
-    error: null,
-    createdAt,
-    updatedAt: createdAt,
-    completedAt: createdAt,
-  };
-
+function projectValues(input: CreateProjectRequest) {
+  const name = cleanText(input.name, 80);
+  const type = cleanText(input.type, 80);
+  if (!name) throw new Error("project_name_required");
+  if (!type) throw new Error("project_type_required");
+  const hue = input.hue ?? PROJECT_HUES[0];
+  if (!(PROJECT_HUES as readonly string[]).includes(hue)) throw new Error("invalid_project_hue");
   return {
-    projects,
-    dnaArtifacts: [dna],
-    jobs: [job],
-    artifacts: [artifact],
-    acceptances: [{
-      id: "acceptance_development_seed",
-      artifactId: artifact.id,
-      decision: "accepted",
-      note: "Seeded visual-parity example in the development adapter.",
-      actor: "development-user",
-      createdAt,
-    }],
+    name,
+    type,
+    description: cleanText(input.description, 500),
+    note: cleanText(input.note, 250),
+    hue,
+    initials: projectInitials(name),
   };
 }
 
@@ -179,12 +111,12 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       try {
         return JSON.parse(raw) as DevelopmentState;
       } catch {
-        // A corrupt development snapshot is replaced with an explicit seed.
+        // A corrupt development snapshot is replaced with an empty state.
       }
     }
-    const seeded = seedState(now());
-    storage.setItem(STORAGE_KEY, JSON.stringify(seeded));
-    return seeded;
+    const empty = emptyState();
+    storage.setItem(STORAGE_KEY, JSON.stringify(empty));
+    return empty;
   };
 
   const write = (state: DevelopmentState) => {
@@ -249,16 +181,67 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       const current = now().toISOString();
       return snapshot(reconcile(read()), current);
     },
+    async createProject(input: CreateProjectRequest) {
+      const state = read();
+      const createdAt = now().toISOString();
+      const project: Project = {
+        id: makeId("project"),
+        status: "active",
+        ...projectValues(input),
+        createdAt,
+        updatedAt: createdAt,
+      };
+      state.projects.push(project);
+      write(state);
+      return project;
+    },
+    async updateProject(projectId: string, input: UpdateProjectRequest) {
+      const state = read();
+      const index = state.projects.findIndex((project) => project.id === projectId);
+      if (index < 0) throw new Error("project_not_found");
+      const current = state.projects[index];
+      if (current.status === "archived") throw new Error("project_archived");
+      const status = input.status ?? current.status;
+      if (status !== "active" && status !== "paused") throw new Error("invalid_project_status");
+      const project: Project = {
+        ...current,
+        ...projectValues({
+          name: input.name ?? current.name,
+          type: input.type ?? current.type,
+          description: input.description ?? current.description,
+          note: input.note ?? current.note,
+          hue: input.hue ?? (current.hue as CreateProjectRequest["hue"]),
+        }),
+        status,
+        updatedAt: now().toISOString(),
+      };
+      state.projects[index] = project;
+      write(state);
+      return project;
+    },
+    async archiveProject(projectId: string) {
+      const state = read();
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) throw new Error("project_not_found");
+      project.status = "archived";
+      project.updatedAt = now().toISOString();
+      write(state);
+      return project;
+    },
     async saveCreativeDna(input: CreateCreativeDnaRequest) {
       const state = read();
       const parent = input.parentArtifactId
         ? state.dnaArtifacts.find((item) => item.artifactId === input.parentArtifactId)
         : null;
       if (input.parentArtifactId && !parent) throw new Error("parent_artifact_not_found");
-      if (!state.projects.some((project) => project.id === input.projectId)) throw new Error("project_not_found");
+      if (parent && parent.projectId !== input.projectId) throw new Error("parent_project_mismatch");
+      const project = state.projects.find((item) => item.id === input.projectId);
+      if (!project) throw new Error("project_not_found");
+      if (project.status === "archived") throw new Error("project_archived");
       const artifactId = makeId("dna");
       const artifact = compileCreativeDna(input, {
         artifactId,
+        projectId: input.projectId,
         version: parent ? parent.version + 1 : 1,
         rootArtifactId: parent?.lineage.rootArtifactId ?? artifactId,
         parentArtifactId: parent?.artifactId ?? null,
@@ -272,7 +255,10 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       const state = read();
       const dna = state.dnaArtifacts.find((item) => item.artifactId === input.dnaArtifactId);
       if (!dna) throw new Error("creative_dna_not_found");
-      if (!state.projects.some((project) => project.id === input.projectId)) throw new Error("project_not_found");
+      if (dna.projectId !== input.projectId) throw new Error("dna_project_mismatch");
+      const project = state.projects.find((item) => item.id === input.projectId);
+      if (!project) throw new Error("project_not_found");
+      if (project.status === "archived") throw new Error("project_archived");
       const createdAt = now().toISOString();
       const job: Job = {
         id: makeId("job"),

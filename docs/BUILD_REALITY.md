@@ -6,8 +6,10 @@ Last verified: 2026-08-16 (America/Chicago)
 
 - Vite + React + TypeScript module application with the original Creative Studio visual language retained across desktop and mobile layouts.
 - Typed `Project`, `CreativeDnaArtifact`, `Job`, `Artifact`, `Capability`, and `Acceptance` contracts shared by client, adapters, tests, and Worker.
-- Explicit `development-local-storage` adapter containing the former mock content and labeled development-only media behavior.
+- Explicit `development-local-storage` adapter that starts empty and labels development-only simulated media behavior.
 - Standalone Worker/BFF serving only `/api/creative-studio/*`, plus dedicated D1 storage for projects, DNA, jobs, artifacts, retained-media metadata, and append-only decisions.
+- Placeholder-free first-run onboarding with explicit project create, edit, pause, and archive actions; neither the Worker nor development adapter seeds records.
+- Project-scoped CreativeDNA, queues, libraries, artifacts, portal summaries, and review-dock state.
 - Deterministic CreativeDNA compilation, bounds, prompt translation, rights-safe provenance, root/parent/version lineage, and both music/image submission.
 - Durable job reconciliation and artifact creation in browser development mode and Worker development mode.
 - Artifact history, lineage expansion, and explicit accept/reject/archive controls.
@@ -20,13 +22,13 @@ Last verified: 2026-08-16 (America/Chicago)
 ## Verified in this build
 
 - TypeScript, ESLint, Vitest, Vite production build, environment validation, and source secret scan pass.
-- Seven browser-domain unit tests cover CreativeDNA rights/lineage, development persistence, route rejection, and adapter configuration.
-- Nine Workers-runtime tests cover the Worker entrypoint, AFDFW target validation, unauthenticated access, Access-header relay, malformed input, project ownership, owner-isolated review, durable job transitions, R2 retention, append-only decisions, and generic-proxy rejection.
+- Eight browser-domain unit tests cover CreativeDNA rights/lineage/project scope, empty development persistence, project lifecycle, route rejection, and adapter configuration.
+- Ten Workers-runtime tests cover the Worker entrypoint, AFDFW target validation, unauthenticated access, Access-header relay, empty/project lifecycle behavior, malformed input, project ownership, owner-isolated review, durable job transitions, R2 retention, append-only decisions, and generic-proxy rejection.
 - Local D1 migration applies successfully.
 - A Worker API flow created DNA, completed a durable job, created an artifact, stored acceptance, rejected a generic proxy path, and preserved state across a Worker restart.
 - A real Chromium pass against the HTTP/BFF mode completed DNA save, image job, artifact lineage, acceptance, and reload persistence with no current console errors.
 - Desktop and 390px mobile rendered inspection completed; module-semantic layout regressions found during inspection were corrected.
-- Playwright reports five passing checks and one intentional mobile skip: desktop/mobile create, version, generate, return, accept, and reload persistence; reduced motion in both layouts; and desktop keyboard focus/navigation.
+- Playwright reports six passing checks and two intentional mobile skips: desktop/mobile empty-first-run project creation, DNA versioning, generation, review, and reload persistence; a desktop project edit/archive lifecycle; reduced motion in both layouts; and desktop keyboard focus/navigation.
 - Production environment preflight passes with a real D1 ID, dedicated R2 binding, AFDFW service binding, custom domain, and disabled `workers.dev` route.
 - Cloudflare deployed Worker version `cd92d0f5-95ab-4a85-b7ee-2533d55be3c5` to `cs.angelotoborg.com`.
 - Remote D1 reports no pending migrations after `0001_creative_studio.sql` and `0002_artifact_retention.sql`.

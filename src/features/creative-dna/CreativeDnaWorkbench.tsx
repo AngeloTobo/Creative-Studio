@@ -30,7 +30,8 @@ function savedLabel(value: string) {
 }
 
 export function CreativeDnaWorkbench({ onQueued }: { onQueued: () => void }) {
-  const { snapshot, activeDna, selectDna, saveDna, submitJob, busy, error } = useStudio();
+  const { snapshot, activeProjectId, activeDna, selectDna, saveDna, submitJob, busy, error } = useStudio();
+  const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const [name, setName] = useState(activeDna?.name ?? "");
   const [directive, setDirective] = useState(activeDna?.source.directive ?? "");
   const [targetModality, setTargetModality] = useState<CreativeDnaTarget>(activeDna?.targetModality ?? "music");
@@ -151,10 +152,10 @@ export function CreativeDnaWorkbench({ onQueued }: { onQueued: () => void }) {
       </div>
 
       <div className="dna-history glass">
-        <div className="dna-history-head"><div><span className="eyebrow">Lineage</span><h3>Version history</h3></div><span>{snapshot?.dnaArtifacts.length ?? 0} saved</span></div>
+        <div className="dna-history-head"><div><span className="eyebrow">Lineage</span><h3>Version history</h3></div><span>{projectDna.length} saved</span></div>
         <div className="dna-history-strip">
-          {snapshot?.dnaArtifacts.map((artifact) => <button key={artifact.artifactId} className={`dna-history-item${activeDna?.artifactId === artifact.artifactId ? " on" : ""}`} onClick={() => load(artifact)}><span>{artifact.targetModality}</span><strong>{artifact.name}</strong><small>v{artifact.version} · {savedLabel(artifact.createdAt)}</small><em>{artifact.lineage.parentArtifactId ? "Evolved" : "Root"}</em></button>)}
-          {!snapshot?.dnaArtifacts.length ? <span className="empty-copy">No saved DNA yet.</span> : null}
+          {projectDna.map((artifact) => <button key={artifact.artifactId} className={`dna-history-item${activeDna?.artifactId === artifact.artifactId ? " on" : ""}`} onClick={() => load(artifact)}><span>{artifact.targetModality}</span><strong>{artifact.name}</strong><small>v{artifact.version} · {savedLabel(artifact.createdAt)}</small><em>{artifact.lineage.parentArtifactId ? "Evolved" : "Root"}</em></button>)}
+          {!projectDna.length ? <span className="empty-copy">No saved DNA yet.</span> : null}
         </div>
       </div>
     </section>

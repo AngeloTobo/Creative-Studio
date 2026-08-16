@@ -6,6 +6,9 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 | --- | --- | --- |
 | `GET` | `/api/creative-studio/session` | Same-origin session descriptor |
 | `GET` | `/api/creative-studio/projects` | List Creative Studio projects |
+| `POST` | `/api/creative-studio/projects` | Create an owned project from user input |
+| `PATCH` | `/api/creative-studio/projects/:id` | Edit an owned active or paused project |
+| `POST` | `/api/creative-studio/projects/:id/archive` | Archive an owned project without deleting history |
 | `GET` | `/api/creative-studio/dna` | List versioned CreativeDNA artifacts |
 | `POST` | `/api/creative-studio/dna` | Create a root or child DNA version |
 | `GET` | `/api/creative-studio/jobs` | List and reconcile durable jobs |
@@ -16,6 +19,8 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 | `GET` | `/api/creative-studio/capabilities` | Report bounded runtime health |
 
 Every other Creative Studio API path returns `404`. There is no arbitrary forwarding route.
+
+Project lists may be empty. The Worker never creates seeded projects, and archived projects remain available for historical counts while being excluded from new DNA and generation writes.
 
 ## AFDFW allowlist
 

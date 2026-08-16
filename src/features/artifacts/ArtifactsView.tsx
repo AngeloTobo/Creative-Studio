@@ -29,16 +29,17 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
 }
 
 export function ArtifactsView() {
-  const { snapshot, error } = useStudio();
+  const { snapshot, activeProjectId, error } = useStudio();
+  const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   return (
     <section className="artifacts-view fade-up">
       <div className="artifact-summary">
-        {(["ready", "accepted", "rejected", "archived"] as const).map((status) => <div className="glass" key={status}><strong>{snapshot?.artifacts.filter((artifact) => artifact.status === status).length ?? 0}</strong><span>{status}</span></div>)}
+        {(["ready", "accepted", "rejected", "archived"] as const).map((status) => <div className="glass" key={status}><strong>{artifacts.filter((artifact) => artifact.status === status).length}</strong><span>{status}</span></div>)}
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid">
-        {snapshot?.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}
-        {!snapshot?.artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
+        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}
+        {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
     </section>
   );

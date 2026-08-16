@@ -15,6 +15,21 @@ export type Project = {
   updatedAt: IsoDateString;
 };
 
+export const PROJECT_HUES = ["#d946ef", "#8b5cf6", "#22d3ee", "#14b8a6", "#f59e0b", "#fb7185"] as const;
+export type ProjectHue = (typeof PROJECT_HUES)[number];
+
+export type CreateProjectRequest = {
+  name: string;
+  type: string;
+  description?: string;
+  note?: string;
+  hue?: ProjectHue;
+};
+
+export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
+  status?: Exclude<ProjectStatus, "archived">;
+};
+
 export type GenerationModality = "music" | "image";
 export type GenerationCapability = "MUSIC_GENERATE" | "IMAGE_GENERATE";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";

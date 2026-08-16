@@ -6,6 +6,8 @@ import {
   type Capability,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaResponse,
+  type CreateProjectRequest,
+  type CreateProjectResponse,
   type CreativeDnaArtifact,
   type Job,
   type Project,
@@ -14,6 +16,8 @@ import {
   type StudioSnapshot,
   type SubmitJobRequest,
   type SubmitJobResponse,
+  type UpdateProjectRequest,
+  type UpdateProjectResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -57,6 +61,27 @@ export function createHttpAdapter(): StudioAdapter {
     id: "creative-studio-bff",
     load,
     refresh: load,
+    async createProject(input: CreateProjectRequest) {
+      const result = await request<CreateProjectResponse>(CREATIVE_STUDIO_ROUTES.projects, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.project;
+    },
+    async updateProject(projectId: string, input: UpdateProjectRequest) {
+      const result = await request<UpdateProjectResponse>(`${CREATIVE_STUDIO_ROUTES.projects}/${encodeURIComponent(projectId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
+      return result.project;
+    },
+    async archiveProject(projectId: string) {
+      const result = await request<UpdateProjectResponse>(`${CREATIVE_STUDIO_ROUTES.projects}/${encodeURIComponent(projectId)}/archive`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.project;
+    },
     async saveCreativeDna(input: CreateCreativeDnaRequest) {
       const result = await request<CreateCreativeDnaResponse>(CREATIVE_STUDIO_ROUTES.dna, {
         method: "POST",

@@ -1,10 +1,12 @@
 import {
   type AcceptanceDecision,
   type Capability,
+  type CreateProjectRequest,
   matchCreativeStudioRoute,
   type CreateCreativeDnaRequest,
   type GenerationModality,
   type SubmitJobRequest,
+  type UpdateProjectRequest,
 } from "../../shared/contracts";
 import {
   afdfwGenerations,
@@ -16,19 +18,22 @@ import { backendMode } from "../config";
 import { body, boundedText, json } from "../lib/http";
 import {
   artifactMediaPath,
+  archiveProject,
   createAfdfwJob,
   createDevelopmentJob,
   createLocalDna,
-  ensureProjects,
+  createProject,
   listAcceptances,
   listArtifacts,
   listJobs,
   listLocalDna,
   listProjects,
+  projectById,
   reconcileAfdfwGenerations,
   reconcileDevelopmentJobs,
   retainArtifactMedia,
   reviewArtifact,
+  updateProject,
 } from "../repository";
 import type { Env, OwnerSession } from "../types";
 
@@ -97,11 +102,26 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
 
   try {
     const session = await ownerSession(env, request);
-    await ensureProjects(env, session.userId);
     const responseHeaders = session.setCookie ? { "set-cookie": session.setCookie } : undefined;
 
     if (route === "session") return json({ ok: true, session: { status: session.status, userId: session.userId, displayName: session.displayName } }, { headers: responseHeaders });
     if (route === "projects") return json({ ok: true, projects: await listProjects(env, session.userId) });
+    if (route === "project-create") {
+      const input = await body<CreateProjectRequest>(request);
+      if (!input) return json({ ok: false, error: "invalid_json" }, { status: 400 });
+      return json({ ok: true, project: await createProject(env, session.userId, input) }, { status: 201 });
+    }
+    if (route === "project-update") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/projects\/([a-z0-9_]+)$/i);
+      const input = await body<UpdateProjectRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_project_request" }, { status: 400 });
+      return json({ ok: true, project: await updateProject(env, session.userId, match[1], input) });
+    }
+    if (route === "project-archive") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/projects\/([a-z0-9_]+)\/archive$/i);
+      if (!match) return json({ ok: false, error: "invalid_project_request" }, { status: 400 });
+      return json({ ok: true, project: await archiveProject(env, session.userId, match[1]) });
+    }
     if (route === "dna-list") {
       const artifacts = await listLocalDna(env, session.userId);
       return json({ ok: true, artifacts });
@@ -122,6 +142,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const dnaArtifacts = await listLocalDna(env, session.userId);
       const dna = dnaArtifacts.find((item) => item.artifactId === input.dnaArtifactId);
       if (!dna) return json({ ok: false, error: "creative_dna_not_found" }, { status: 404 });
+      if (dna.projectId !== input.projectId) return json({ ok: false, error: "dna_project_mismatch" }, { status: 400 });
+      const project = await projectById(env, session.userId, input.projectId);
+      if (!project) return json({ ok: false, error: "project_not_found" }, { status: 404 });
+      if (project.status === "archived") return json({ ok: false, error: "project_archived" }, { status: 400 });
       const modality = input.modality as GenerationModality;
       const job = developmentMode(env)
         ? await createDevelopmentJob(env, session.userId, input.projectId, dna, modality)

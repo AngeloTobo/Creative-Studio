@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CreativeDnaArtifact } from "../../shared/contracts";
 import { backendMode } from "../../worker/config";
-import { createAfdfwJob, createDevelopmentJob, createLocalDna, ensureProjects, reconcileDevelopmentJobs } from "../../worker/repository";
+import { createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, reconcileDevelopmentJobs } from "../../worker/repository";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
 import type { Env } from "../../worker/types";
 
@@ -69,6 +69,10 @@ async function clearData() {
 
 beforeEach(clearData);
 
+async function testProject(ownerId: string, name = "Test Project") {
+  return createProject(env, ownerId, { name, type: "Test System", hue: "#8b5cf6" });
+}
+
 describe("Creative Studio Worker API", () => {
   it("dispatches the production Worker entrypoint with configured bindings", async () => {
     const response = await exports.default.fetch(`${BASE}/api/creative-studio/session`);
@@ -108,8 +112,38 @@ describe("Creative Studio Worker API", () => {
     expect(relayedEmail).toBe("angelotoborg@gmail.com");
   });
 
+  it("starts empty and creates, edits, and archives an owned project", async () => {
+    const local = workerEnv("development");
+    const empty = await routeCreativeStudioApi(request("/api/creative-studio/projects"), local);
+    expect(await result(empty)).toMatchObject({ ok: true, projects: [] });
+
+    const created = await routeCreativeStudioApi(request("/api/creative-studio/projects", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Owned Project", type: "Creative System", hue: "#22d3ee" }),
+    }), local);
+    expect(created.status).toBe(201);
+    const createdPayload = await result(created) as { project: { id: string } };
+    const projectId = createdPayload.project.id;
+
+    const updated = await routeCreativeStudioApi(request(`/api/creative-studio/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Owned Project Revised", status: "paused" }),
+    }), local);
+    expect(await result(updated)).toMatchObject({ project: { name: "Owned Project Revised", status: "paused", initials: "OP" } });
+
+    const archived = await routeCreativeStudioApi(request(`/api/creative-studio/projects/${projectId}/archive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }), local);
+    expect(await result(archived)).toMatchObject({ project: { id: projectId, status: "archived" } });
+  });
+
   it("validates JSON, project ownership, and commercial-reference provenance", async () => {
     const local = workerEnv("development");
+    const project = await testProject("development-angelo");
     const invalidJson = await routeCreativeStudioApi(request("/api/creative-studio/dna", { method: "POST", body: "{}" }), local);
     expect(invalidJson.status).toBe(400);
     expect(await result(invalidJson)).toMatchObject({ error: "invalid_json" });
@@ -125,7 +159,7 @@ describe("Creative Studio Worker API", () => {
     const missingReference = await routeCreativeStudioApi(request("/api/creative-studio/dna", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId: "rebecca", directive: "Use a reference safely.", targetModality: "music", sourceKind: "commercial_reference" }),
+      body: JSON.stringify({ projectId: project.id, directive: "Use a reference safely.", targetModality: "music", sourceKind: "commercial_reference" }),
     }), local);
     expect(missingReference.status).toBe(400);
     expect(await result(missingReference)).toMatchObject({ error: "reference_label_required" });
@@ -133,14 +167,14 @@ describe("Creative Studio Worker API", () => {
 
   it("keeps review decisions isolated to the authenticated owner", async () => {
     const ownerA = "owner-a";
-    await ensureProjects(env, ownerA);
+    const project = await testProject(ownerA);
     const dna = await createLocalDna(env, ownerA, {
-      projectId: "rebecca",
+      projectId: project.id,
       name: "Owner A Study",
       directive: "A private luminous object with a quiet center.",
       targetModality: "image",
     });
-    const job = await createDevelopmentJob(env, ownerA, "rebecca", dna, "image");
+    const job = await createDevelopmentJob(env, ownerA, project.id, dna, "image");
     await env.DB.prepare("update creative_jobs set created_at = ? where id = ?").bind("2020-01-01T00:00:00.000Z", job.id).run();
     await reconcileDevelopmentJobs(env, ownerA);
     const artifact = await env.DB.prepare("select id from creative_artifacts where owner_id = ?").bind(ownerA).first<{ id: string }>();
@@ -165,17 +199,18 @@ describe("Creative Studio Worker API", () => {
 
   it("persists queued, running, completed, artifact, and append-only decision state", async () => {
     const local = workerEnv("development");
+    const project = await testProject("development-angelo");
     const createDna = await routeCreativeStudioApi(request("/api/creative-studio/dna", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId: "rebecca", name: "Durable API Study", directive: "A crisp nocturnal system that opens into warm space.", targetModality: "image" }),
+      body: JSON.stringify({ projectId: project.id, name: "Durable API Study", directive: "A crisp nocturnal system that opens into warm space.", targetModality: "image" }),
     }), local);
     const dnaPayload = await result(createDna) as { artifact: CreativeDnaArtifact };
 
     const createJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId: "rebecca", dnaArtifactId: dnaPayload.artifact.artifactId, modality: "image" }),
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dnaPayload.artifact.artifactId, modality: "image" }),
     }), local);
     const jobPayload = await result(createJob) as { job: { id: string; status: string } };
     expect(createJob.status).toBe(202);
@@ -210,14 +245,14 @@ describe("Creative Studio Worker API", () => {
 
   it("retains accepted AFDFW media in owner-scoped Creative Studio storage", async () => {
     const ownerId = "owner-retention";
-    await ensureProjects(env, ownerId);
+    const project = await testProject(ownerId);
     const dna = await createLocalDna(env, ownerId, {
-      projectId: "rebecca",
+      projectId: project.id,
       name: "Retained Study",
       directive: "A bright original portrait with a quiet geometric center.",
       targetModality: "image",
     });
-    const job = await createAfdfwJob(env, ownerId, "rebecca", dna, "image", {
+    const job = await createAfdfwJob(env, ownerId, project.id, dna, "image", {
       id: "generation-retained",
       prompt: dna.generationPrompts.image,
       status: "completed",

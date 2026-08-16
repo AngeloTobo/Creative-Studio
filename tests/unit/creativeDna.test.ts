@@ -3,6 +3,7 @@ import { CREATIVE_DNA_SCHEMA_VERSION, compileCreativeDna } from "../../shared/co
 
 const fixedMeta = {
   artifactId: "dna_child",
+  projectId: "project_test",
   version: 2,
   rootArtifactId: "dna_root",
   parentArtifactId: "dna_parent",
@@ -18,6 +19,7 @@ describe("CreativeDNA v1", () => {
       dimensions: { energy: 82, warmth: 18 },
     }, fixedMeta);
     expect(artifact.schemaVersion).toBe(CREATIVE_DNA_SCHEMA_VERSION);
+    expect(artifact.projectId).toBe("project_test");
     expect(artifact.version).toBe(2);
     expect(artifact.lineage).toEqual({ rootArtifactId: "dna_root", parentArtifactId: "dna_parent" });
     expect(artifact.shared.energy).toBe(82);

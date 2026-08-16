@@ -31,7 +31,7 @@ function useResponsive() {
 }
 
 export function App() {
-  const { snapshot, loading, error } = useStudio();
+  const { snapshot, loading, error, activeProjectId } = useStudio();
   const [view, setView] = useState<StudioView>(hashView);
   const mobile = useResponsive();
   useEffect(() => {
@@ -47,6 +47,7 @@ export function App() {
   };
 
   const content = (() => {
+    if (!activeProjectId && view !== "projects" && view !== "runtime") return <ProjectsView />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} />;

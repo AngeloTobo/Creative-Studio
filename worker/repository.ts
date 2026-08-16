@@ -1,37 +1,93 @@
 import {
   compileCreativeDna,
+  PROJECT_HUES,
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
   type CreateCreativeDnaRequest,
   type CreativeDnaArtifact,
+  type CreateProjectRequest,
   type Job,
   type Project,
+  type UpdateProjectRequest,
 } from "../shared/contracts";
 import type { AfdfwGeneration } from "./adapters/afdfw";
-import { id } from "./lib/http";
+import { boundedText, id } from "./lib/http";
 import type { Env } from "./types";
 
-type ProjectRow = Omit<Project, "createdAt" | "updatedAt"> & { createdAt: string; updatedAt: string };
+type ProjectRow = Project;
 
-export async function ensureProjects(env: Env, ownerId: string) {
-  const existing = await env.DB.prepare("select count(*) as count from creative_projects where owner_id = ?").bind(ownerId).first<{ count: number }>();
-  if (Number(existing?.count || 0) > 0) return;
-  const now = new Date().toISOString();
-  const rows = [
-    ["rebecca", "Rebecca", "Character System", "active", "Nonbinary alien character and identity system.", "Character Core groundwork in progress.", "var(--violet)", "RB"],
-    ["internet-dreams", "Internet Dreams", "Music / Visual", "active", "Music, covers, films, and nostalgic digital worlds.", "Cross-media DNA ready to evolve.", "var(--pink)", "ID"],
-    ["easynews", "EasyNews", "Broadcast System", "paused", "Scripts, segments, graphics, and broadcast packages.", "Paused after segment 07.", "var(--cyan)", "EN"],
-  ];
-  await env.DB.batch(rows.map((row) => env.DB.prepare(
-    "insert into creative_projects (id, owner_id, name, type, status, description, note, hue, initials, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(row[0], ownerId, row[1], row[2], row[3], row[4], row[5], row[6], row[7], now, now)));
+const PROJECT_HUE_SET = new Set<string>(PROJECT_HUES);
+
+function projectInitials(name: string) {
+  const words = name.split(/\s+/).filter(Boolean);
+  const value = words.length > 1 ? `${words[0][0]}${words[1][0]}` : words[0]?.slice(0, 2);
+  return (value || "CS").toUpperCase();
+}
+
+function projectInput(input: CreateProjectRequest) {
+  const name = boundedText(input.name, 80);
+  const type = boundedText(input.type, 80);
+  if (!name) throw new Error("project_name_required");
+  if (!type) throw new Error("project_type_required");
+  const hue = input.hue ?? PROJECT_HUES[0];
+  if (!PROJECT_HUE_SET.has(hue)) throw new Error("invalid_project_hue");
+  return {
+    name,
+    type,
+    description: boundedText(input.description, 500),
+    note: boundedText(input.note, 250),
+    hue,
+    initials: projectInitials(name),
+  };
+}
+
+export async function projectById(env: Env, ownerId: string, projectId: string) {
+  return env.DB.prepare(`select id, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where id = ? and owner_id = ?`)
+    .bind(projectId, ownerId).first<ProjectRow>();
 }
 
 export async function listProjects(env: Env, ownerId: string): Promise<Project[]> {
-  await ensureProjects(env, ownerId);
-  const result = await env.DB.prepare(`select id, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where owner_id = ? order by created_at`).bind(ownerId).all<ProjectRow>();
+  const result = await env.DB.prepare(`select id, name, type, status, description, note, hue, initials, created_at as createdAt, updated_at as updatedAt from creative_projects where owner_id = ? order by case when status = 'archived' then 1 else 0 end, created_at`).bind(ownerId).all<ProjectRow>();
   return (result.results ?? []) as Project[];
+}
+
+export async function createProject(env: Env, ownerId: string, input: CreateProjectRequest) {
+  const values = projectInput(input);
+  const now = new Date().toISOString();
+  const project: Project = { id: id("project"), status: "active", ...values, createdAt: now, updatedAt: now };
+  await env.DB.prepare(`insert into creative_projects (id, owner_id, name, type, status, description, note, hue, initials, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(project.id, ownerId, project.name, project.type, project.status, project.description, project.note, project.hue, project.initials, now, now).run();
+  return project;
+}
+
+export async function updateProject(env: Env, ownerId: string, projectId: string, input: UpdateProjectRequest) {
+  const current = await projectById(env, ownerId, projectId);
+  if (!current) throw new Error("project_not_found");
+  if (current.status === "archived") throw new Error("project_archived");
+  const merged = projectInput({
+    name: input.name ?? current.name,
+    type: input.type ?? current.type,
+    description: input.description ?? current.description,
+    note: input.note ?? current.note,
+    hue: input.hue ?? (current.hue as CreateProjectRequest["hue"]),
+  });
+  const status = input.status ?? current.status;
+  if (status !== "active" && status !== "paused") throw new Error("invalid_project_status");
+  const updatedAt = new Date().toISOString();
+  await env.DB.prepare(`update creative_projects set name = ?, type = ?, status = ?, description = ?, note = ?, hue = ?, initials = ?, updated_at = ? where id = ? and owner_id = ?`)
+    .bind(merged.name, merged.type, status, merged.description, merged.note, merged.hue, merged.initials, updatedAt, projectId, ownerId).run();
+  return { ...current, ...merged, status, updatedAt } satisfies Project;
+}
+
+export async function archiveProject(env: Env, ownerId: string, projectId: string) {
+  const current = await projectById(env, ownerId, projectId);
+  if (!current) throw new Error("project_not_found");
+  if (current.status === "archived") return current;
+  const updatedAt = new Date().toISOString();
+  await env.DB.prepare("update creative_projects set status = 'archived', updated_at = ? where id = ? and owner_id = ?")
+    .bind(updatedAt, projectId, ownerId).run();
+  return { ...current, status: "archived", updatedAt } satisfies Project;
 }
 
 type DnaRow = { id: string; rootArtifactId: string; parentArtifactId: string | null; version: number; dnaJson: string };
@@ -46,17 +102,21 @@ export async function listLocalDna(env: Env, ownerId: string): Promise<CreativeD
 }
 
 export async function createLocalDna(env: Env, ownerId: string, input: CreateCreativeDnaRequest) {
-  const project = await env.DB.prepare("select id from creative_projects where id = ? and owner_id = ?").bind(input.projectId, ownerId).first<{ id: string }>();
+  const project = await env.DB.prepare("select id, status from creative_projects where id = ? and owner_id = ?").bind(input.projectId, ownerId).first<{ id: string; status: Project["status"] }>();
   if (!project) throw new Error("project_not_found");
+  if (project.status === "archived") throw new Error("project_archived");
   let parent: DnaRow | null = null;
   if (input.parentArtifactId) {
     parent = await env.DB.prepare(`select id, root_artifact_id as rootArtifactId, parent_artifact_id as parentArtifactId, version, dna_json as dnaJson from creative_dna_artifacts where id = ? and owner_id = ?`).bind(input.parentArtifactId, ownerId).first<DnaRow>();
     if (!parent) throw new Error("parent_artifact_not_found");
+    const parentArtifact = parseDna(parent);
+    if (!parentArtifact || parentArtifact.projectId !== input.projectId) throw new Error("parent_project_mismatch");
   }
   const artifactId = id("dna");
   const createdAt = new Date().toISOString();
   const artifact = compileCreativeDna(input, {
     artifactId,
+    projectId: input.projectId,
     version: parent ? parent.version + 1 : 1,
     rootArtifactId: parent?.rootArtifactId ?? artifactId,
     parentArtifactId: parent?.id ?? null,

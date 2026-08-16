@@ -2,10 +2,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type {
   AcceptanceDecision,
+  CreateProjectRequest,
   CreateCreativeDnaRequest,
   CreativeDnaArtifact,
   GenerationModality,
+  Project,
   StudioSnapshot,
+  UpdateProjectRequest,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -18,6 +21,9 @@ type StudioContextValue = {
   activeDna: CreativeDnaArtifact | null;
   setActiveProjectId: (id: string) => void;
   selectDna: (artifact: CreativeDnaArtifact | null) => void;
+  createProject: (input: CreateProjectRequest) => Promise<Project>;
+  updateProject: (projectId: string, input: UpdateProjectRequest) => Promise<Project>;
+  archiveProject: (projectId: string) => Promise<Project>;
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitJob: (modality: GenerationModality, dnaArtifactId?: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note?: string) => Promise<void>;
@@ -30,38 +36,54 @@ function message(error: unknown) {
   return error instanceof Error ? error.message.replaceAll("_", " ") : "Creative Studio request failed";
 }
 
+function firstAvailableProject(snapshot: StudioSnapshot) {
+  return snapshot.projects.find((project) => project.status !== "archived")?.id ?? "";
+}
+
 export function StudioProvider({ children }: { children: ReactNode }) {
   const [adapter] = useState<StudioAdapter>(() => createStudioAdapter());
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [activeProjectId, setActiveProjectId] = useState("rebecca");
+  const [activeProjectId, setActiveProjectId] = useState("");
   const [activeDna, setActiveDna] = useState<CreativeDnaArtifact | null>(null);
+
+  const applySnapshot = useCallback((next: StudioSnapshot) => {
+    setSnapshot(next);
+    setActiveProjectId((currentProjectId) => {
+      const projectId = next.projects.some((project) => project.id === currentProjectId && project.status !== "archived")
+        ? currentProjectId
+        : firstAvailableProject(next);
+      setActiveDna((currentDna) => {
+        if (currentDna?.projectId === projectId && next.dnaArtifacts.some((artifact) => artifact.artifactId === currentDna.artifactId)) return currentDna;
+        return next.dnaArtifacts.find((artifact) => artifact.projectId === projectId) ?? null;
+      });
+      return projectId;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       const next = await adapter.refresh();
-      setSnapshot(next);
+      applySnapshot(next);
       setError("");
     } catch (nextError) {
       setError(message(nextError));
     }
-  }, [adapter]);
+  }, [adapter, applySnapshot]);
 
   useEffect(() => {
     let live = true;
     adapter.load()
       .then((next) => {
         if (!live) return;
-        setSnapshot(next);
-        setActiveProjectId((current) => next.projects.some((project) => project.id === current) ? current : next.projects[0]?.id ?? "");
-        setActiveDna(next.dnaArtifacts[0] ?? null);
+        applySnapshot(next);
       })
       .catch((nextError) => live && setError(message(nextError)))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
-  }, [adapter]);
+  }, [adapter, applySnapshot]);
 
   useEffect(() => {
     if (!snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")) return;
@@ -85,12 +107,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const saveDna = useCallback((input: Omit<CreateCreativeDnaRequest, "projectId">) => transact(async () => {
+    if (!activeProjectId) throw new Error("project_required");
     const artifact = await adapter.saveCreativeDna({ ...input, projectId: activeProjectId });
     setActiveDna(artifact);
     return artifact;
   }), [activeProjectId, adapter, transact]);
 
   const submitJob = useCallback(async (modality: GenerationModality, dnaArtifactId?: string) => {
+    if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
     await transact(() => adapter.submitJob({ projectId: activeProjectId, dnaArtifactId: dnaId, modality }));
@@ -100,6 +124,31 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await transact(() => adapter.reviewArtifact(artifactId, decision, note));
   }, [adapter, transact]);
 
+  const createProject = useCallback(async (input: CreateProjectRequest) => {
+    const project = await transact(() => adapter.createProject(input));
+    setActiveProjectId(project.id);
+    setActiveDna(null);
+    return project;
+  }, [adapter, transact]);
+
+  const updateProject = useCallback((projectId: string, input: UpdateProjectRequest) => (
+    transact(() => adapter.updateProject(projectId, input))
+  ), [adapter, transact]);
+
+  const archiveProject = useCallback((projectId: string) => (
+    transact(() => adapter.archiveProject(projectId))
+  ), [adapter, transact]);
+
+  const selectProject = useCallback((projectId: string) => {
+    setActiveProjectId(projectId);
+    setActiveDna(snapshot?.dnaArtifacts.find((artifact) => artifact.projectId === projectId) ?? null);
+  }, [snapshot?.dnaArtifacts]);
+
+  const selectDna = useCallback((artifact: CreativeDnaArtifact | null) => {
+    setActiveDna(artifact);
+    if (artifact) setActiveProjectId(artifact.projectId);
+  }, []);
+
   const value = useMemo<StudioContextValue>(() => ({
     snapshot,
     loading,
@@ -107,13 +156,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     error,
     activeProjectId,
     activeDna,
-    setActiveProjectId,
-    selectDna: setActiveDna,
+    setActiveProjectId: selectProject,
+    selectDna,
+    createProject,
+    updateProject,
+    archiveProject,
     saveDna,
     submitJob,
     reviewArtifact,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, saveDna, submitJob, reviewArtifact, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, reviewArtifact, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

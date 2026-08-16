@@ -4,8 +4,9 @@ import { StatusDot } from "../../components/Visuals";
 import type { GenerationModality } from "../../../shared/contracts";
 
 export function GenerationView({ onQueued }: { onQueued: () => void }) {
-  const { snapshot, activeDna, selectDna, submitJob, busy, error } = useStudio();
-  const selected = activeDna ?? snapshot?.dnaArtifacts[0] ?? null;
+  const { snapshot, activeProjectId, activeDna, selectDna, submitJob, busy, error } = useStudio();
+  const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
+  const selected = activeDna ?? projectDna[0] ?? null;
 
   const submit = async (modality: GenerationModality) => {
     if (!selected) return;
@@ -33,7 +34,7 @@ export function GenerationView({ onQueued }: { onQueued: () => void }) {
       <aside className="generation-history glass">
         <span className="eyebrow">Saved DNA</span>
         <div className="generation-dna-list">
-          {snapshot?.dnaArtifacts.map((artifact) => <button key={artifact.artifactId} className={selected?.artifactId === artifact.artifactId ? "on" : ""} onClick={() => selectDna(artifact)}><Icon name={artifact.targetModality} size={16} /><span><strong>{artifact.name}</strong><small>v{artifact.version} · {artifact.source.kind === "commercial_reference" ? "reference-safe" : "original"}</small></span></button>)}
+          {projectDna.map((artifact) => <button key={artifact.artifactId} className={selected?.artifactId === artifact.artifactId ? "on" : ""} onClick={() => selectDna(artifact)}><Icon name={artifact.targetModality} size={16} /><span><strong>{artifact.name}</strong><small>v{artifact.version} · {artifact.source.kind === "commercial_reference" ? "reference-safe" : "original"}</small></span></button>)}
         </div>
         <div className="queue-mini">
           <span className="eyebrow">Active jobs</span>

@@ -24,6 +24,9 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
 test("reduced-motion preference suppresses portal animation", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/#/portal");
+  await page.getByRole("textbox", { name: "Project name" }).fill("Motion Test");
+  await page.getByRole("textbox", { name: "Project type" }).fill("Interaction System");
+  await page.getByRole("button", { name: "Create project" }).click();
 
   const animation = await page.locator(".orb-ring.a").evaluate((element) => {
     const style = getComputedStyle(element);

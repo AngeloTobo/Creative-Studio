@@ -23,12 +23,16 @@ export const CREATIVE_STUDIO_ROUTES = {
 } as const;
 
 export type CreativeStudioRoute =
-  | "session" | "projects" | "dna-list" | "dna-create" | "jobs-list" | "jobs-create"
+  | "session" | "projects" | "project-create" | "project-update" | "project-archive"
+  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "capabilities";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
   if (method === "GET" && pathname === "/api/creative-studio/session") return "session";
   if (method === "GET" && pathname === "/api/creative-studio/projects") return "projects";
+  if (method === "POST" && pathname === "/api/creative-studio/projects") return "project-create";
+  if (method === "PATCH" && /^\/api\/creative-studio\/projects\/[a-z0-9_]+$/i.test(pathname)) return "project-update";
+  if (method === "POST" && /^\/api\/creative-studio\/projects\/[a-z0-9_]+\/archive$/i.test(pathname)) return "project-archive";
   if (method === "GET" && pathname === "/api/creative-studio/dna") return "dna-list";
   if (method === "POST" && pathname === "/api/creative-studio/dna") return "dna-create";
   if (method === "GET" && pathname === "/api/creative-studio/jobs") return "jobs-list";
@@ -56,6 +60,9 @@ export type CreateCreativeDnaRequest = CreativeDnaInput & {
   projectId: string;
   parentArtifactId?: string | null;
 };
+
+export type CreateProjectResponse = { project: Project };
+export type UpdateProjectResponse = { project: Project };
 
 export type CreateCreativeDnaResponse = {
   artifact: CreativeDnaArtifact;

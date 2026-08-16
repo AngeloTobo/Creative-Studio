@@ -185,9 +185,29 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .library-dimensions span { display: flex; justify-content: space-between; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,.035); color: var(--text-muted); font-size: 9px; text-transform: uppercase; }
 .library-dimensions b { color: var(--text-main); }
 .lib-card .lc-foot .btn { height: 34px; margin-left: auto; padding: 0 13px; font-size: 11px; }
+.projects-view { display: flex; flex-direction: column; gap: 16px; }
+.projects-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
+.projects-toolbar h2, .project-form-head h2 { margin-top: 5px; font-family: var(--font-display); font-size: clamp(26px, 4vw, 42px); letter-spacing: -.04em; }
+.project-onboarding { min-height: min(680px, calc(100dvh - 190px)); justify-content: center; }
+.project-onboarding .project-form { width: min(760px, 100%); margin: 0 auto; }
+.project-form { padding: 22px; border-radius: var(--r-xl); }
+.project-form-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.project-form-copy { max-width: 620px; margin-top: 9px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.project-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 20px; }
+.project-fields .field > span { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.project-field-wide { grid-column: 1 / -1; }
+.project-description { min-height: 88px; }
+.project-hues { display: flex; align-items: center; gap: 10px; margin-top: 17px; border: 0; }
+.project-hues legend { margin-bottom: 9px; color: var(--text-muted); font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.project-hues button { width: 29px; height: 29px; border: 2px solid transparent; border-radius: 50%; background: var(--project-hue); box-shadow: 0 0 16px -5px var(--project-hue); }
+.project-hues button.on { border-color: #fff; transform: scale(1.08); }
+.project-form-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
 .projects-grid { display: flex; flex-direction: column; gap: 12px; }
-.project-card { display: flex; align-items: center; gap: 15px; padding: 17px; border-radius: var(--r-lg); text-align: left; }
+.project-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 17px; border-radius: var(--r-lg); text-align: left; }
 .project-card.on { border-color: color-mix(in oklab, var(--pink) 45%, transparent); background: color-mix(in oklab, var(--pink) 8%, var(--surface)); }
+.project-card.archived { opacity: .62; }
+.project-select { display: flex; min-width: 0; flex: 1; align-items: center; gap: 15px; color: inherit; text-align: left; }
+.project-select:disabled { cursor: default; opacity: 1; }
 .project-card-main { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .project-card-main > span { display: flex; align-items: center; gap: 8px; }
 .project-card-main > strong { font-family: var(--font-display); }
@@ -196,6 +216,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .project-counts { display: flex; align-items: center; gap: 14px; }
 .project-counts > b { display: flex; flex-direction: column; font-family: var(--font-display); font-size: 19px; text-align: center; }
 .project-counts small { color: var(--text-muted); font-family: var(--font-body); font-size: 8px; text-transform: uppercase; }
+.project-actions { display: flex; flex: none; gap: 7px; }
+.project-actions .btn { height: 37px; padding: 0 12px; font-size: 10px; }
+.project-archive { background: rgba(251,113,133,.09); color: #fda4af; }
+.project-card > .project-form { width: 100%; margin-top: 4px; border-color: var(--border-soft); background: rgba(5,5,18,.35); }
 
 /* Runtime */
 .adapter-banner { display: flex; align-items: center; gap: 13px; padding: 16px; border: 1px solid var(--border-mid); border-radius: var(--r-lg); }
@@ -261,8 +285,12 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .artifact-summary { grid-template-columns: 1fr 1fr; }
   .artifact-grid, .library-grid { grid-template-columns: 1fr; }
   .project-card { align-items: flex-start; }
+  .project-select { align-items: flex-start; }
   .project-counts { flex-direction: column; gap: 5px; }
   .project-counts > svg { display: none; }
+  .project-actions { width: 100%; justify-content: flex-end; }
+  .project-fields { grid-template-columns: 1fr; }
+  .project-field-wide { grid-column: auto; }
   .adapter-banner { align-items: flex-start; flex-wrap: wrap; }
   .adapter-banner .btn { width: 100%; }
 }

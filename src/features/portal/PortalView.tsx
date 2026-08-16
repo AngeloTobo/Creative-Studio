@@ -21,9 +21,10 @@ const CREATE_CARDS: Array<{ id: StudioView; label: string; desc: string; icon: I
 
 export function PortalView({ navigate }: { navigate: (view: StudioView) => void }) {
   const { snapshot, activeProjectId, selectDna } = useStudio();
-  const project = snapshot?.projects.find((item) => item.id === activeProjectId) ?? snapshot?.projects[0];
-  const activeJobs = snapshot?.jobs.filter((job) => job.status === "queued" || job.status === "running") ?? [];
-  const recentArtifacts = snapshot?.artifacts.slice(0, 4) ?? [];
+  const project = snapshot?.projects.find((item) => item.id === activeProjectId);
+  const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
+  const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && (job.status === "queued" || job.status === "running")) ?? [];
+  const recentArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId).slice(0, 4) ?? [];
 
   return (
     <div className="portal fade-up">
@@ -42,7 +43,7 @@ export function PortalView({ navigate }: { navigate: (view: StudioView) => void 
           <SectionHead label="Create Something New" />
           <div className="create-cards studio-create-cards">
             {CREATE_CARDS.map((card, index) => <button key={`${card.label}-${index}`} className="ccard" style={{ "--ca": card.accent } as React.CSSProperties} onClick={() => {
-              if (card.id === "generate" && snapshot?.dnaArtifacts[0]) selectDna(snapshot.dnaArtifacts[0]);
+              if (card.id === "generate" && projectDna[0]) selectDna(projectDna[0]);
               navigate(card.id);
             }}><span className="ccard-top"><span className="ccard-ic"><Icon name={card.icon} size={20} /></span><strong className="ccard-name">{card.label}</strong><span className="ccard-desc">{card.desc}</span></span><span className="ccard-art"><span className="cca-g" /><span className="cca-wave">{Array.from({ length: 22 }, (_, bar) => <i key={bar} style={{ height: `${18 + Math.abs(Math.sin(bar * 0.9 + card.label.length)) * 80}%` }} />)}</span></span></button>)}
           </div>

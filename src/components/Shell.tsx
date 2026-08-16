@@ -26,7 +26,7 @@ function NavItem({ item, active, navigate }: { item: (typeof NAV_MAIN)[number]; 
 
 function Sidebar({ view, navigate }: { view: StudioView; navigate: (view: StudioView) => void }) {
   const { snapshot, activeProjectId } = useStudio();
-  const project = snapshot?.projects.find((item) => item.id === activeProjectId) ?? snapshot?.projects[0];
+  const project = snapshot?.projects.find((item) => item.id === activeProjectId);
   return <aside className="sidebar scroll">
     <button className="brand" onClick={() => navigate("portal")}><span className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></span><span className="brand-txt"><b className="bt-1">CREATIVE</b><strong className="bt-2">STUDIO</strong><small className="bt-3">private creative workstation</small></span></button>
     <div className="nav-cap eyebrow">Create</div><nav className="nav">{NAV_MAIN.map((item) => <NavItem key={item.id} item={item} active={view === item.id} navigate={navigate} />)}</nav>
@@ -44,19 +44,20 @@ function TopBar({ view }: { view: StudioView }) {
 
 function RightPanel({ navigate }: { navigate: (view: StudioView) => void }) {
   const { snapshot, activeProjectId, activeDna } = useStudio();
-  const project = snapshot?.projects.find((item) => item.id === activeProjectId) ?? snapshot?.projects[0];
-  const activeJobs = snapshot?.jobs.filter((job) => job.status === "queued" || job.status === "running") ?? [];
+  const project = snapshot?.projects.find((item) => item.id === activeProjectId);
+  const projectJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId) ?? [];
+  const activeJobs = projectJobs.filter((job) => job.status === "queued" || job.status === "running");
   return <aside className="rightpanel scroll">
     {project ? <section className="rp-card glass"><div className="rp-head"><span className="eyebrow">Active Project</span><button className="link-btn" onClick={() => navigate("projects")}>View all</button></div><div className="rp-proj"><ProjectAvatar project={project} size={54} /><span className="rpp-body"><strong className="rpp-name">{project.name} <i className="badge active">{project.status}</i></strong><p className="rpp-desc">{project.description}</p></span></div></section> : null}
     <section className="rp-card glass"><div className="rp-head"><span className="eyebrow">CreativeDNA</span><button className="link-btn" onClick={() => navigate("dna")}>Open</button></div>{activeDna ? <div className="active-dna-card"><span className="dna-version">v{activeDna.version}</span><strong>{activeDna.name}</strong><small>{activeDna.targetModality} · {activeDna.source.kind === "commercial_reference" ? "rights-safe" : "original"}</small></div> : <p className="empty-copy">Select or build a blueprint.</p>}</section>
-    <section className="rp-card glass"><div className="rp-head"><span className="eyebrow">Queue Overview</span><button className="link-btn" onClick={() => navigate("queue")}>View all</button></div><div className="queue-mini"><div className="qm-stat"><strong className="qm-num">{activeJobs.length}</strong><span className="qm-lab">Active</span></div><div className="qm-stat"><strong className="qm-num">{snapshot?.jobs.filter((job) => job.status === "completed").length ?? 0}</strong><span className="qm-lab">Done</span></div><div className="qm-stat"><strong className="qm-num">{snapshot?.jobs.filter((job) => job.status === "failed").length ?? 0}</strong><span className="qm-lab">Failed</span></div></div>{activeJobs.slice(0, 3).map((job) => <div className="act-row" key={job.id}><StatusDot status={job.status} /><span><strong>{job.modality}</strong><small>{job.status} · {job.progress}%</small></span></div>)}</section>
+    <section className="rp-card glass"><div className="rp-head"><span className="eyebrow">Queue Overview</span><button className="link-btn" onClick={() => navigate("queue")}>View all</button></div><div className="queue-mini"><div className="qm-stat"><strong className="qm-num">{activeJobs.length}</strong><span className="qm-lab">Active</span></div><div className="qm-stat"><strong className="qm-num">{projectJobs.filter((job) => job.status === "completed").length}</strong><span className="qm-lab">Done</span></div><div className="qm-stat"><strong className="qm-num">{projectJobs.filter((job) => job.status === "failed").length}</strong><span className="qm-lab">Failed</span></div></div>{activeJobs.slice(0, 3).map((job) => <div className="act-row" key={job.id}><StatusDot status={job.status} /><span><strong>{job.modality}</strong><small>{job.status} · {job.progress}%</small></span></div>)}</section>
     <section className="rp-card glass"><div className="rp-head"><span className="eyebrow">Runtime</span><button className="link-btn" onClick={() => navigate("runtime")}>Inspect</button></div>{snapshot?.capabilities.slice(0, 4).map((capability) => <div className="runtime-row" key={capability.key}><i className={capability.state} /><span><strong>{capability.label}</strong><small>{capability.state}</small></span></div>)}</section>
   </aside>;
 }
 
 function ReviewDock({ navigate }: { navigate: (view: StudioView) => void }) {
-  const { snapshot } = useStudio();
-  const latest = snapshot?.artifacts[0];
+  const { snapshot, activeProjectId } = useStudio();
+  const latest = snapshot?.artifacts.find((artifact) => artifact.projectId === activeProjectId);
   return <footer className="player"><div className="pl-now"><span className="pln-thumb" style={{ background: latest ? `linear-gradient(135deg,${latest.preview.colors[0]},${latest.preview.colors[1]})` : "linear-gradient(135deg,#312e81,#831843)" }} /><span><strong className="pln-title">{latest?.name ?? "Review dock"}</strong><small className="pln-sub">{latest ? `${latest.kind} · ${latest.status}` : "Completed artifacts wait here"}</small></span></div><div className="review-dock-center"><span className="eyebrow">Creative loop</span><strong>DNA → job → artifact → decision</strong></div><button className="btn btn-ghost" onClick={() => navigate("gallery")}><Icon name="gallery" size={16} /> Review artifacts</button></footer>;
 }
 

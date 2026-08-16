@@ -36,6 +36,7 @@ export type CreativeDnaInput = {
 
 export type CreativeDnaCompileMeta = {
   artifactId: string;
+  projectId: string;
   version: number;
   rootArtifactId: string;
   parentArtifactId?: string | null;
@@ -45,6 +46,7 @@ export type CreativeDnaCompileMeta = {
 export type CreativeDnaArtifact = {
   schemaVersion: typeof CREATIVE_DNA_SCHEMA_VERSION;
   artifactId: string;
+  projectId: string;
   version: number;
   rootArtifactId: string;
   name: string;
@@ -197,6 +199,7 @@ export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCom
   return {
     schemaVersion: CREATIVE_DNA_SCHEMA_VERSION,
     artifactId: meta.artifactId,
+    projectId: meta.projectId,
     version: Math.max(1, Math.round(meta.version)),
     rootArtifactId: meta.rootArtifactId,
     name,
