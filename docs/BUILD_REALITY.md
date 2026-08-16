@@ -30,10 +30,12 @@ Last verified: 2026-08-16 (America/Chicago)
 - Desktop and 390px mobile rendered inspection completed; module-semantic layout regressions found during inspection were corrected.
 - Playwright reports six passing checks and two intentional mobile skips: desktop/mobile empty-first-run project creation, DNA versioning, generation, review, and reload persistence; a desktop project edit/archive lifecycle; reduced motion in both layouts; and desktop keyboard focus/navigation.
 - Production environment preflight passes with a real D1 ID, dedicated R2 binding, AFDFW service binding, custom domain, and disabled `workers.dev` route.
-- Cloudflare deployed Worker version `cd92d0f5-95ab-4a85-b7ee-2533d55be3c5` to `cs.angelotoborg.com`.
+- Cloudflare deployed Worker version `02140ad1-74b5-4982-aefe-137d224f9127` to `cs.angelotoborg.com`.
 - Remote D1 reports no pending migrations after `0001_creative_studio.sql` and `0002_artifact_retention.sql`.
 - Anonymous requests to `/` and `/api/creative-studio/session` both receive Cloudflare Access redirects.
 - Authenticated live inspection opened the production UI and reported all six runtime capabilities available, including Creative Studio D1, R2 retention, and the AFDFW session/generation adapters.
+- Authenticated live inspection confirmed the empty production Project screen renders `Create your first project` with no seeded project cards.
+- The three legacy prototype project rows were deleted only after exact owner/ID/name/timestamp matching and dependent-record checks; the post-cleanup production counts are zero projects, DNA artifacts, jobs, artifacts, and acceptances.
 
 ## Current production boundary
 

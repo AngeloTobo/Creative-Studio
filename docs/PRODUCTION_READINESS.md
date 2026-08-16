@@ -10,7 +10,7 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Service binding: `AFDFW` -> `art-feed-dfw`
 - Custom domain: `cs.angelotoborg.com`
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-16: `cd92d0f5-95ab-4a85-b7ee-2533d55be3c5`
+- Production Worker version verified on 2026-08-16: `02140ad1-74b5-4982-aefe-137d224f9127`
 
 ## Release sequence
 
