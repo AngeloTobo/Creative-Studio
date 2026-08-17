@@ -18,12 +18,25 @@ export type CreativeDnaTarget = "music" | "image";
 export type CreativeDnaSourceKind = "original" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
 
+export type CreativeDnaMediaDescription = {
+  schemaVersion: "creative-dna-media-description/1.0";
+  text: string;
+  provider: "local-comfyui";
+  workflowId: "gemma4-multimodal-description";
+  workflowVersion: 1;
+  model: "gemma4_e4b_it_fp8_scaled.safetensors";
+  prompt: string;
+  comfyPromptId: string;
+  settings: Record<string, string | number | boolean>;
+};
+
 export type CreativeDnaTrainingSourceAnalysis = {
   sourceId: string;
   mediaId: string;
   sourceType: "upload" | "accepted-artifact";
   kind: "image" | "audio" | "video";
   label: string;
+  detailedDescription?: CreativeDnaMediaDescription;
   observations: string[];
   metrics: Record<string, string | number | boolean>;
   dimensions: Partial<CreativeDnaDimensions>;
@@ -31,7 +44,7 @@ export type CreativeDnaTrainingSourceAnalysis = {
 };
 
 export type CreativeDnaTrainingAnalysis = {
-  schemaVersion: "creative-dna-training-analysis/1.0";
+  schemaVersion: "creative-dna-training-analysis/1.0" | "creative-dna-training-analysis/1.1";
   createdAt: string;
   summary: string;
   sources: CreativeDnaTrainingSourceAnalysis[];

@@ -38,7 +38,7 @@ const trained = {
     assetIds: ["media_source"],
     trainingExampleIds: [],
     analysis: {
-      schemaVersion: "creative-dna-training-analysis/1.0" as const,
+      schemaVersion: "creative-dna-training-analysis/1.1" as const,
       createdAt,
       summary: "Measured the consented source and extracted a reusable visual direction.",
       sources: [{
@@ -47,6 +47,17 @@ const trained = {
         sourceType: "upload" as const,
         kind: "image" as const,
         label: "Luminous study",
+        detailedDescription: {
+          schemaVersion: "creative-dna-media-description/1.0" as const,
+          text: "A luminous glass form stands against a deep background, with controlled warm highlights, crisp edges, and spacious negative space.",
+          provider: "local-comfyui" as const,
+          workflowId: "gemma4-multimodal-description" as const,
+          workflowVersion: 1 as const,
+          model: "gemma4_e4b_it_fp8_scaled.safetensors" as const,
+          prompt: "Describe this uploaded image as a detailed reusable generation prompt.",
+          comfyPromptId: "test-description-prompt-001",
+          settings: { maxLength: 2048, temperature: 0.7, seed: 0 },
+        },
         observations: ["Warm highlights remain controlled against a deep background."],
         metrics: { width: 2048, dominantTone: "warm-neutral" },
         dimensions: { energy: 58, contrast: 72, warmth: 46 },
@@ -116,6 +127,9 @@ describe("CreativeDNA training review", () => {
     expect(markup).toContain("Dimension comparison");
     expect(markup).toContain("94%");
     expect(markup).toContain("Warm highlights remain controlled");
+    expect(markup).toContain("Detailed media description");
+    expect(markup).toContain("A luminous glass form stands against a deep background");
+    expect(markup).toContain("gemma4_e4b_it_fp8_scaled.safetensors");
     expect(markup).toContain("dominantTone");
     expect(markup).toContain("Training review note (required)");
     expect(markup).toContain("Approve &amp; activate");

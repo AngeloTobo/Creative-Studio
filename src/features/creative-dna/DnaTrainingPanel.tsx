@@ -58,8 +58,8 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
 
   return <section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
-      <div><span className="eyebrow">Upload-based learning</span><h2 id="dna-training-title">Train CreativeDNA</h2><p>Start a durable training run from consented project uploads and accepted generation evidence. Inputs stay owner- and project-scoped.</p></div>
-      <span className="training-runner-state"><i /> Local runner protocol</span>
+      <div><span className="eyebrow">Upload-based learning</span><h2 id="dna-training-title">Train CreativeDNA</h2><p>Gemma 4 writes a detailed reusable description of every selected image, audio file, and video while measured evidence shapes the DNA.</p></div>
+      <span className="training-runner-state"><i /> Local runner + Gemma 4</span>
     </header>
 
     <div className="dna-training-layout">
@@ -87,7 +87,7 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
     {error ? <div className="inline-error" role="alert">{error}</div> : null}
     <div className="training-runs">
       <div className="training-section-head"><span><strong>Training runs</strong><small>{jobs.length} recorded</small></span></div>
-      {jobs.slice(0, 6).map((job) => <article className="training-run" key={job.id}>
+      {jobs.slice(0, 3).map((job) => <article className="training-run" key={job.id}>
         <span className={`state-pill ${job.status}`}>{statusLabel(job.status)}</span>
         <span><strong>{job.name}</strong><small>{job.assetIds.length} uploads · {job.trainingExampleIds.length} accepted examples · {job.targetModality}</small></span>
         <span className="training-run-progress"><b>{job.progress}%</b><small>{job.resultDnaArtifactId ? `DNA ${job.resultDnaArtifactId}` : job.runnerId ? `runner ${job.runnerId}` : "runner not claimed"}</small></span>

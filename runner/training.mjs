@@ -7,7 +7,7 @@ import ffmpegPath from "ffmpeg-static";
 import { parseBuffer } from "music-metadata";
 import sharp from "sharp";
 
-export const TRAINING_ANALYSIS_SCHEMA_VERSION = "creative-dna-training-analysis/1.0";
+export const TRAINING_ANALYSIS_SCHEMA_VERSION = "creative-dna-training-analysis/1.1";
 export const DIMENSION_KEYS = ["energy", "tension", "contrast", "warmth", "spaciousness", "rhythmicity", "organicity", "polish"];
 
 const clamp = (value, minimum = 0, maximum = 100) => Math.max(minimum, Math.min(maximum, value));
@@ -355,13 +355,35 @@ function addTrainingExampleContext(profile, example) {
   };
 }
 
-async function analyzeSource(specification, download) {
+function addDetailedDescriptionContext(profile, detailedDescription) {
+  if (!detailedDescription) return profile;
+  const signals = promptSignals(detailedDescription.text);
+  const dimensions = { ...profile.dimensions };
+  for (const [key, value] of Object.entries(signals)) dimensions[key] = score(dimensions[key] * 0.88 + value * 0.12);
+  return {
+    ...profile,
+    observations: [...profile.observations, `Gemma 4 produced a durable ${detailedDescription.text.length}-character ${detailedDescription.workflowId} media description.`],
+    metrics: {
+      ...profile.metrics,
+      descriptionCharacters: detailedDescription.text.length,
+      descriptionModel: detailedDescription.model,
+    },
+    dimensions,
+    confidence: clamp(profile.confidence + (Object.keys(signals).length ? 0.03 : 0.01), 0, 0.95),
+  };
+}
+
+async function analyzeSource(specification, download, describe, progress) {
   const media = await download(specification.mediaId);
   let profile;
   if (specification.kind === "image") profile = await analyzeImage(media.buffer, specification.label);
   else if (specification.kind === "audio") profile = await analyzeAudio(media.buffer, media.name || specification.name, media.mimeType, specification.label);
   else profile = await analyzeVideo(media.buffer, media.name || specification.name, media.mimeType, specification.label);
-  return addTrainingExampleContext(profile, specification.example);
+  const detailedDescription = typeof describe === "function" ? await describe({ specification, media, progress }) : undefined;
+  return {
+    ...addDetailedDescriptionContext(addTrainingExampleContext(profile, specification.example), detailedDescription),
+    detailedDescription,
+  };
 }
 
 function aggregateDimensions(sources, baseDna) {
@@ -387,7 +409,7 @@ function synthesisDirective(bundle, dimensions, sources) {
   return `Evidence-synthesized ${bundle.trainingJob.targetModality} language from ${sources.length} consented ${sourceTypes} source${sources.length === 1 ? "" : "s"}. Emphasize ${strongest}; keep ${restrained} controlled. Preserve the measured balance as a reusable direction rather than reproducing any single source.`;
 }
 
-export async function synthesizeCreativeDna(bundle, { download, heartbeat = async () => undefined } = {}) {
+export async function synthesizeCreativeDna(bundle, { download, describe, heartbeat = async () => undefined } = {}) {
   if (!bundle?.trainingJob || typeof download !== "function") throw new Error("training_bundle_invalid");
   const examples = new Map(bundle.trainingExamples.map((example) => [example.id, example]));
   const specifications = [
@@ -407,14 +429,15 @@ export async function synthesizeCreativeDna(bundle, { download, heartbeat = asyn
   const analyzed = [];
   for (let index = 0; index < specifications.length; index += 1) {
     const specification = specifications[index];
-    await heartbeat(10 + Math.floor(index / specifications.length * 75));
-    const profile = await analyzeSource(specification, download);
+    const progress = 10 + Math.floor(index / specifications.length * 75);
+    await heartbeat(progress);
+    const profile = await analyzeSource(specification, download, describe, progress);
     analyzed.push({ ...specification, ...profile });
   }
   const dimensions = aggregateDimensions(analyzed, bundle.baseDna);
   const summary = synthesisDirective(bundle, dimensions, analyzed);
-  const sources = analyzed.map(({ sourceId, mediaId, sourceType, kind, label, observations, metrics, dimensions: sourceDimensions, confidence }) => ({
-    sourceId, mediaId, sourceType, kind, label, observations, metrics, dimensions: sourceDimensions, confidence: rounded(confidence, 3),
+  const sources = analyzed.map(({ sourceId, mediaId, sourceType, kind, label, detailedDescription, observations, metrics, dimensions: sourceDimensions, confidence }) => ({
+    sourceId, mediaId, sourceType, kind, label, detailedDescription, observations, metrics, dimensions: sourceDimensions, confidence: rounded(confidence, 3),
   }));
   await heartbeat(92);
   return {
@@ -426,7 +449,7 @@ export async function synthesizeCreativeDna(bundle, { download, heartbeat = asyn
       influence: bundle.baseDna?.influence || { angeloCore: 55, currentProject: 85, reference: 35 },
     },
     analysis: {
-      schemaVersion: TRAINING_ANALYSIS_SCHEMA_VERSION,
+      schemaVersion: sources.every((source) => source.detailedDescription) ? TRAINING_ANALYSIS_SCHEMA_VERSION : "creative-dna-training-analysis/1.0",
       createdAt: new Date().toISOString(),
       summary,
       sources,

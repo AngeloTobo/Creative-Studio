@@ -18,7 +18,10 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("button", { name: "Save new version" }).click();
   await expect(page.getByText("Saved · v2")).toBeVisible();
 
+  await page.getByRole("tab", { name: /Train/ }).click();
   await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
+  await expect(page.getByText(/detailed reusable description of every selected image, audio file, and video/)).toBeVisible();
+  await page.getByRole("tab", { name: /Generate/ }).click();
   await expect(page.getByRole("heading", { name: "Generate", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Queue image" }).click();
   await expect(page).toHaveURL(/#\/queue$/);
@@ -60,6 +63,7 @@ test("cancelled generation explains the retained history and offers a durable re
   await page.getByRole("textbox", { name: "What are you making?" }).fill("An original image with a clean silhouette and high contrast rim light.");
   await page.locator(".dna-compose").getByRole("button", { name: "image", exact: true }).click();
   await page.getByRole("button", { name: "Build CreativeDNA" }).click();
+  await page.getByRole("tab", { name: /Generate/ }).click();
   await page.getByRole("button", { name: "Queue image" }).click();
   await page.getByRole("button", { name: "Cancel tracking" }).click();
 

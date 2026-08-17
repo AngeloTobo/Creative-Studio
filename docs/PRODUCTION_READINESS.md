@@ -14,8 +14,8 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Custom domain: `cs.angelotoborg.com`
 - Local Runner API domain: `runner.cs.angelotoborg.com` (runner routes only; no shell)
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-16: `540fc624-1db3-4a47-a3e3-cd9359677116`
-- Installed runner: `Angelo RTX 3090 workstation`, runner `1.1.0`, ComfyUI `0.33.0`, RTX 3090 heartbeat healthy
+- Production Worker version verified on 2026-08-16: `e1d315e6-75ad-4a96-8042-0dee14c9475a`
+- Installed runner: `Angelo RTX 3090 workstation`, runner `1.2.0`, ComfyUI `0.33.0`, RTX 3090 heartbeat healthy
 
 ## Release sequence
 
@@ -33,8 +33,8 @@ This runs the complete local verification suite, validates the production contra
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
 6. `runner.cs.angelotoborg.com/` returns `404`; its unauthenticated claim route returns `401`; the main product root still redirects through Cloudflare Access.
-7. An authenticated Runtime-page check reports Local Runner, video generation, and CreativeDNA training available while a recent Local Runner 1.1 heartbeat is healthy.
-8. Remote D1 has no pending migration after `0009_creative_dna_training_review.sql`; runner registration exists and generated job/artifact/training-review tables contain no deployment fixtures.
+7. An authenticated Runtime-page check reports Local Runner, video generation, and multimodal CreativeDNA descriptions available while a recent Local Runner 1.2 heartbeat is healthy.
+8. Remote D1 has no pending migration after `0010_creative_dna_training_evidence_reservations.sql`; runner registration exists and deployment verification adds no job, artifact, or training-review fixtures.
 9. Windows Scheduled Task `Creative Studio Local Runner` is running, its config ACL permits only the current user and SYSTEM, and D1 reports no runner error.
 
 ## Rollback

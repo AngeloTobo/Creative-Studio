@@ -334,6 +334,17 @@ describe("Creative Studio Worker API", () => {
       headers: { "content-type": "application/json", authorization: `Bearer ${enrolled.token}` },
       body: JSON.stringify(body),
     }), production);
+    const unsupportedClaim = await result(await runnerRequest("/api/creative-studio/runner/training/claim", {}));
+    expect(unsupportedClaim).toMatchObject({ bundle: null });
+    const runnerHeartbeat = await result(await runnerRequest("/api/creative-studio/runner/heartbeat", {
+      version: "1.2.0",
+      comfyUrl: "http://127.0.0.1:8188",
+      comfyVersion: "0.33.0",
+      device: "Test GPU",
+      activeJobId: null,
+      error: null,
+    }));
+    expect(runnerHeartbeat).toMatchObject({ runner: { version: "1.2.0" } });
     const claimed = await result(await runnerRequest("/api/creative-studio/runner/training/claim", {})) as {
       bundle: { trainingJob: { id: string; status: string; runnerId: string }; assets: Array<{ id: string; trainingEligible: boolean }> };
     };
@@ -357,7 +368,7 @@ describe("Creative Studio Worker API", () => {
           dimensions: { contrast: 72, warmth: 42, polish: 66 },
         },
         analysis: {
-          schemaVersion: "creative-dna-training-analysis/1.0",
+          schemaVersion: "creative-dna-training-analysis/1.1",
           createdAt: "2020-01-01T00:00:00.000Z",
           summary: "Measured one consented image source and synthesized its reusable visual dimensions.",
           sources: [{
@@ -366,6 +377,17 @@ describe("Creative Studio Worker API", () => {
             sourceType: "accepted-artifact",
             kind: "video",
             label: "Untrusted label",
+            detailedDescription: {
+              schemaVersion: "creative-dna-media-description/1.0",
+              text: "A luminous abstract form occupies the center of a cool, open landscape with soft depth and controlled highlights.",
+              provider: "local-comfyui",
+              workflowId: "gemma4-multimodal-description",
+              workflowVersion: 1,
+              model: "gemma4_e4b_it_fp8_scaled.safetensors",
+              prompt: "Describe this uploaded image as a detailed, reusable generation prompt with concrete visual observations.",
+              comfyPromptId: "gemma-test-prompt-001",
+              settings: { maxLength: 2048, temperature: 0.7, seed: 0 },
+            },
             observations: ["Measured image pixels."],
             metrics: { width: 2048, warmth: 42.25 },
             dimensions: Object.fromEntries(dimensionKeys.map((key, index) => [key, 48 + index])),
@@ -390,6 +412,11 @@ describe("Creative Studio Worker API", () => {
       sourceType: "upload",
       kind: "image",
       label: "Training Source",
+      detailedDescription: {
+        provider: "local-comfyui",
+        workflowId: "gemma4-multimodal-description",
+        model: "gemma4_e4b_it_fp8_scaled.safetensors",
+      },
     });
     expect(dna.artifacts[0].evidence).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "training.analysis.dimensions.warmth", class: "derived/translated" }),

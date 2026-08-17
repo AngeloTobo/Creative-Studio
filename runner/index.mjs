@@ -5,7 +5,25 @@ import { pathToFileURL } from "node:url";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.1.0";
+export const RUNNER_VERSION = "1.2.0";
+
+const GEMMA_DESCRIPTION_MODEL = "gemma4_e4b_it_fp8_scaled.safetensors";
+const GEMMA_DESCRIPTION_WORKFLOW_ID = "gemma4-multimodal-description";
+const GEMMA_DESCRIPTION_WORKFLOW_VERSION = 1;
+const GEMMA_DESCRIPTION_TEMPLATE = JSON.parse(readFileSync(new URL("./workflows/gemma4-multimodal-description.json", import.meta.url), "utf8"));
+const GEMMA_DESCRIPTION_SETTINGS = Object.freeze({
+  maxLength: 2048,
+  samplingMode: "on",
+  temperature: 0.7,
+  topK: 64,
+  topP: 0.95,
+  minP: 0.05,
+  repetitionPenalty: 1.05,
+  seed: 0,
+  presencePenalty: 0,
+  thinking: false,
+  useDefaultTemplate: true,
+});
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -84,6 +102,57 @@ async function downloadTrainingMedia(config, mediaId) {
     mimeType: response.headers.get("content-type") || "application/octet-stream",
     name: encodedName ? decodeURIComponent(encodedName) : mediaId,
   };
+}
+
+async function uploadTrainingComfyInput(config, sourceId, media) {
+  const original = basename(media.name || sourceId).replace(/[^a-z0-9._-]/gi, "_");
+  const fileName = `cs_training_${sourceId}_${original}`;
+  const form = new FormData();
+  form.set("image", new Blob([media.buffer], { type: media.mimeType }), fileName);
+  form.set("type", "input");
+  form.set("overwrite", "true");
+  const response = await fetch(`${config.comfyUrl}/upload/image`, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
+  if (!response.ok) throw new Error(`training_comfy_input_upload_${response.status}`);
+  const result = await response.json();
+  if (!result?.name) throw new Error("training_comfy_input_upload_invalid");
+  return result.subfolder ? `${result.subfolder}/${result.name}` : result.name;
+}
+
+function descriptionPrompt(kind, label) {
+  const shared = `Describe the uploaded ${kind} named "${String(label || "Untitled media").slice(0, 160)}" as a detailed, reusable generation prompt. Be specific and concrete. Describe only what is present; do not invent identity, context, or hidden intent. Do not refer to this request, the upload process, or the model.`;
+  if (kind === "image") return `${shared} Cover subject and environment, composition and camera viewpoint, pose or action, materials and surface qualities, lighting, color palette, depth, mood, artistic medium or rendering style, fine details, and any visible text. End with one polished paragraph that could reproduce the image's observable content and visual treatment.`;
+  if (kind === "audio") return `${shared} Cover voices and language when discernible, instruments and sound sources, tempo and rhythm, melody and harmony, structure and transitions, timbre, dynamics, spatial mix, production treatment, mood, and notable sonic details. End with one polished paragraph that could reproduce the audio's observable content and production character.`;
+  return `${shared} Cover subjects and environment, the sequence of visible events, composition and camera movement, motion and timing, materials, lighting, color, depth, editing, mood, artistic treatment, visible text, dialogue or voices, music, ambience, and sound effects. End with one polished paragraph that could reproduce the video's observable content, motion, and sound.`;
+}
+
+export function buildGemmaDescriptionGraph(kind, filename, label = "Untitled media") {
+  if (kind !== "image" && kind !== "audio" && kind !== "video") throw new Error("training_description_kind_unsupported");
+  const graph = structuredClone(GEMMA_DESCRIPTION_TEMPLATE);
+  const inputs = graph["1"].inputs;
+  inputs.prompt = descriptionPrompt(kind, label);
+  delete inputs.image;
+  delete inputs.audio;
+  delete inputs.video;
+  if (kind === "image") {
+    graph["2"].inputs.image = filename;
+    inputs.image = ["2", 0];
+    delete graph["5"];
+    delete graph["6"];
+    delete graph["7"];
+  } else if (kind === "audio") {
+    graph["5"].inputs.audio = filename;
+    inputs.audio = ["5", 0];
+    delete graph["2"];
+    delete graph["6"];
+    delete graph["7"];
+  } else {
+    graph["6"].inputs.file = filename;
+    inputs.video = ["7", 0];
+    inputs.audio = ["7", 1];
+    delete graph["2"];
+    delete graph["5"];
+  }
+  return graph;
 }
 
 async function uploadComfyInput(config, asset) {
@@ -186,6 +255,34 @@ function historyError(entry) {
   return execution?.[1]?.exception_message || execution?.[1]?.exception_type || "comfyui_execution_failed";
 }
 
+function textValue(output) {
+  for (const key of ["text", "generated_text", "string"]) {
+    const value = output?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const text = value.filter((item) => typeof item === "string").join("\n").trim();
+      if (text) return text;
+    }
+  }
+  return null;
+}
+
+export function findComfyTextOutput(historyEntry, graph = null) {
+  const outputs = historyEntry?.outputs || {};
+  const preferred = graph && typeof graph === "object" ? Object.entries(graph)
+    .filter(([, node]) => String(node?.class_type || "") === "PreviewAny")
+    .map(([nodeId]) => nodeId) : [];
+  for (const nodeId of preferred) {
+    const text = textValue(outputs[nodeId]);
+    if (text) return text;
+  }
+  for (const output of Object.values(outputs)) {
+    const text = textValue(output);
+    if (text) return text;
+  }
+  return null;
+}
+
 export function isTransientComfyPollError(error) {
   return error?.name === "TimeoutError" || error?.name === "AbortError" || error instanceof TypeError;
 }
@@ -227,6 +324,60 @@ async function waitForOutput(config, bundle, promptId) {
     await sleep(2_000);
   }
   throw new Error("comfyui_execution_timed_out");
+}
+
+async function waitForTextOutput(config, graph, promptId, onHeartbeat) {
+  const started = Date.now();
+  let lastHeartbeat = 0;
+  while (Date.now() - started < 60 * 60_000) {
+    if (Date.now() - lastHeartbeat >= 25_000) {
+      await onHeartbeat();
+      lastHeartbeat = Date.now();
+    }
+    let history;
+    try {
+      const response = await fetch(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, { signal: AbortSignal.timeout(15_000) });
+      if (response.status >= 500) {
+        await sleep(2_000);
+        continue;
+      }
+      if (!response.ok) throw new Error(`comfyui_history_${response.status}`);
+      history = await response.json();
+    } catch (error) {
+      if (!isTransientComfyPollError(error)) throw error;
+      await sleep(2_000);
+      continue;
+    }
+    const entry = history[promptId];
+    const error = historyError(entry);
+    if (error) throw new Error(`comfyui_description_failed:${error}`);
+    const text = findComfyTextOutput(entry, graph);
+    if (text) return text;
+    await sleep(2_000);
+  }
+  throw new Error("comfyui_description_timed_out");
+}
+
+async function describeTrainingMedia(config, trainingJobId, specification, media, progress, heartbeat) {
+  const filename = await uploadTrainingComfyInput(config, specification.sourceId, media);
+  const graph = buildGemmaDescriptionGraph(specification.kind, filename, specification.label);
+  const promptId = await submitPrompt(config, graph, `${trainingJobId}-${specification.sourceId}`);
+  const text = await waitForTextOutput(config, graph, promptId, async () => {
+    await heartbeat(progress);
+    await machineHeartbeat(config, trainingJobId);
+  });
+  if (text.length < 40) throw new Error("comfyui_description_too_short");
+  return {
+    schemaVersion: "creative-dna-media-description/1.0",
+    text: text.slice(0, 12_000),
+    provider: "local-comfyui",
+    workflowId: GEMMA_DESCRIPTION_WORKFLOW_ID,
+    workflowVersion: GEMMA_DESCRIPTION_WORKFLOW_VERSION,
+    model: GEMMA_DESCRIPTION_MODEL,
+    prompt: graph["1"].inputs.prompt,
+    comfyPromptId: promptId,
+    settings: { ...GEMMA_DESCRIPTION_SETTINGS },
+  };
 }
 
 function contentType(filename, upstream) {
@@ -285,15 +436,17 @@ async function executeBundle(config, bundle) {
 
 async function executeTrainingBundle(config, bundle) {
   try {
+    const heartbeat = async (progress) => {
+      const response = await runnerRequest(config, `/api/creative-studio/runner/training/${bundle.trainingJob.id}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ progress }),
+      });
+      if (!response.continue) throw new Error("training_cancelled");
+    };
     const result = await synthesizeCreativeDna(bundle, {
       download: (mediaId) => downloadTrainingMedia(config, mediaId),
-      heartbeat: async (progress) => {
-        const response = await runnerRequest(config, `/api/creative-studio/runner/training/${bundle.trainingJob.id}/heartbeat`, {
-          method: "POST",
-          body: JSON.stringify({ progress }),
-        });
-        if (!response.continue) throw new Error("training_cancelled");
-      },
+      heartbeat,
+      describe: ({ specification, media, progress }) => describeTrainingMedia(config, bundle.trainingJob.id, specification, media, progress, heartbeat),
     });
     await runnerRequest(config, `/api/creative-studio/runner/training/${bundle.trainingJob.id}/complete`, {
       method: "POST",
@@ -344,6 +497,12 @@ async function selfTest() {
     "9": { class_type: "SaveImage" },
   });
   if (output?.filename !== "result.png") throw new Error("runner_self_test_output_failed");
+  const descriptionGraph = buildGemmaDescriptionGraph("video", "source.mp4", "Self-test video");
+  if (descriptionGraph["1"].inputs.video?.[0] !== "7" || descriptionGraph["1"].inputs.audio?.[0] !== "7" || descriptionGraph["2"] || descriptionGraph["5"]) {
+    throw new Error("runner_self_test_description_graph_failed");
+  }
+  const description = findComfyTextOutput({ outputs: { "4": { text: ["Detailed reusable media description."] } } }, descriptionGraph);
+  if (description !== "Detailed reusable media description.") throw new Error("runner_self_test_description_output_failed");
   if (!isTransientComfyPollError({ name: "TimeoutError" }) || isTransientComfyPollError(new Error("invalid_history"))) {
     throw new Error("runner_self_test_transient_poll_failed");
   }

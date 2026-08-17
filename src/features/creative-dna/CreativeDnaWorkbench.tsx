@@ -27,6 +27,8 @@ const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   polish: "Polish",
 };
 
+type CreativeDnaWorkspace = "design" | "train" | "generate";
+
 function savedLabel(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Saved" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -44,6 +46,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
   const [influence, setInfluence] = useState<CreativeDnaInfluence>({ ...(activeDna?.influence ?? DEFAULT_CREATIVE_DNA_INFLUENCE) });
   const [copied, setCopied] = useState(false);
   const [requestedReviewJobId, setRequestedReviewJobId] = useState("");
+  const [workspace, setWorkspace] = useState<CreativeDnaWorkspace>(initialReviewJobId ? "train" : "design");
   const activeReview = snapshot && activeDna ? creativeDnaReviewDecision(snapshot, activeDna) : null;
   const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
   const projectActiveDnaId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
@@ -55,8 +58,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
     if (surface === "training" && productionLoop?.pendingTrainingReviewJobId) {
       setRequestedReviewJobId(productionLoop.pendingTrainingReviewJobId);
     }
-    const id = surface === "author" ? "creative-dna-authoring" : surface === "generation" ? "creative-dna-generation" : "creative-dna-training";
-    window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    setWorkspace(surface === "author" ? "design" : surface === "generation" ? "generate" : "train");
   };
 
   const load = (artifact: CreativeDnaArtifact) => {
@@ -71,6 +73,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
   };
 
   const startNew = () => {
+    setWorkspace("design");
     selectDna(null);
     setName("");
     setDirective("");
@@ -114,9 +117,15 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
         <button className="btn btn-ghost" onClick={startNew}><Icon name="plus" size={16} /> New DNA</button>
       </div>
 
-      {productionLoop ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} /> : null}
+      {productionLoop ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} compact /> : null}
 
-      <div className="dna-layout">
+      <nav className="dna-workspace-tabs glass" role="tablist" aria-label="CreativeDNA workspace">
+        <button role="tab" aria-selected={workspace === "design"} className={workspace === "design" ? "on" : ""} onClick={() => setWorkspace("design")}><Icon name="dna" size={16} /><span><strong>Design</strong><small>Direction + shape</small></span></button>
+        <button role="tab" aria-selected={workspace === "train"} className={workspace === "train" ? "on" : ""} onClick={() => setWorkspace("train")}><Icon name="history" size={16} /><span><strong>Train</strong><small>Uploads + descriptions</small></span></button>
+        <button role="tab" aria-selected={workspace === "generate"} className={workspace === "generate" ? "on" : ""} onClick={() => setWorkspace("generate")}><Icon name="wand" size={16} /><span><strong>Generate</strong><small>Workflow + queue</small></span></button>
+      </nav>
+
+      {workspace === "design" ? <><div className="dna-layout">
         <div className="form-card glass dna-compose" id="creative-dna-authoring">
           <div className="fc-head">
             <div className="fc-ic" style={{ "--ta": "var(--pink)" } as React.CSSProperties}><Icon name="dna" size={24} /></div>
@@ -161,13 +170,14 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
           {activeDna ? <div className="dna-result" role="status">
             <div className="dna-result-title"><div><span className="badge active">Saved · v{activeDna.version}</span>{activeReview ? <span className={`state-pill ${activeReview === "pending" ? "waiting-for-runner" : activeReview}`}>training {activeReview}</span> : null}{projectActiveDnaId === activeDna.artifactId ? <span className="badge active">Project active</span> : null}{activeDna.rights.referenceStoredAsProvenanceOnly ? <span className="badge rights">Rights-safe</span> : null}<h3>{activeDna.name}</h3></div><button className="lc-act" aria-label="Copy active prompt" onClick={() => void copyPrompt()}><Icon name={copied ? "check" : "copy"} size={17} /></button></div>
             <p>{activeDna.source.directive}</p>
+            {activeDna.training?.analysis.sources.some((source) => source.detailedDescription) ? <details className="dna-source-descriptions">
+              <summary>Detailed source descriptions · {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).length}</summary>
+              {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).map((source) => <article key={source.sourceId}><strong>{source.label}</strong><small>{source.kind} · Gemma 4</small><p>{source.detailedDescription?.text}</p></article>)}
+            </details> : null}
             <small className="dna-result-next">Training and generation controls use this saved version below.</small>
           </div> : <div className="dna-empty"><Icon name="dna" size={30} /><strong>Your versioned blueprint appears here.</strong><span>Build it, reopen it, then evolve it without overwriting history.</span></div>}
         </div>
       </div>
-
-      <DnaTrainingPanel onMedia={onMedia} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} />
-      <GenerationView onQueued={onQueued} onMedia={onMedia} embedded />
 
       <div className="dna-history glass">
         <div className="dna-history-head"><div><span className="eyebrow">Lineage</span><h3>Version history</h3></div><span>{projectDna.length} saved</span></div>
@@ -178,7 +188,10 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
           })}
           {!projectDna.length ? <span className="empty-copy">No saved DNA yet.</span> : null}
         </div>
-      </div>
+      </div></> : null}
+
+      {workspace === "train" ? <DnaTrainingPanel onMedia={onMedia} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /> : null}
+      {workspace === "generate" ? <GenerationView onQueued={onQueued} onMedia={onMedia} embedded /> : null}
     </section>
   );
 }

@@ -21,8 +21,8 @@ import {
   listTrainingExamples,
   projectById,
 } from "./repository";
-import type { RunnerIdentity } from "./runner";
 import type { Env } from "./types";
+import { supportsCreativeDnaMediaDescriptions, type RunnerIdentity } from "./runner";
 
 type TrainingRow = {
   id: string;
@@ -228,6 +228,7 @@ function leaseUntil(now: Date) {
 }
 
 export async function claimLocalRunnerTrainingJob(env: Env, runner: RunnerIdentity) {
+  if (!supportsCreativeDnaMediaDescriptions(runner.version)) return null;
   const now = new Date();
   const nowValue = now.toISOString();
   const candidate = await env.DB.prepare(`select id from creative_dna_training_jobs
@@ -358,6 +359,45 @@ function safeMetrics(value: unknown) {
   }, {});
 }
 
+function boundedNarrative(value: unknown, maxLength: number) {
+  const normalized = String(value ?? "").replace(/\r\n?/g, "\n");
+  return [...normalized]
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return code === 10 || (code >= 32 && code !== 127);
+    })
+    .join("")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function safeDetailedDescription(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_training_analysis");
+  const input = value as Record<string, unknown>;
+  const text = boundedNarrative(input.text, 12_000);
+  const prompt = boundedNarrative(input.prompt, 2_400);
+  const comfyPromptId = boundedText(input.comfyPromptId, 120);
+  if (input.schemaVersion !== "creative-dna-media-description/1.0"
+    || input.provider !== "local-comfyui"
+    || input.workflowId !== "gemma4-multimodal-description"
+    || Number(input.workflowVersion) !== 1
+    || input.model !== "gemma4_e4b_it_fp8_scaled.safetensors"
+    || text.length < 40
+    || prompt.length < 40
+    || !/^[a-z0-9-]{8,120}$/i.test(comfyPromptId)) throw new Error("invalid_training_analysis");
+  return {
+    schemaVersion: "creative-dna-media-description/1.0" as const,
+    text,
+    provider: "local-comfyui" as const,
+    workflowId: "gemma4-multimodal-description" as const,
+    workflowVersion: 1 as const,
+    model: "gemma4_e4b_it_fp8_scaled.safetensors" as const,
+    prompt,
+    comfyPromptId,
+    settings: safeMetrics(input.settings),
+  };
+}
+
 function safeSourceDimensions(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_training_analysis");
   const record = value as Record<string, unknown>;
@@ -394,7 +434,7 @@ function sanitizeTrainingAnalysis(
   assets: MediaAsset[],
   examples: CreativeTrainingExample[],
 ): CreativeDnaTrainingAnalysis {
-  if (!value || value.schemaVersion !== "creative-dna-training-analysis/1.0" || !Array.isArray(value.sources)) {
+  if (!value || (value.schemaVersion !== "creative-dna-training-analysis/1.0" && value.schemaVersion !== "creative-dna-training-analysis/1.1") || !Array.isArray(value.sources)) {
     throw new Error("invalid_training_analysis");
   }
   const expected = canonicalSources(assets, examples);
@@ -406,8 +446,11 @@ function sanitizeTrainingAnalysis(
     if (!canonical || seen.has(sourceId)) throw new Error("invalid_training_analysis");
     seen.add(sourceId);
     if (!Array.isArray(source.observations) || source.observations.length > 16) throw new Error("invalid_training_analysis");
+    const detailedDescription = source.detailedDescription ? safeDetailedDescription(source.detailedDescription) : undefined;
+    if (value.schemaVersion === "creative-dna-training-analysis/1.1" && !detailedDescription) throw new Error("invalid_training_analysis");
     return {
       ...canonical,
+      ...(detailedDescription ? { detailedDescription } : {}),
       observations: source.observations.map((observation) => boundedText(observation, 240)).filter(Boolean),
       metrics: safeMetrics(source.metrics),
       dimensions: safeSourceDimensions(source.dimensions),
@@ -428,7 +471,7 @@ function sanitizeTrainingAnalysis(
 
   const summary = boundedText(value.summary, 1200);
   if (summary.length < 20) throw new Error("invalid_training_analysis");
-  return { schemaVersion: "creative-dna-training-analysis/1.0", createdAt: new Date().toISOString(), summary, sources, dimensions };
+  return { schemaVersion: value.schemaVersion, createdAt: new Date().toISOString(), summary, sources, dimensions };
 }
 
 export async function completeCreativeDnaTrainingJob(

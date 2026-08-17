@@ -106,6 +106,20 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .production-loop-next p { color: var(--text-muted); font-size: 9px; }
 .production-loop-next .btn { flex: none; }
 .production-loop-boundary { display: flex; align-items: center; gap: 7px; margin: 0 22px 17px; border-radius: 10px; padding: 9px 11px; background: rgba(52,211,153,.07); color: #a7f3d0; font-size: 9px; line-height: 1.45; }
+.production-loop-compact { display: grid; grid-template-columns: auto minmax(220px,1fr) auto auto; align-items: center; gap: 14px; padding: 11px 13px; border-radius: 16px; }
+.production-loop-compact-next { display: grid; min-width: 0; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 2px 8px; }
+.production-loop-compact-next small { color: var(--pink); font-size: 8px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.production-loop-compact-next strong { overflow: hidden; font-family: var(--font-display); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.production-loop-compact-next p { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.production-loop-compact-counts { color: var(--text-muted); font-size: 9px; white-space: nowrap; }
+.production-loop-compact-counts b { color: var(--text-soft); font-family: var(--font-mono); }
+.production-loop-compact .btn { height: 34px; padding: 0 12px; font-size: 10px; }
+.dna-workspace-tabs { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; padding: 5px; border-radius: 16px; }
+.dna-workspace-tabs button { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 9px; padding: 10px 12px; border-radius: 12px; color: var(--text-muted); }
+.dna-workspace-tabs button.on { background: linear-gradient(135deg,rgba(217,70,239,.16),rgba(34,211,238,.08)); color: #fff; box-shadow: inset 0 0 0 1px rgba(217,70,239,.2); }
+.dna-workspace-tabs button > span { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 2px; }
+.dna-workspace-tabs strong { font-size: 11px; }
+.dna-workspace-tabs small { overflow: hidden; color: var(--text-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .dna-layout { display: grid; grid-template-columns: minmax(320px, .82fr) minmax(440px, 1.18fr); gap: 18px; align-items: start; }
 .dna-compose { display: flex; flex-direction: column; gap: 16px; }
 .dna-compose .field > span, .dna-compose .field > label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
@@ -133,6 +147,12 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .badge.rights { background: rgba(251,191,36,.12); color: #fde68a; }
 .dna-result > p { margin-top: 10px; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
 .dna-result-next { display: block; margin-top: 12px; color: var(--text-muted); font-size: 10px; }
+.dna-source-descriptions { margin-top: 12px; border: 1px solid var(--border-soft); border-radius: 12px; background: rgba(0,0,0,.14); }
+.dna-source-descriptions summary { padding: 10px 12px; color: var(--cyan); font-size: 9px; font-weight: 800; cursor: pointer; }
+.dna-source-descriptions article { padding: 11px 12px; border-top: 1px solid var(--border-soft); }
+.dna-source-descriptions article strong, .dna-source-descriptions article small { display: block; }
+.dna-source-descriptions article small { margin-top: 3px; color: var(--text-faint); font-size: 8px; text-transform: capitalize; }
+.dna-source-descriptions article p { max-height: 170px; margin-top: 8px; overflow: auto; color: var(--text-soft); font-size: 9px; line-height: 1.55; white-space: pre-wrap; }
 .dna-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
 .dna-empty { display: grid; min-height: 175px; margin-top: 16px; place-items: center; align-content: center; gap: 8px; border: 1px dashed var(--border-mid); border-radius: 18px; color: var(--text-muted); text-align: center; }
 .dna-empty strong { color: var(--text-soft); }
@@ -233,6 +253,16 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .training-source-card summary small { color: var(--text-muted); font-size: 8px; text-transform: capitalize; }
 .training-source-card summary > b { color: var(--cyan); font-family: var(--font-mono); font-size: 9px; }
 .training-source-card ul { display: flex; flex-direction: column; gap: 5px; padding: 0 14px 11px 31px; color: var(--text-soft); font-size: 9px; line-height: 1.45; }
+.training-source-description { margin: 0 12px 11px; padding: 12px; border: 1px solid rgba(34,211,238,.2); border-radius: 12px; background: rgba(34,211,238,.045); }
+.training-source-description header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.training-source-description header > span:first-child { display: flex; flex-direction: column; gap: 3px; }
+.training-source-description header strong { font-family: var(--font-display); font-size: 13px; }
+.training-source-description header small, .training-source-description > small { color: var(--text-faint); font-size: 8px; line-height: 1.4; }
+.training-source-description > p { max-height: 260px; margin: 10px 0; overflow: auto; color: var(--text-soft); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
+.training-source-description-legacy { margin: 0 12px 11px; padding: 10px 12px; border-radius: 10px; background: rgba(148,163,184,.06); color: var(--text-muted); font-size: 9px; }
+.training-source-technical { margin: 0 12px 12px; border: 1px solid var(--border-soft); border-radius: 10px; }
+.training-source-technical > summary { padding: 9px 10px; color: var(--text-muted); font-size: 8px; font-weight: 750; cursor: pointer; }
+.training-source-technical .training-source-metrics { padding: 0 10px 10px; }
 .training-source-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(115px,1fr)); gap: 6px; padding: 0 12px 12px; }
 .training-source-metrics span { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 8px; border-radius: 9px; background: rgba(255,255,255,.025); }
 .training-source-metrics small { overflow: hidden; color: var(--text-faint); font-size: 7px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
@@ -731,6 +761,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .production-loop-next { align-items: stretch; flex-direction: column; padding: 15px 17px; }
   .production-loop-next .btn { width: 100%; }
   .production-loop-boundary { margin: 0 17px 15px; }
+  .production-loop-compact { grid-template-columns: auto minmax(180px,1fr) auto; }
+  .production-loop-compact-counts { display: none; }
   .dna-layout { grid-template-columns: 1fr; }
   .dna-compose, .dna-shape { padding: 16px; }
   .dna-training { padding: 16px; }
@@ -789,7 +821,20 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .cockpit-summary article { padding: 13px; }
   .cockpit-run { grid-template-columns: auto minmax(0,1fr); }
   .cockpit-run > span:nth-child(3), .cockpit-run > span:nth-child(4) { grid-column: 2; }
-  .dna-workbench-head .btn { height: 36px; padding: 0 12px; font-size: 11px; }
+  .mbody-dna > .mview-head { display: none; }
+  .mbody-dna .dna-workbench { gap: 12px; }
+  .mbody-dna .dna-workbench-head { align-items: center; }
+  .mbody-dna .dna-workbench-head .eyebrow, .mbody-dna .dna-workbench-head p { display: none; }
+  .mbody-dna .dna-workbench-head h2 { margin: 0; font-size: 27px; }
+  .dna-workbench-head .btn { height: 34px; padding: 0 10px; font-size: 10px; }
+  .production-loop-compact { grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; padding: 8px 9px; }
+  .production-loop-compact-next { grid-column: auto; grid-row: auto; }
+  .production-loop-compact-next small, .production-loop-compact-next p { display: none; }
+  .production-loop-compact-next strong { font-size: 12px; }
+  .production-loop-compact .btn { grid-column: auto; width: 32px; height: 32px; padding: 0; font-size: 0; }
+  .dna-workspace-tabs button { padding: 10px 7px; }
+  .dna-workspace-tabs button > span { align-items: center; }
+  .dna-workspace-tabs small { display: none; }
   .dna-sliders { grid-template-columns: 1fr; }
   .production-loop-steps { grid-template-columns: 1fr; }
   .production-loop-steps article + article, .production-loop-steps article:nth-child(3), .production-loop-steps article:nth-child(4) { border-top: 1px solid var(--border-soft); border-left: 0; }

@@ -60,11 +60,12 @@ flowchart LR
 ## CreativeDNA evidence synthesis
 
 1. The owner starts an idempotent durable run from selected consented uploads, all explicitly training-ready accepted results in the project, and an optional base DNA version.
-2. An authenticated Local Runner 1.1 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
-3. The runner measures image pixels with Sharp, decodes bounded audio/video segments with the bundled local FFmpeg binary, inspects container metadata, and folds retained accepted-result prompt/settings context into the corresponding source profile.
-4. Each source produces bounded observations, primitive metrics, eight dimension values, and confidence. The runner aggregates those values deterministically, with the optional base DNA as a small lineage prior.
-5. The Worker canonicalizes source identity from D1, rejects missing, duplicate, foreign, or malformed evidence, preserves commercial-reference rights from the base version, and writes a new immutable DNA version with per-dimension provenance.
-6. This phase is evidence-backed profile synthesis, not model-weight, LoRA, or foundation-model fine-tuning. Human comparison/approval before activating a trained version is a later review phase.
+2. An authenticated Local Runner 1.2 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
+3. The runner measures image pixels with Sharp, decodes bounded audio/video segments with the bundled local FFmpeg binary, and submits each selected upload to the bundled Gemma 4 multimodal ComfyUI graph. Image, audio, and video use explicit modality bindings; video supplies both decoded frames and its audio track.
+4. Gemma returns a detailed reusable media description while deterministic measurements, accepted-result prompt/settings context, and an optional base-DNA prior shape the eight CreativeDNA dimensions. The description keeps its model, prompt, workflow version, ComfyUI prompt ID, and inference settings as durable source provenance.
+5. Each source produces the detailed description, bounded observations, primitive metrics, eight dimension values, and confidence. The runner aggregates the dimensions deterministically rather than treating free-form model text as authority.
+6. The Worker canonicalizes source identity from D1, rejects missing, duplicate, foreign, malformed, or incomplete v1.1 evidence, preserves commercial-reference rights from the base version, and writes a new immutable DNA version with per-dimension provenance.
+7. This phase is evidence-backed profile synthesis, not model-weight, LoRA, or foundation-model fine-tuning. The completed version remains behind the existing note-required human comparison and approval gate.
 
 ## Job lifecycle guarantees
 

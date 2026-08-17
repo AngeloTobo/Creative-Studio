@@ -68,6 +68,7 @@ import {
   listLocalRunners,
   localRunnerMedia,
   revokeLocalRunner,
+  supportsCreativeDnaMediaDescriptions,
 } from "../runner";
 import {
   cancelCreativeDnaTrainingJob,
@@ -129,14 +130,6 @@ function workflowJobModality(value: string): GenerationModality {
   throw new Error("workflow_modality_not_supported");
 }
 
-function supportsEvidenceTrainer(version: string | null) {
-  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
-  if (!match) return false;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  return major > 1 || (major === 1 && minor >= 1);
-}
-
 async function capabilities(env: Env, request: Request, session: OwnerSession): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
   if (developmentMode(env)) {
@@ -164,13 +157,13 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
   const state = (result: PromiseSettledResult<unknown>) => result.status === "fulfilled" ? "available" : "unavailable";
   const runnerList = runners.status === "fulfilled" ? runners.value : [];
   const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
-  const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsEvidenceTrainer(runner.version));
+  const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
     { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Workflow JSON, detected controls, models, revisions, and content hashes remain product-owned.", checkedAt },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
-    { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + local evidence trainer", detail: trainingRunnerAvailable ? "The paired machine measures selected consented media and accepted results, then writes an immutable CreativeDNA version with source-level evidence." : "Training jobs remain durable until a paired Local Runner 1.1 or newer comes online.", checkedAt },
+    { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + Gemma 4", detail: trainingRunnerAvailable ? "The paired machine measures selected media and uses Gemma 4 to retain a detailed image, audio, or video description with each source." : "Training jobs remain durable until a paired Local Runner 1.2 or newer comes online.", checkedAt },
     { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Windows agent", detail: runnerAvailable ? "A paired machine is online and can claim ComfyUI workflow jobs without an open browser." : "Pair and start the Windows agent in Settings to execute imported API-format workflows.", checkedAt },
     { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
     { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },

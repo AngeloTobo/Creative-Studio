@@ -51,7 +51,13 @@ function steps(loop: ProjectProductionLoop): LoopStep[] {
   ];
 }
 
-export function ProductionLoopPanel({ loop, onAction }: { loop: ProjectProductionLoop; onAction: (surface: ProductionLoopSurface) => void }) {
+export function ProductionLoopPanel({ loop, onAction, compact = false }: { loop: ProjectProductionLoop; onAction: (surface: ProductionLoopSurface) => void; compact?: boolean }) {
+  if (compact) return <section className="production-loop-compact glass" aria-label="CreativeDNA production loop">
+    <span className={`production-loop-stage ${loop.stage}`}>{STAGE_LABELS[loop.stage]}</span>
+    <span className="production-loop-compact-next"><small>Next</small><strong>{loop.nextAction.label}</strong><p>{loop.nextAction.detail}</p></span>
+    <span className="production-loop-compact-counts"><b>{loop.counts.outputsReadyForReview}</b> review · <b>{loop.counts.evidenceFresh}</b> fresh evidence</span>
+    <button className="btn btn-primary" aria-label="Go to the next production-loop action" onClick={() => onAction(loop.nextAction.surface)}>{loop.nextAction.label} <Icon name="arrow" size={15} /></button>
+  </section>;
   return <section className="production-loop glass" aria-labelledby="production-loop-title">
     <header className="production-loop-head">
       <div><span className="eyebrow">Phase 3 · Production loop</span><h2 id="production-loop-title">Make, decide, learn, repeat</h2><p>One Worker-derived state connects the active CreativeDNA, durable production, retained output review, and fresh accepted evidence.</p></div>

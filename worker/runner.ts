@@ -26,6 +26,14 @@ type RunnerRow = {
 
 export type RunnerIdentity = RunnerRow;
 
+export function supportsCreativeDnaMediaDescriptions(version: string | null) {
+  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 1 || (major === 1 && minor >= 2);
+}
+
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
   comfy_version as comfyVersion, device, active_job_id as activeJobId, last_error as lastError,
   last_heartbeat_at as lastHeartbeatAt, created_at as createdAt, revoked_at as revokedAt`;

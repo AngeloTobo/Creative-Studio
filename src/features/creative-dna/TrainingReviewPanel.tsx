@@ -103,8 +103,13 @@ export function TrainingReviewPanel({
         <div>
           {analysis.sources.map((source) => <details key={source.sourceId} className="training-source-card" open={analysis.sources.length === 1}>
             <summary><span><Icon name={source.kind === "audio" ? "music" : source.kind} size={17} /><span><strong>{source.label}</strong><small>{source.sourceType.replace("-", " ")} · {source.kind}</small></span></span><b>{Math.round(source.confidence * 100)}%</b></summary>
+            {source.detailedDescription ? <section className="training-source-description" aria-label={`Detailed description for ${source.label}`}>
+              <header><span><strong>Detailed media description</strong><small>Reusable prompt · Gemma 4 through local ComfyUI</small></span><span className="state-pill ready">retained</span></header>
+              <p>{source.detailedDescription.text}</p>
+              <small>{source.detailedDescription.model} · workflow v{source.detailedDescription.workflowVersion} · prompt {source.detailedDescription.comfyPromptId}</small>
+            </section> : <p className="training-source-description-legacy">This earlier training result predates detailed Gemma media descriptions.</p>}
             <ul>{source.observations.map((observation) => <li key={observation}>{observation}</li>)}</ul>
-            <div className="training-source-metrics">{Object.entries(source.metrics).slice(0, 10).map(([key, value]) => <span key={key}><small>{key}</small><b>{String(value)}</b></span>)}</div>
+            <details className="training-source-technical"><summary>Measured technical evidence · {Object.keys(source.metrics).length}</summary><div className="training-source-metrics">{Object.entries(source.metrics).slice(0, 10).map(([key, value]) => <span key={key}><small>{key}</small><b>{String(value)}</b></span>)}</div></details>
           </details>)}
         </div>
       </section>
