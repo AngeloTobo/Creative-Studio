@@ -7,6 +7,7 @@ import { analyzeAudio, analyzeImage, synthesizeCreativeDna } from "./training.mj
 
 export const RUNNER_VERSION = "1.3.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
+export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
 
 const GEMMA_DESCRIPTION_MODEL = "gemma4_e4b_it_fp8_scaled.safetensors";
@@ -42,11 +43,18 @@ export function loadConfig(path = configPath()) {
   const apiBase = String(process.env.CS_RUNNER_API_BASE || parsed.apiBase || "").replace(/\/+$/, "");
   const token = String(process.env.CS_RUNNER_TOKEN || parsed.token || "");
   const comfyUrl = String(process.env.CS_COMFY_URL || parsed.comfyUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
-  const pollIntervalMs = Math.max(MIN_IDLE_POLL_INTERVAL_MS, Math.min(5 * 60_000, Number(process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs) || MIN_IDLE_POLL_INTERVAL_MS));
+  const pollIntervalMs = resolveRunnerPollInterval(apiBase, process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs);
   if (!/^https:\/\//.test(apiBase) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase)) throw new Error("Runner apiBase must use HTTPS or local HTTP.");
   if (!/^csr_[A-Za-z0-9_-]{40,80}$/.test(token)) throw new Error("Runner token is missing or invalid.");
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(comfyUrl)) throw new Error("ComfyUI must be bound to localhost.");
   return { apiBase, token, comfyUrl, pollIntervalMs };
+}
+
+export function resolveRunnerPollInterval(apiBase, value) {
+  const local = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase);
+  const fallback = local ? LOCAL_IDLE_POLL_INTERVAL_MS : MIN_IDLE_POLL_INTERVAL_MS;
+  const minimum = local ? 2_000 : MIN_IDLE_POLL_INTERVAL_MS;
+  return Math.max(minimum, Math.min(5 * 60_000, Number(value) || fallback));
 }
 
 async function runnerRequest(config, path, init = {}) {
@@ -490,6 +498,10 @@ export async function runOnce(config) {
 }
 
 async function selfTest() {
+  if (resolveRunnerPollInterval("https://runner.cs.angelotoborg.com", 5_000) !== MIN_IDLE_POLL_INTERVAL_MS
+    || resolveRunnerPollInterval("http://127.0.0.1:8787", 5_000) !== LOCAL_IDLE_POLL_INTERVAL_MS) {
+    throw new Error("runner_self_test_poll_boundary_failed");
+  }
   const graph = { "1": { class_type: "LoadImage", inputs: { image: "old.png" } } };
   const parameters = [{ id: "1::image", kind: "media", binding: { format: "comfyui-api", nodeId: "1", inputName: "image" } }];
   const patched = applyInputFilenames(graph, parameters, { "1::image": "new.png" });

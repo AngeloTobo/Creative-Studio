@@ -5,6 +5,7 @@ export interface Env {
   ASSETS?: Fetcher;
   AFDFW?: Fetcher;
   BACKEND_MODE?: "development" | "afdfw";
+  LOCAL_HARDWARE_ONLY?: "true" | "false";
   AFDFW_BASE_URL?: string;
   AFDFW_SERVICE_TOKEN?: string;
 }

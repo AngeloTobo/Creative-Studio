@@ -22,6 +22,7 @@ import type {
 
 export interface StudioAdapter {
   readonly id: StudioSnapshot["adapter"]["id"];
+  readonly activePollIntervalMs: number;
   load(): Promise<StudioSnapshot>;
   refresh(): Promise<StudioSnapshot>;
   createProject(input: CreateProjectRequest): Promise<Project>;

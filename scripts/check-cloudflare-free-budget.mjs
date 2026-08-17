@@ -6,6 +6,7 @@ const production = config.env?.production ?? {};
 const runner = readFileSync(new URL("runner/index.mjs", root), "utf8");
 const provider = readFileSync(new URL("src/app/StudioProvider.tsx", root), "utf8");
 const adapter = readFileSync(new URL("src/adapters/httpAdapter.ts", root), "utf8");
+const runtime = readFileSync(new URL("src/config/runtime.ts", root), "utf8");
 const jobs = readFileSync(new URL("worker/jobs.ts", root), "utf8");
 const issues = [];
 
@@ -13,8 +14,10 @@ const consumer = production.queues?.consumers?.find((item) => item.queue === "cr
 if (!production.triggers?.crons?.includes("0 * * * *")) issues.push("Recovery cron must run no more than hourly.");
 if (Number(consumer?.max_retries ?? 99) > 3) issues.push("Queue retries must stay capped at three.");
 if (!runner.includes("MIN_IDLE_POLL_INTERVAL_MS = 60_000")) issues.push("Runner idle polling must stay at one minute or slower.");
+if (!runner.includes('resolveRunnerPollInterval("https://runner.cs.angelotoborg.com", 5_000)')) issues.push("The runner must self-test the remote polling floor.");
 if (!runner.includes("/api/creative-studio/runner/work/claim")) issues.push("Runner must use the consolidated work-claim request.");
-if (!provider.includes('adapter.id === "development-local-storage" ? 1_000 : 60_000')) issues.push("The real HTTP adapter must refresh no faster than once per minute.");
+if (!runtime.includes("REMOTE_HTTP_POLL_INTERVAL_MS = 60_000")) issues.push("The remote HTTP adapter must refresh no faster than once per minute.");
+if (!runtime.includes('hostname !== "127.0.0.1" && hostname !== "localhost"')) issues.push("Fast HTTP polling must remain restricted to localhost.");
 if (!provider.includes('document.visibilityState === "visible"')) issues.push("Background tabs must not poll the Worker.");
 if (!adapter.includes("CREATIVE_STUDIO_ROUTES.snapshot")) issues.push("Browser reads must use the consolidated snapshot route.");
 if (!jobs.includes("enqueueJob(env, job.id, 60)")) issues.push("AFDFW Queue reconciliation must wait at least 60 seconds.");

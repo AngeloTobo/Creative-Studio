@@ -167,6 +167,38 @@ describe("Creative Studio Worker API", () => {
     expect(upstreamPaths).toEqual(["/api/me"]);
   });
 
+  it("keeps the local BFF hardware-only and never falls back to development generation", async () => {
+    const local = { ...workerEnv("development", undefined, memoryBucket().bucket), LOCAL_HARDWARE_ONLY: "true" as const };
+    const project = await testProject("development-angelo", "Local Hardware Project");
+    const dna = await createLocalDna(env, "development-angelo", {
+      projectId: project.id,
+      name: "Local hardware DNA",
+      directive: "A precise local hardware study with restrained light.",
+      targetModality: "image",
+    });
+
+    const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), local)) as {
+      snapshot: { adapter: { label: string; development: boolean }; capabilities: Array<{ key: string; provider: string; detail: string }> };
+    };
+    expect(snapshot.snapshot.adapter).toMatchObject({ label: "Creative Studio Local BFF · hardware-only", development: true });
+    expect(snapshot.snapshot.capabilities).toContainEqual(expect.objectContaining({ key: "image-generation", provider: "Local ComfyUI" }));
+    expect(snapshot.snapshot.capabilities).toContainEqual(expect.objectContaining({ key: "afdfw-session", provider: "remote mode only" }));
+
+    const response = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        idempotencyKey: "local_hardware_only_001",
+      }),
+    }), local);
+    expect(response.status).toBe(400);
+    expect(await result(response)).toMatchObject({ ok: false, error: "local_comfyui_workflow_required" });
+    expect(await env.DB.prepare("select count(*) as count from creative_jobs").first<{ count: number }>()).toMatchObject({ count: 0 });
+  });
+
   it("starts empty and creates, edits, and archives an owned project", async () => {
     const local = workerEnv("development");
     const empty = await routeCreativeStudioApi(request("/api/creative-studio/projects"), local);

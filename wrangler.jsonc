@@ -16,6 +16,7 @@
   },
   "vars": {
     "BACKEND_MODE": "development",
+    "LOCAL_HARDWARE_ONLY": "true",
     "AFDFW_BASE_URL": ""
   },
   "d1_databases": [
@@ -48,6 +49,7 @@
       ],
       "vars": {
         "BACKEND_MODE": "afdfw",
+        "LOCAL_HARDWARE_ONLY": "false",
         "AFDFW_BASE_URL": ""
       },
       "services": [

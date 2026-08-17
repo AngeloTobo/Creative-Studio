@@ -270,6 +270,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
 
   return {
     id: "development-local-storage",
+    activePollIntervalMs: 1_000,
     async load() {
       const current = now().toISOString();
       return snapshot(reconcile(read()), current);

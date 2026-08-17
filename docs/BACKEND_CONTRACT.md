@@ -29,6 +29,8 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 
 Every other Creative Studio API path returns `404`. There is no arbitrary forwarding route.
 
+When `BACKEND_MODE=development` and `LOCAL_HARDWARE_ONLY=true`, the BFF is a localhost hardware runtime rather than a media simulator. A generation request without an owned executable ComfyUI workflow returns `local_comfyui_workflow_required`; reuse and retry enforce the same boundary. Capabilities identify local D1/R2, Local Runner, and ComfyUI as the providers, while AFDFW remains unavailable. Production requires `LOCAL_HARDWARE_ONLY=false` and retains the remote allowlist below.
+
 Project lists may be empty. The Worker never creates seeded projects, and archived projects remain available for historical counts while being excluded from new DNA and generation writes.
 
 ## AFDFW allowlist

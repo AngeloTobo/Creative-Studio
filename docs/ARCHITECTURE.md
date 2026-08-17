@@ -22,6 +22,13 @@ flowchart LR
   R2 --> MEDIA["Uploads and every completed result"]
 ```
 
+The same typed contract has two explicit deployments:
+
+- Local-first: Vite, Wrangler-local BFF, local D1/R2 state, Local Runner, and ComfyUI all stay on `127.0.0.1`. Real generation requires an imported API-format workflow and uses this machine's hardware. AFDFW and Cloudflare are not runtime dependencies.
+- Remote: `cs.angelotoborg.com` uses the Cloudflare Worker, production D1/R2/Queue, the allowlisted AFDFW capabilities, and the authenticated workstation runner where a local ComfyUI workflow is selected.
+
+Local and remote storage never synchronize implicitly. This prevents local experiments, large media, or review decisions from becoming cloud writes merely because both experiences use the same contracts.
+
 ## Ownership
 
 - The frontend owns presentation and interaction only. It imports shared types but no Worker or AFDFW source.
@@ -31,6 +38,7 @@ flowchart LR
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
 - Local Runner 1.3 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
+- In local-first mode the runner and browser call only the localhost BFF; two-second UI refresh and five-second runner claims therefore consume no Cloudflare allowance. The remote build fails closed to the one-minute polling floor.
 
 ## CreativeDNA vertical slice
 

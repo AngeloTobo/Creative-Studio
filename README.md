@@ -2,30 +2,41 @@
 
 Creative Studio is a standalone creative workstation. It owns its React frontend, typed contracts, Worker/BFF, D1 history, and review decisions. AFDFW is an optional backend capability provider; it is not the product shell and is never exposed as a generic browser proxy.
 
-## Run locally
+## Run locally on this hardware
 
-Install dependencies and start the explicitly labeled browser-persistent development adapter. It starts empty and creates no example projects or artifacts:
+Start ComfyUI at `http://127.0.0.1:8188`, then launch the complete local-first application:
 
 ```powershell
 npm install
+npm run local
+```
+
+Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default). This one command runs the UI, Wrangler-local BFF, local D1/R2 stores, and Local Runner 1.3. Image, audio/music, video, and multimodal CreativeDNA work goes directly to ComfyUI and this machine's GPU. Cloudflare and AFDFW are not used by the local process.
+
+Local mode requires a real imported ComfyUI API-format workflow for generation and never substitutes the development renderer. It automatically creates or reuses an ACL-protected localhost runner credential outside the repository. Local data remains local and is not silently synchronized to the remote site. See [docs/LOCAL_FIRST.md](docs/LOCAL_FIRST.md) for the exact ownership and shutdown boundaries.
+
+For UI-only work, the explicitly labeled browser-persistent development adapter remains available. It starts empty and creates no example projects or artifacts:
+
+```powershell
 npm run dev
 ```
 
-To run the standalone Worker/BFF with local D1 durability and a local R2 artifact store:
+The individual local BFF commands remain available for diagnostics:
 
 ```powershell
 npm run db:local
 npm run dev:worker
 ```
 
-Then, in a second PowerShell window:
+Then start the UI in a second PowerShell window:
 
 ```powershell
 $env:VITE_CREATIVE_STUDIO_ADAPTER = "http"
+$env:VITE_CREATIVE_STUDIO_LOCAL = "true"
 npm run dev
 ```
 
-The Vite client runs on its printed local URL and calls the Worker at `http://127.0.0.1:8787/api/creative-studio/*` during development.
+The Vite client calls only `http://127.0.0.1:8787/api/creative-studio/*` through its same-origin development proxy.
 
 ## Local Runner 1.3
 

@@ -25,6 +25,7 @@ import {
   type RevokeLocalRunnerResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
+import { resolveHttpPollInterval } from "../config/runtime";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -81,6 +82,7 @@ async function uploadWorkflowRequest(file: File, projectId: string, name = "", d
 }
 
 export function createHttpAdapter(): StudioAdapter {
+  const activePollIntervalMs = resolveHttpPollInterval(import.meta.env.VITE_CREATIVE_STUDIO_LOCAL, window.location.hostname);
   const load = async (): Promise<StudioSnapshot> => {
     const result = await request<{ snapshot: StudioSnapshot }>(CREATIVE_STUDIO_ROUTES.snapshot);
     return result.snapshot;
@@ -88,6 +90,7 @@ export function createHttpAdapter(): StudioAdapter {
 
   return {
     id: "creative-studio-bff",
+    activePollIntervalMs,
     load,
     refresh: load,
     async createProject(input: CreateProjectRequest) {

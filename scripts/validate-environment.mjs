@@ -7,7 +7,10 @@ const issues = [];
 const target = production ? { ...config, ...(config.env?.production ?? {}) } : config;
 
 const backendMode = target.vars?.BACKEND_MODE ?? "development";
+const localHardwareOnly = target.vars?.LOCAL_HARDWARE_ONLY;
 if (!["development", "afdfw"].includes(backendMode)) issues.push(`Unsupported BACKEND_MODE: ${backendMode}`);
+if (production && localHardwareOnly !== "false") issues.push("Production must keep LOCAL_HARDWARE_ONLY=false");
+if (!production && backendMode === "development" && localHardwareOnly !== "true") issues.push("Local development must keep LOCAL_HARDWARE_ONLY=true");
 if (config.main !== "worker/index.ts") issues.push("Worker entrypoint must remain worker/index.ts");
 if (config.assets?.run_worker_first?.[0] !== "/*") issues.push("Creative Studio must run the Worker before assets so the runner hostname stays API-only");
 

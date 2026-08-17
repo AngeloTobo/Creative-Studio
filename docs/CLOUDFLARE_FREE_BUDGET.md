@@ -2,6 +2,8 @@
 
 Creative Studio is intentionally configured to use only Cloudflare services available on the free plan. The source check `npm run check:cloudflare-free` fails a release if the request-saving protocol, hourly recovery trigger, bounded Queue retries, or free-tier binding boundary is removed.
 
+The recommended `npm run local` experience consumes zero Cloudflare Worker requests: its UI, BFF, runner polling, D1/R2 state, uploads, and ComfyUI execution all stay on localhost. The budget below applies only to the protected remote experience.
+
 ## Request budget
 
 The maximum idle/visible baseline is 2,904 Worker invocations per day:

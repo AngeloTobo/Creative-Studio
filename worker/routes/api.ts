@@ -85,6 +85,10 @@ function developmentMode(env: Env) {
   return backendMode(env) === "development";
 }
 
+function localHardwareMode(env: Env) {
+  return developmentMode(env) && env.LOCAL_HARDWARE_ONLY === "true";
+}
+
 async function ownerSession(env: Env, request: Request): Promise<OwnerSession> {
   if (developmentMode(env)) return { status: "development", userId: "development-angelo", displayName: "Angelo" };
   return afdfwSession(env, request);
@@ -130,6 +134,23 @@ function workflowJobModality(value: string): GenerationModality {
 async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awaited<ReturnType<typeof listLocalRunners>>): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
   if (developmentMode(env)) {
+    const runnerList = knownRunners ?? await listLocalRunners(env, session.userId);
+    const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
+    const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
+    if (localHardwareMode(env)) return [
+      { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Local Creative Studio D1", detail: "Versioned DNA stays in the Wrangler-local database on this machine.", checkedAt },
+      { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Local Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploads and generated results stay in Wrangler-local object storage." : "A local R2 binding is required for real media.", checkedAt },
+      { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Local Creative Studio D1", detail: "Uploaded workflow JSON and immutable revisions stay on this machine.", checkedAt },
+      { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Local Creative Studio D1", detail: "Accepted prompts, settings, and consented uploads remain local training evidence.", checkedAt },
+      { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "RTX hardware + Gemma 4", detail: trainingRunnerAvailable ? "The local runner can analyze image, audio, and video on this machine." : "Start the local stack and ComfyUI to process durable training jobs.", checkedAt },
+      { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "This Windows machine", detail: runnerAvailable ? "ComfyUI work is executing directly against localhost hardware." : "Start the local stack and ComfyUI to execute imported API-format workflows.", checkedAt },
+      { key: "music-generation", label: "Music generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable audio workflow is required; no development media is generated.", checkedAt },
+      { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable image workflow is required; no development media is generated.", checkedAt },
+      { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable video workflow is required and runs on this machine.", checkedAt },
+      { key: "artifact-review", label: "Artifact review", state: "available", provider: "Local Creative Studio D1", detail: "Review decisions are explicit, append-only, and local.", checkedAt },
+      { key: "artifact-retention", label: "Artifact retention", state: env.ARTIFACTS ? "available" : "unavailable", provider: "Local Creative Studio R2", detail: env.ARTIFACTS ? "Every completed local result is byte-verified before review." : "Local jobs cannot complete without object storage.", checkedAt },
+      { key: "afdfw-session", label: "AFDFW backend", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never calls AFDFW or Cloudflare generation services.", checkedAt },
+    ];
     return [
       { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned DNA is stored in the standalone Worker database.", checkedAt },
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Owner uploads are size-verified and retained under project scope." : "An R2 binding is required for real uploads.", checkedAt },
@@ -167,7 +188,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
 }
 
 async function syncJobs(env: Env, ownerId: string) {
-  if (developmentMode(env)) {
+  if (developmentMode(env) && !localHardwareMode(env)) {
     await reconcileDevelopmentJobs(env, ownerId);
   }
 }
@@ -196,7 +217,12 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     computedAt,
   }));
   return {
-    adapter: { id: "creative-studio-bff", label: "Creative Studio Worker", development: false, durableScope: "backend" },
+    adapter: {
+      id: "creative-studio-bff",
+      label: localHardwareMode(env) ? "Creative Studio Local BFF · hardware-only" : "Creative Studio Worker",
+      development: developmentMode(env),
+      durableScope: "backend",
+    },
     session: { status: session.status, userId: session.userId, displayName: session.displayName },
     projects,
     dnaArtifacts,
@@ -424,6 +450,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         return json({ ok: true, job: created.job }, { status: 202 });
       }
       if (modality === "video") throw new Error("video_workflow_required");
+      if (localHardwareMode(env)) throw new Error("local_comfyui_workflow_required");
       if (developmentMode(env)) {
         const job = await createDevelopmentJob(env, session.userId, input.projectId, dna, modality, requestKey);
         return json({ ok: true, job }, { status: 202 });
@@ -453,6 +480,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (project.status === "archived") throw new Error("project_archived");
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
+      if (localHardwareMode(env) && !localWorkflow) throw new Error("local_comfyui_workflow_required");
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
         projectId: original.projectId,
@@ -491,6 +519,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (project.status === "archived") throw new Error("project_archived");
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
+      if (localHardwareMode(env) && !localWorkflow) throw new Error("local_comfyui_workflow_required");
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
         && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
       const createdAt = new Date().toISOString();

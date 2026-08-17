@@ -142,8 +142,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     if (!hasActiveWork) return;
     let timer = 0;
     let disposed = false;
-    const baseInterval = adapter.id === "development-local-storage" ? 1_000 : 60_000;
-    const interval = Math.min(5 * 60_000, baseInterval * (2 ** refreshFailures));
+    const interval = Math.min(5 * 60_000, adapter.activePollIntervalMs * (2 ** refreshFailures));
     const schedule = () => {
       if (disposed || document.visibilityState !== "visible") return;
       timer = window.setTimeout(() => void poll(), interval);
@@ -164,7 +163,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [adapter.id, hasActiveWork, refresh, refreshFailures]);
+  }, [adapter.activePollIntervalMs, hasActiveWork, refresh, refreshFailures]);
 
   const transact = useCallback(async <T,>(action: () => Promise<T>) => {
     setBusy(true);
