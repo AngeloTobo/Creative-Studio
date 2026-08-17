@@ -3,6 +3,7 @@ import { matchCreativeStudioRoute } from "../../shared/contracts";
 
 describe("Creative Studio BFF route allowlist", () => {
   it("matches only named product capabilities", () => {
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/snapshot")).toBe("snapshot");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/dna")).toBe("dna-list");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/projects")).toBe("project-create");
     expect(matchCreativeStudioRoute("PATCH", "/api/creative-studio/projects/project_123")).toBe("project-update");
@@ -25,6 +26,7 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/production-loops")).toBe("production-loops");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/production-cockpit")).toBe("production-cockpit");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/claim")).toBe("runner-training-claim");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/work/claim")).toBe("runner-work-claim");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/heartbeat")).toBe("runner-training-heartbeat");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/complete")).toBe("runner-training-complete");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/fail")).toBe("runner-training-fail");

@@ -7,7 +7,7 @@ flowchart LR
   UI["Vite + React + TypeScript"] -->|"/api/creative-studio/*"| BFF["Creative Studio Worker/BFF"]
   BFF --> D1["Creative Studio D1"]
   BFF --> Q["Creative Studio Job Queue"]
-  CRON["Five-minute recovery trigger"] --> D1
+  CRON["Hourly recovery trigger"] --> D1
   CRON --> Q
   Q --> WORKER["Background job consumer"]
   WORKER --> D1
@@ -30,7 +30,7 @@ flowchart LR
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
-- Local Runner 1.1 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
+- Local Runner 1.3 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
 
 ## CreativeDNA vertical slice
 
@@ -47,7 +47,8 @@ flowchart LR
 
 - `development-local-storage` is deliberately visible and browser-scoped. Its media is a gradient placeholder.
 - `creative-studio-bff` is backend-scoped. In Worker development mode, D1 and the Wrangler-local R2 store are durable across process restarts. Local ComfyUI workflow jobs retain real outputs; only the explicitly labeled development renderer remains non-media.
-- Production uses the `AFDFW` same-account service binding, dedicated D1/R2/Queue bindings, a five-minute recovery trigger, and Cloudflare Access over `cs.angelotoborg.com/*`.
+- Production uses the `AFDFW` same-account service binding, dedicated D1/R2/Queue bindings, an hourly recovery trigger, and Cloudflare Access over `cs.angelotoborg.com/*`.
+- The browser reads one consolidated Worker snapshot and polls only once per minute while durable work is active and the tab is visible. The Local Runner uses one unified work claim per idle minute and folds its machine heartbeat into active job heartbeats. The enforced free-plan baseline is at most 2,904 Worker invocations per day before explicit owner actions or active Queue deliveries.
 
 ## Media intake and training boundary
 
@@ -60,7 +61,7 @@ flowchart LR
 ## CreativeDNA evidence synthesis
 
 1. The owner starts an idempotent durable run from selected consented uploads, all explicitly training-ready accepted results in the project, and an optional base DNA version.
-2. An authenticated Local Runner 1.2 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
+2. An authenticated Local Runner 1.3 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
 3. The runner measures image pixels with Sharp, decodes bounded audio/video segments with the bundled local FFmpeg binary, and submits each selected upload to the bundled Gemma 4 multimodal ComfyUI graph. Image, audio, and video use explicit modality bindings; video supplies both decoded frames and its audio track.
 4. Gemma returns a detailed reusable media description while deterministic measurements, accepted-result prompt/settings context, and an optional base-DNA prior shape the eight CreativeDNA dimensions. The description keeps its model, prompt, workflow version, ComfyUI prompt ID, and inference settings as durable source provenance.
 5. Each source produces the detailed description, bounded observations, primitive metrics, eight dimension values, and confidence. The runner aggregates the dimensions deterministically rather than treating free-form model text as authority.

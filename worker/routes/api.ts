@@ -10,6 +10,7 @@ import {
   type GenerationModality,
   type RetryJobRequest,
   type SaveWorkflowRevisionRequest,
+  type StudioSnapshot,
   type SubmitJobRequest,
   type UpdateProjectRequest,
   type EnrollLocalRunnerRequest,
@@ -20,11 +21,7 @@ import {
   type RunnerCompleteTrainingRequest,
   type ReviewCreativeDnaTrainingRequest,
 } from "../../shared/contracts";
-import {
-  afdfwGenerations,
-  afdfwMedia,
-  afdfwSession,
-} from "../adapters/afdfw";
+import { afdfwMedia, afdfwSession } from "../adapters/afdfw";
 import { backendMode } from "../config";
 import { enqueueJob } from "../jobs";
 import { body, boundedText, json } from "../lib/http";
@@ -130,7 +127,7 @@ function workflowJobModality(value: string): GenerationModality {
   throw new Error("workflow_modality_not_supported");
 }
 
-async function capabilities(env: Env, request: Request, session: OwnerSession): Promise<Capability[]> {
+async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awaited<ReturnType<typeof listLocalRunners>>): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
   if (developmentMode(env)) {
     return [
@@ -149,15 +146,10 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
     ];
   }
 
-  const [music, image, runners] = await Promise.allSettled([
-    afdfwGenerations(env, request, "music"),
-    afdfwGenerations(env, request, "image"),
-    listLocalRunners(env, session.userId),
-  ]);
-  const state = (result: PromiseSettledResult<unknown>) => result.status === "fulfilled" ? "available" : "unavailable";
-  const runnerList = runners.status === "fulfilled" ? runners.value : [];
+  const runnerList = knownRunners ?? await listLocalRunners(env, session.userId);
   const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
   const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
+  const generationState = session.status === "approved" ? "available" : "unavailable";
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
@@ -165,8 +157,8 @@ async function capabilities(env: Env, request: Request, session: OwnerSession): 
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
     { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + Gemma 4", detail: trainingRunnerAvailable ? "The paired machine measures selected media and uses Gemma 4 to retain a detailed image, audio, or video description with each source." : "Training jobs remain durable until a paired Local Runner 1.2 or newer comes online.", checkedAt },
     { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Windows agent", detail: runnerAvailable ? "A paired machine is online and can claim ComfyUI workflow jobs without an open browser." : "Pair and start the Windows agent in Settings to execute imported API-format workflows.", checkedAt },
-    { key: "music-generation", label: "Music generation", state: state(music), provider: "AFDFW Stable Audio adapter", detail: "Generate and list routes only; raw ComfyUI is never exposed.", checkedAt },
-    { key: "image-generation", label: "Image generation", state: state(image), provider: "AFDFW Z-Image adapter", detail: "Generate, list, and media routes only; raw ComfyUI is never exposed.", checkedAt },
+    { key: "music-generation", label: "Music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "The approved AFDFW session can submit the allowlisted generation route; availability is checked again when you act.", checkedAt },
+    { key: "image-generation", label: "Image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "The approved AFDFW session can submit the allowlisted generation route; availability is checked again when you act.", checkedAt },
     { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local Runner + ComfyUI", detail: runnerAvailable ? "Versioned API-format video workflows can execute on the paired machine." : "Video jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
     { key: "artifact-retention", label: "Artifact retention", state: env.ARTIFACTS ? "available" : "degraded", provider: env.ARTIFACTS ? "Creative Studio R2" : "AFDFW temporary media + Creative Studio history", detail: env.ARTIFACTS ? "Every completed result is copied and size-verified under Creative Studio ownership before its job completes." : "Jobs cannot complete without a Creative Studio R2 binding.", checkedAt },
@@ -180,8 +172,66 @@ async function syncJobs(env: Env, ownerId: string) {
   }
 }
 
+async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
+  await syncJobs(env, session.userId);
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, trainingJobs, trainingReviews, runners] = await Promise.all([
+    listProjects(env, session.userId),
+    listLocalDna(env, session.userId),
+    listJobs(env, session.userId),
+    listJobRuntime(env, session.userId),
+    listArtifacts(env, session.userId),
+    listMediaAssets(env, session.userId),
+    listAcceptances(env, session.userId),
+    listTrainingExamples(env, session.userId),
+    listWorkflows(env, session.userId),
+    listCreativeDnaTrainingJobs(env, session.userId),
+    listCreativeDnaTrainingReviews(env, session.userId),
+    listLocalRunners(env, session.userId),
+  ]);
+  const computedAt = new Date().toISOString();
+  const evidencePools = await Promise.all(projects.map((project) => creativeDnaTrainingEvidencePool(env, session.userId, project.id)));
+  const productionLoops = projects.map((project, index) => deriveProjectProductionLoop({
+    project, dnaArtifacts, jobs, artifacts, trainingExamples, trainingJobs, trainingReviews,
+    reservedTrainingExampleIds: evidencePools[index].reservedIds,
+    computedAt,
+  }));
+  return {
+    adapter: { id: "creative-studio-bff", label: "Creative Studio Worker", development: false, durableScope: "backend" },
+    session: { status: session.status, userId: session.userId, displayName: session.displayName },
+    projects,
+    dnaArtifacts,
+    jobs,
+    artifacts,
+    mediaAssets,
+    workflows,
+    trainingExamples,
+    trainingJobs,
+    trainingReviews,
+    productionLoops,
+    productionCockpit: deriveProductionCockpit({
+      projects, dnaArtifacts, jobs, artifacts, mediaAssets, acceptances, trainingJobs, trainingReviews, runners,
+      jobRuntime, computedAt,
+    }),
+    runners,
+    capabilities: await capabilities(env, session, runners),
+    acceptances,
+    refreshedAt: computedAt,
+  };
+}
+
 async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNullable<ReturnType<typeof matchCreativeStudioRoute>>, url: URL) {
   const runner = await authenticateLocalRunner(env, request);
+  if (route === "runner-work-claim") {
+    const input = await body<RunnerHeartbeatRequest>(request);
+    if (!input) throw new Error("invalid_runner_request");
+    const heartbeat = await heartbeatLocalRunner(env, runner, input);
+    const currentRunner = { ...runner, version: heartbeat.version };
+    const generation = await claimLocalRunnerJob(env, currentRunner);
+    if (generation) return json({ ok: true, kind: "generation", bundle: generation });
+    const training = await claimLocalRunnerTrainingJob(env, currentRunner);
+    if (training) return json({ ok: true, kind: "training", bundle: training });
+    return json({ ok: true, kind: null, bundle: null });
+  }
   if (route === "runner-heartbeat") {
     const input = await body<RunnerHeartbeatRequest>(request);
     if (!input) throw new Error("invalid_runner_request");
@@ -248,6 +298,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     const session = await ownerSession(env, request);
     const responseHeaders = session.setCookie ? { "set-cookie": session.setCookie } : undefined;
 
+    if (route === "snapshot") return json({ ok: true, snapshot: await buildStudioSnapshot(env, session) }, { headers: responseHeaders });
     if (route === "session") return json({ ok: true, session: { status: session.status, userId: session.userId, displayName: session.displayName } }, { headers: responseHeaders });
     if (route === "projects") return json({ ok: true, projects: await listProjects(env, session.userId) });
     if (route === "project-create") {
@@ -616,7 +667,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!media?.mediaPath) return json({ ok: false, error: "artifact_media_not_found" }, { status: 404 });
       return afdfwMedia(env, request, media.mediaPath);
     }
-    if (route === "capabilities") return json({ ok: true, capabilities: await capabilities(env, request, session) });
+    if (route === "capabilities") return json({ ok: true, capabilities: await capabilities(env, session) });
     return json({ ok: false, error: "creative_studio_route_not_found" }, { status: 404 });
   } catch (caught) {
     const error = caught instanceof Error ? caught.message : "creative_studio_request_failed";

@@ -23,6 +23,7 @@ import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflow
 export const CREATIVE_STUDIO_API_PREFIX = "/api/creative-studio" as const;
 
 export const CREATIVE_STUDIO_ROUTES = {
+  snapshot: `${CREATIVE_STUDIO_API_PREFIX}/snapshot`,
   session: `${CREATIVE_STUDIO_API_PREFIX}/session`,
   projects: `${CREATIVE_STUDIO_API_PREFIX}/projects`,
   dna: `${CREATIVE_STUDIO_API_PREFIX}/dna`,
@@ -39,17 +40,18 @@ export const CREATIVE_STUDIO_ROUTES = {
 } as const;
 
 export type CreativeStudioRoute =
-  | "session" | "projects" | "project-create" | "project-update" | "project-archive"
+  | "snapshot" | "session" | "projects" | "project-create" | "project-update" | "project-archive"
   | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
   | "artifacts-list" | "artifact-review" | "artifact-media"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
   | "runners-list" | "runner-enroll" | "runner-revoke"
-  | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-fail" | "runner-media-content"
+  | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-fail" | "runner-media-content"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
+  if (method === "GET" && pathname === "/api/creative-studio/snapshot") return "snapshot";
   if (method === "GET" && pathname === "/api/creative-studio/session") return "session";
   if (method === "GET" && pathname === "/api/creative-studio/projects") return "projects";
   if (method === "POST" && pathname === "/api/creative-studio/projects") return "project-create";
@@ -82,6 +84,7 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
   if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
   if (method === "POST" && pathname === "/api/creative-studio/runner/heartbeat") return "runner-heartbeat";
+  if (method === "POST" && pathname === "/api/creative-studio/runner/work/claim") return "runner-work-claim";
   if (method === "POST" && pathname === "/api/creative-studio/runner/jobs/claim") return "runner-job-claim";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-job-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-job-complete";
@@ -217,6 +220,10 @@ export type RunnerJobBundle = {
 };
 
 export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
+export type RunnerWorkClaimResponse =
+  | { kind: "generation"; bundle: RunnerJobBundle }
+  | { kind: "training"; bundle: CreativeDnaTrainingBundleResponse }
+  | { kind: null; bundle: null };
 export type RunnerJobHeartbeatRequest = { progress: number; upstreamId?: string | null };
 export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
 export type RunnerFailJobRequest = { error: string };

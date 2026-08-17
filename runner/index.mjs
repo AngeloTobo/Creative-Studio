@@ -5,7 +5,9 @@ import { pathToFileURL } from "node:url";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.2.0";
+export const RUNNER_VERSION = "1.3.0";
+export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
+const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
 
 const GEMMA_DESCRIPTION_MODEL = "gemma4_e4b_it_fp8_scaled.safetensors";
 const GEMMA_DESCRIPTION_WORKFLOW_ID = "gemma4-multimodal-description";
@@ -40,7 +42,7 @@ export function loadConfig(path = configPath()) {
   const apiBase = String(process.env.CS_RUNNER_API_BASE || parsed.apiBase || "").replace(/\/+$/, "");
   const token = String(process.env.CS_RUNNER_TOKEN || parsed.token || "");
   const comfyUrl = String(process.env.CS_COMFY_URL || parsed.comfyUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
-  const pollIntervalMs = Math.max(2_000, Math.min(60_000, Number(process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs) || 5_000));
+  const pollIntervalMs = Math.max(MIN_IDLE_POLL_INTERVAL_MS, Math.min(5 * 60_000, Number(process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs) || MIN_IDLE_POLL_INTERVAL_MS));
   if (!/^https:\/\//.test(apiBase) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase)) throw new Error("Runner apiBase must use HTTPS or local HTTP.");
   if (!/^csr_[A-Za-z0-9_-]{40,80}$/.test(token)) throw new Error("Runner token is missing or invalid.");
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(comfyUrl)) throw new Error("ComfyUI must be bound to localhost.");
@@ -67,7 +69,7 @@ async function comfyInfo(config) {
   return { comfyVersion: system.comfyui_version || null, device };
 }
 
-async function machineHeartbeat(config, activeJobId = null, error = null) {
+async function machineState(config, activeJobId = null, error = null) {
   let info = { comfyVersion: null, device: null };
   let reportedError = error;
   try {
@@ -75,9 +77,13 @@ async function machineHeartbeat(config, activeJobId = null, error = null) {
   } catch (caught) {
     reportedError = reportedError || (caught instanceof Error ? caught.message : "comfyui_unavailable");
   }
+  return { version: RUNNER_VERSION, comfyUrl: config.comfyUrl, ...info, activeJobId, error: reportedError };
+}
+
+async function machineHeartbeat(config, activeJobId = null, error = null) {
   return runnerRequest(config, "/api/creative-studio/runner/heartbeat", {
     method: "POST",
-    body: JSON.stringify({ version: RUNNER_VERSION, comfyUrl: config.comfyUrl, ...info, activeJobId, error: reportedError }),
+    body: JSON.stringify(await machineState(config, activeJobId, error)),
   });
 }
 
@@ -292,13 +298,12 @@ async function waitForOutput(config, bundle, promptId) {
   let lastHeartbeat = 0;
   while (Date.now() - started < 24 * 60 * 60_000) {
     const elapsed = Date.now() - started;
-    if (Date.now() - lastHeartbeat >= 25_000) {
+    if (Date.now() - lastHeartbeat >= ACTIVE_HEARTBEAT_INTERVAL_MS) {
       const progress = Math.min(90, 10 + Math.floor(elapsed / 30_000));
       const heartbeat = await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
         method: "POST",
         body: JSON.stringify({ progress }),
       });
-      await machineHeartbeat(config, bundle.job.id);
       if (!heartbeat.continue) throw new Error("creative_studio_job_cancelled");
       lastHeartbeat = Date.now();
     }
@@ -330,7 +335,7 @@ async function waitForTextOutput(config, graph, promptId, onHeartbeat) {
   const started = Date.now();
   let lastHeartbeat = 0;
   while (Date.now() - started < 60 * 60_000) {
-    if (Date.now() - lastHeartbeat >= 25_000) {
+    if (Date.now() - lastHeartbeat >= ACTIVE_HEARTBEAT_INTERVAL_MS) {
       await onHeartbeat();
       lastHeartbeat = Date.now();
     }
@@ -364,7 +369,6 @@ async function describeTrainingMedia(config, trainingJobId, specification, media
   const promptId = await submitPrompt(config, graph, `${trainingJobId}-${specification.sourceId}`);
   const text = await waitForTextOutput(config, graph, promptId, async () => {
     await heartbeat(progress);
-    await machineHeartbeat(config, trainingJobId);
   });
   if (text.length < 40) throw new Error("comfyui_description_too_short");
   return {
@@ -469,18 +473,19 @@ async function executeTrainingBundle(config, bundle) {
   }
 }
 
-export async function runOnce(config, heartbeat = true) {
-  if (heartbeat) await machineHeartbeat(config);
-  const result = await runnerRequest(config, "/api/creative-studio/runner/jobs/claim", { method: "POST", body: "{}" });
-  if (result.bundle) {
-    process.stdout.write(`[Creative Studio Runner] claimed ${result.bundle.job.id}: ${result.bundle.workflow.name}\n`);
-    await executeBundle(config, result.bundle);
+export async function runOnce(config) {
+  const work = await runnerRequest(config, "/api/creative-studio/runner/work/claim", {
+    method: "POST",
+    body: JSON.stringify(await machineState(config)),
+  });
+  if (work.kind === "generation" && work.bundle) {
+    process.stdout.write(`[Creative Studio Runner] claimed ${work.bundle.job.id}: ${work.bundle.workflow.name}\n`);
+    await executeBundle(config, work.bundle);
     return true;
   }
-  const training = await runnerRequest(config, "/api/creative-studio/runner/training/claim", { method: "POST", body: "{}" });
-  if (!training.bundle) return false;
-  process.stdout.write(`[Creative Studio Runner] claimed CreativeDNA evidence synthesis ${training.bundle.trainingJob.id}\n`);
-  await executeTrainingBundle(config, training.bundle);
+  if (work.kind !== "training" || !work.bundle) return false;
+  process.stdout.write(`[Creative Studio Runner] claimed CreativeDNA evidence synthesis ${work.bundle.trainingJob.id}\n`);
+  await executeTrainingBundle(config, work.bundle);
   return true;
 }
 
@@ -540,19 +545,19 @@ async function main() {
   if (process.argv.includes("--self-test")) return selfTest();
   const config = loadConfig();
   const once = process.argv.includes("--once");
-  let lastHeartbeat = 0;
   process.stdout.write(`[Creative Studio Runner] v${RUNNER_VERSION} · ${config.apiBase} · ${config.comfyUrl}\n`);
   do {
+    let nextDelay = config.pollIntervalMs;
     try {
-      const heartbeat = once || Date.now() - lastHeartbeat >= 30_000;
-      await runOnce(config, heartbeat);
-      if (heartbeat) lastHeartbeat = Date.now();
+      await runOnce(config);
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : "runner_loop_failed";
       process.stderr.write(`[Creative Studio Runner] ${error}\n`);
-      await machineHeartbeat(config, null, error).catch(() => undefined);
+      const cloudflareLimited = error === "runner_api_429" || error.includes("rate_limit");
+      if (cloudflareLimited) nextDelay = 15 * 60_000;
+      else await machineHeartbeat(config, null, error).catch(() => undefined);
     }
-    if (!once) await sleep(config.pollIntervalMs);
+    if (!once) await sleep(nextDelay);
   } while (!once);
 }
 

@@ -33,7 +33,7 @@ function backgroundRequest(email: string) {
 }
 
 function retryDelay(attempt: number) {
-  return Math.min(300, 15 * (2 ** Math.min(Math.max(attempt - 1, 0), 4)));
+  return Math.min(900, 60 * (2 ** Math.min(Math.max(attempt - 1, 0), 4)));
 }
 
 export async function enqueueJob(env: Env, jobId: string, delaySeconds = 0) {
@@ -71,7 +71,7 @@ export async function processJobMessage(env: Env, message: JobMessage) {
       return;
     }
     if (updated.status === "queued" || updated.status === "running") {
-      await enqueueJob(env, job.id, 15);
+      await enqueueJob(env, job.id, 60);
     }
   } catch (caught) {
     const error = caught instanceof Error ? caught.message : "background_reconciliation_failed";

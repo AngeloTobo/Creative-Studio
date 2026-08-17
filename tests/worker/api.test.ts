@@ -141,6 +141,32 @@ describe("Creative Studio Worker API", () => {
     expect(relayedEmail).toBe("angelotoborg@gmail.com");
   });
 
+  it("loads the complete studio through one consolidated snapshot contract", async () => {
+    const upstreamPaths: string[] = [];
+    const afdfw = {
+      async fetch(input: RequestInfo | URL, init?: RequestInit) {
+        const upstream = new Request(input, init);
+        upstreamPaths.push(new URL(upstream.url).pathname);
+        return Response.json({ status: "approved", user: { id: "owner-snapshot" }, profile: { displayName: "Angelo" } });
+      },
+    } as Fetcher;
+    const response = await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), workerEnv("afdfw", afdfw));
+    expect(response.status).toBe(200);
+    expect(await result(response)).toMatchObject({
+      ok: true,
+      snapshot: {
+        adapter: { id: "creative-studio-bff", development: false },
+        session: { userId: "owner-snapshot" },
+        projects: [],
+        jobs: [],
+        artifacts: [],
+        productionLoops: [],
+        productionCockpit: { summary: { activeRuns: 0 } },
+      },
+    });
+    expect(upstreamPaths).toEqual(["/api/me"]);
+  });
+
   it("starts empty and creates, edits, and archives an owned project", async () => {
     const local = workerEnv("development");
     const empty = await routeCreativeStudioApi(request("/api/creative-studio/projects"), local);
@@ -336,18 +362,18 @@ describe("Creative Studio Worker API", () => {
     }), production);
     const unsupportedClaim = await result(await runnerRequest("/api/creative-studio/runner/training/claim", {}));
     expect(unsupportedClaim).toMatchObject({ bundle: null });
-    const runnerHeartbeat = await result(await runnerRequest("/api/creative-studio/runner/heartbeat", {
+    const claimed = await result(await runnerRequest("/api/creative-studio/runner/work/claim", {
       version: "1.2.0",
       comfyUrl: "http://127.0.0.1:8188",
       comfyVersion: "0.33.0",
       device: "Test GPU",
       activeJobId: null,
       error: null,
-    }));
-    expect(runnerHeartbeat).toMatchObject({ runner: { version: "1.2.0" } });
-    const claimed = await result(await runnerRequest("/api/creative-studio/runner/training/claim", {})) as {
+    })) as {
+      kind: string;
       bundle: { trainingJob: { id: string; status: string; runnerId: string }; assets: Array<{ id: string; trainingEligible: boolean }> };
     };
+    expect(claimed.kind).toBe("training");
     expect(claimed.bundle.trainingJob).toMatchObject({ id: startedPayload.trainingJob.id, status: "running", runnerId: enrolled.runner.id });
     expect(claimed.bundle.assets).toEqual([expect.objectContaining({ id: uploaded.asset.id, trainingEligible: true })]);
 

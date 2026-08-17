@@ -2,41 +2,27 @@ import {
   CREATIVE_STUDIO_ROUTES,
   type AcceptanceDecision,
   type ApiResult,
-  type Artifact,
-  type Capability,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaResponse,
   type CreateProjectRequest,
   type CreateProjectResponse,
-  type CreativeDnaArtifact,
-  type Job,
-  type MediaAsset,
-  type Project,
   type ReviewArtifactResponse,
   type RetryJobResponse,
-  type StudioSession,
   type StudioSnapshot,
   type SubmitJobRequest,
   type SubmitJobResponse,
   type UpdateProjectRequest,
   type UpdateProjectResponse,
   type UploadMediaResponse,
-  type CreativeTrainingExample,
   type ImportWorkflowResponse,
   type SaveWorkflowRevisionRequest,
   type SaveWorkflowRevisionResponse,
-  type WorkflowDefinition,
-  type CreativeDnaTrainingJob,
   type CreateCreativeDnaTrainingJobRequest,
   type CreativeDnaTrainingJobResponse,
-  type CreativeDnaTrainingReview,
   type CreativeDnaTrainingReviewDecision,
   type ReviewCreativeDnaTrainingResponse,
-  type LocalRunner,
   type EnrollLocalRunnerResponse,
   type RevokeLocalRunnerResponse,
-  type ProjectProductionLoop,
-  type ProductionCockpit,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -46,7 +32,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers },
   });
-  const payload = await response.json() as ApiResult<T>;
+  if (response.status === 429) throw new Error("cloudflare_free_tier_temporarily_limited");
+  const payload = response.headers.get("content-type")?.includes("application/json")
+    ? await response.json() as ApiResult<T>
+    : null;
+  if (!payload) throw new Error(`http_${response.status}`);
   if (!response.ok || !payload.ok) {
     throw new Error(payload.ok ? `http_${response.status}` : payload.error);
   }
@@ -92,39 +82,8 @@ async function uploadWorkflowRequest(file: File, projectId: string, name = "", d
 
 export function createHttpAdapter(): StudioAdapter {
   const load = async (): Promise<StudioSnapshot> => {
-    const [session, projects, dna, jobs, artifacts, media, workflows, trainingJobs, runners, capabilities] = await Promise.all([
-      request<{ session: StudioSession }>(CREATIVE_STUDIO_ROUTES.session),
-      request<{ projects: Project[] }>(CREATIVE_STUDIO_ROUTES.projects),
-      request<{ artifacts: CreativeDnaArtifact[] }>(CREATIVE_STUDIO_ROUTES.dna),
-      request<{ jobs: Job[] }>(CREATIVE_STUDIO_ROUTES.jobs),
-      request<{ artifacts: Artifact[]; acceptances: StudioSnapshot["acceptances"]; trainingExamples: CreativeTrainingExample[] }>(CREATIVE_STUDIO_ROUTES.artifacts),
-      request<{ assets: MediaAsset[] }>(CREATIVE_STUDIO_ROUTES.media),
-      request<{ workflows: WorkflowDefinition[] }>(CREATIVE_STUDIO_ROUTES.workflows),
-      request<{ trainingJobs: CreativeDnaTrainingJob[]; trainingReviews: CreativeDnaTrainingReview[] }>(CREATIVE_STUDIO_ROUTES.trainingJobs),
-      request<{ runners: LocalRunner[] }>(CREATIVE_STUDIO_ROUTES.runners),
-      request<{ capabilities: Capability[] }>(CREATIVE_STUDIO_ROUTES.capabilities),
-    ]);
-    const productionLoops = await request<{ productionLoops: ProjectProductionLoop[] }>(CREATIVE_STUDIO_ROUTES.productionLoops);
-    const productionCockpit = await request<{ productionCockpit: ProductionCockpit }>(CREATIVE_STUDIO_ROUTES.productionCockpit);
-    return {
-      adapter: { id: "creative-studio-bff", label: "Creative Studio Worker", development: false, durableScope: "backend" },
-      session: session.session,
-      projects: projects.projects,
-      dnaArtifacts: dna.artifacts,
-      jobs: jobs.jobs,
-      artifacts: artifacts.artifacts,
-      mediaAssets: media.assets,
-      workflows: workflows.workflows,
-      trainingExamples: artifacts.trainingExamples,
-      trainingJobs: trainingJobs.trainingJobs,
-      trainingReviews: trainingJobs.trainingReviews,
-      productionLoops: productionLoops.productionLoops,
-      productionCockpit: productionCockpit.productionCockpit,
-      runners: runners.runners,
-      acceptances: artifacts.acceptances,
-      capabilities: capabilities.capabilities,
-      refreshedAt: new Date().toISOString(),
-    };
+    const result = await request<{ snapshot: StudioSnapshot }>(CREATIVE_STUDIO_ROUTES.snapshot);
+    return result.snapshot;
   };
 
   return {

@@ -23,7 +23,9 @@ if (production) {
   if (!target.r2_buckets?.some((bucket) => bucket.binding === "ARTIFACTS" && bucket.bucket_name === "creative-studio-artifacts")) issues.push("Production requires the dedicated Creative Studio artifact bucket");
   if (!target.queues?.producers?.some((queue) => queue.binding === "JOB_QUEUE" && queue.queue === "creative-studio-jobs")) issues.push("Production requires the Creative Studio job queue producer binding");
   if (!target.queues?.consumers?.some((queue) => queue.queue === "creative-studio-jobs")) issues.push("Production requires the Creative Studio job queue consumer");
-  if (!target.triggers?.crons?.includes("*/5 * * * *")) issues.push("Production requires the five-minute background job recovery trigger");
+  if (!target.triggers?.crons?.includes("0 * * * *")) issues.push("Production requires the hourly free-tier recovery trigger");
+  const consumer = target.queues?.consumers?.find((queue) => queue.queue === "creative-studio-jobs");
+  if (Number(consumer?.max_retries ?? 99) > 3) issues.push("Production queue retries must stay capped at three for the free-tier budget");
   if (!target.routes?.some((route) => route.pattern === "cs.angelotoborg.com" && route.custom_domain === true)) issues.push("Production requires the cs.angelotoborg.com custom domain");
   if (!target.routes?.some((route) => route.pattern === "runner.cs.angelotoborg.com" && route.custom_domain === true)) issues.push("Production requires the token-authenticated runner.cs.angelotoborg.com custom domain");
   if (target.workers_dev !== false) issues.push("Production must disable the public workers.dev route");

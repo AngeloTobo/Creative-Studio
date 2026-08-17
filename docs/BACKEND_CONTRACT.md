@@ -4,6 +4,7 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/creative-studio/snapshot` | Load the complete owner read model in one request |
 | `GET` | `/api/creative-studio/session` | Same-origin session descriptor |
 | `GET` | `/api/creative-studio/projects` | List Creative Studio projects |
 | `POST` | `/api/creative-studio/projects` | Create an owned project from user input |
@@ -54,6 +55,7 @@ Media uploads never traverse AFDFW. The upload route requires an owned, non-arch
 
 The separate runner hostname accepts only bearer-authenticated machine routes:
 
+- `POST /api/creative-studio/runner/work/claim`
 - `POST /api/creative-studio/runner/heartbeat`
 - `POST /api/creative-studio/runner/jobs/claim`
 - `POST /api/creative-studio/runner/jobs/:id/heartbeat`
@@ -65,7 +67,7 @@ The separate runner hostname accepts only bearer-authenticated machine routes:
 - `POST /api/creative-studio/runner/training/:id/complete`
 - `POST /api/creative-studio/runner/training/:id/fail`
 
-Tokens are generated with 256 bits of randomness, returned once, stored only as SHA-256 hashes in D1, owner-scoped, and revocable. A generation claim carries an immutable API-format workflow revision plus only the retained inputs bound in its settings stamp. A training claim carries only its selected consented uploads, training-ready accepted-result records, and optional base DNA. Both job types use renewable two-minute leases. Generation completion accepts only allowlisted image, audio, or video MIME types up to 100 MB, writes to a deterministic R2 key, verifies the byte count, and only then completes the D1 job and training candidate. Training completion must contain complete bounded source evidence for the claimed bundle; the Worker replaces runner-supplied identity labels with canonical D1 metadata before writing an immutable trained DNA artifact. The runner hostname returns `404` for the product shell and every non-runner route.
+Tokens are generated with 256 bits of randomness, returned once, stored only as SHA-256 hashes in D1, owner-scoped, and revocable. The unified work claim renews the machine heartbeat and returns at most one generation or training bundle; the older separate claim and heartbeat routes remain allowlisted for compatibility but Local Runner 1.3 does not idle-poll them. A generation claim carries an immutable API-format workflow revision plus only the retained inputs bound in its settings stamp. A training claim carries only its selected consented uploads, training-ready accepted-result records, and optional base DNA. Both job types use renewable two-minute leases. Generation completion accepts only allowlisted image, audio, or video MIME types up to 100 MB, writes to a deterministic R2 key, verifies the byte count, and only then completes the D1 job and training candidate. Training completion must contain complete bounded source evidence for the claimed bundle; the Worker replaces runner-supplied identity labels with canonical D1 metadata before writing an immutable trained DNA artifact. The runner hostname returns `404` for the product shell and every non-runner route.
 
 ## Runtime validation
 
@@ -75,4 +77,4 @@ Tokens are generated with 256 bits of randomness, returned once, stored only as 
 - Non-local base URLs must use HTTPS.
 - AFDFW `401` and `403` responses become a same-origin `approved_login_required` response without seeding owner data.
 - `npm run check:env:production` blocks a release while the D1 ID is a placeholder, backend mode is development, the R2/custom-domain boundary is missing, Worker-first asset routing is absent, `workers.dev` is enabled, or no protected AFDFW target exists.
-- The same production preflight requires the dedicated queue producer/consumer and the five-minute recovery trigger.
+- The same production preflight requires the dedicated queue producer/consumer, capped Queue retries, the hourly recovery trigger, and the free-tier budget guard.

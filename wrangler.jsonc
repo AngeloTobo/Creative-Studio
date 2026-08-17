@@ -68,14 +68,14 @@
             "queue": "creative-studio-jobs",
             "max_batch_size": 1,
             "max_batch_timeout": 2,
-            "max_retries": 10,
+            "max_retries": 3,
             "max_concurrency": 1,
             "dead_letter_queue": "creative-studio-jobs-dlq"
           }
         ]
       },
       "triggers": {
-        "crons": ["*/5 * * * *"]
+        "crons": ["0 * * * *"]
       },
       "r2_buckets": [
         {

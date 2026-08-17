@@ -21,7 +21,7 @@ $configJson = @{
   apiBase = $ApiBase
   token = $RunnerToken
   comfyUrl = $ComfyUrl
-  pollIntervalMs = 5000
+  pollIntervalMs = 60000
 } | ConvertTo-Json
 [IO.File]::WriteAllText($configPath, $configJson, (New-Object Text.UTF8Encoding($false)))
 

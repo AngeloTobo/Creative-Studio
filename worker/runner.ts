@@ -161,9 +161,13 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
   const progress = Math.max(5, Math.min(94, Math.round(Number(input.progress) || 5)));
   const upstreamId = boundedText(input.upstreamId, 120) || null;
   const now = new Date();
-  const changed = await env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?), runner_lease_until = ?, updated_at = ?
-    where id = ? and owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
-    .bind(progress, upstreamId, new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id).run();
+  const [changed] = await env.DB.batch([
+    env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?), runner_lease_until = ?, updated_at = ?
+      where id = ? and owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
+      .bind(progress, upstreamId, new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id),
+    env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null")
+      .bind(jobId, now.toISOString(), runner.id, runner.ownerId),
+  ]);
   const job = await jobById(env, runner.ownerId, jobId);
   if (!job) throw new Error("job_not_found");
   return { continue: Boolean(changed.meta.changes), job };
@@ -212,7 +216,7 @@ export async function localRunnerMedia(env: Env, runner: RunnerIdentity, mediaId
 }
 
 export function isLocalRunnerRoute(route: string) {
-  return route === "runner-heartbeat" || route === "runner-job-claim" || route === "runner-job-heartbeat"
+  return route === "runner-work-claim" || route === "runner-heartbeat" || route === "runner-job-claim" || route === "runner-job-heartbeat"
     || route === "runner-job-complete" || route === "runner-job-fail" || route === "runner-media-content"
     || route === "runner-training-claim" || route === "runner-training-heartbeat"
     || route === "runner-training-complete" || route === "runner-training-fail";

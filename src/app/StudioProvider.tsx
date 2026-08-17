@@ -90,6 +90,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [refreshFailures, setRefreshFailures] = useState(0);
   const [activeProjectId, setActiveProjectId] = useState("");
   const [activeDna, setActiveDna] = useState<CreativeDnaArtifact | null>(null);
 
@@ -115,8 +116,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       const next = await adapter.refresh();
       applySnapshot(next);
       setError("");
+      setRefreshFailures(0);
     } catch (nextError) {
       setError(message(nextError));
+      setRefreshFailures((current) => Math.min(current + 1, 4));
     }
   }, [adapter, applySnapshot]);
 
@@ -132,12 +135,36 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return () => { live = false; };
   }, [adapter, applySnapshot]);
 
+  const hasActiveWork = Boolean(snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
+    || snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running"));
+
   useEffect(() => {
-    if (!snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
-      && !snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")) return;
-    const timer = window.setInterval(() => void refresh(), 1_000);
-    return () => window.clearInterval(timer);
-  }, [refresh, snapshot?.jobs, snapshot?.trainingJobs]);
+    if (!hasActiveWork) return;
+    let timer = 0;
+    let disposed = false;
+    const baseInterval = adapter.id === "development-local-storage" ? 1_000 : 60_000;
+    const interval = Math.min(5 * 60_000, baseInterval * (2 ** refreshFailures));
+    const schedule = () => {
+      if (disposed || document.visibilityState !== "visible") return;
+      timer = window.setTimeout(() => void poll(), interval);
+    };
+    const poll = async () => {
+      if (disposed) return;
+      if (document.visibilityState === "visible") await refresh();
+      schedule();
+    };
+    const visibility = () => {
+      window.clearTimeout(timer);
+      if (document.visibilityState === "visible") timer = window.setTimeout(() => void poll(), 0);
+    };
+    document.addEventListener("visibilitychange", visibility);
+    schedule();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [adapter.id, hasActiveWork, refresh, refreshFailures]);
 
   const transact = useCallback(async <T,>(action: () => Promise<T>) => {
     setBusy(true);

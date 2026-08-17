@@ -251,9 +251,13 @@ export async function claimLocalRunnerTrainingJob(env: Env, runner: RunnerIdenti
 export async function heartbeatLocalRunnerTrainingJob(env: Env, runner: RunnerIdentity, jobId: string, progressValue: unknown) {
   const progress = Math.max(5, Math.min(94, Math.round(Number(progressValue) || 5)));
   const now = new Date();
-  const changed = await env.DB.prepare(`update creative_dna_training_jobs set progress = max(progress, ?),
-    runner_lease_until = ?, updated_at = ? where id = ? and owner_id = ? and runner_id = ? and status = 'running'`)
-    .bind(progress, leaseUntil(now), now.toISOString(), jobId, runner.ownerId, runner.id).run();
+  const [changed] = await env.DB.batch([
+    env.DB.prepare(`update creative_dna_training_jobs set progress = max(progress, ?),
+      runner_lease_until = ?, updated_at = ? where id = ? and owner_id = ? and runner_id = ? and status = 'running'`)
+      .bind(progress, leaseUntil(now), now.toISOString(), jobId, runner.ownerId, runner.id),
+    env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null")
+      .bind(jobId, now.toISOString(), runner.id, runner.ownerId),
+  ]);
   const row = await trainingRow(env, runner.ownerId, jobId);
   if (!row) throw new Error("training_job_not_found");
   return { continue: Boolean(changed.meta.changes), trainingJob: mapTrainingJob(row) };

@@ -489,7 +489,7 @@ export async function attachAfdfwGeneration(env: Env, jobId: string, generation:
   const now = generation.updatedAt || new Date().toISOString();
   const progress = upstream === "completed" ? 95 : Math.max(current.progress, Number(generation.progress || (status === "running" ? 10 : 2)));
   const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${current.modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
-  const nextAt = upstream === "completed" ? null : status === "queued" || status === "running" ? new Date(Date.now() + 15_000).toISOString() : null;
+  const nextAt = upstream === "completed" ? null : status === "queued" || status === "running" ? new Date(Date.now() + 60_000).toISOString() : null;
   const retentionTimeout = upstream === "completed" ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : current.timeoutAt;
   const changed = await env.DB.prepare(`update creative_jobs set upstream_id = ?, upstream_media_path = coalesce(?, upstream_media_path), status = ?, progress = ?,
       error = ?, last_reconcile_error = null, updated_at = ?, completed_at = case when ? = 'failed' then ? else completed_at end,
