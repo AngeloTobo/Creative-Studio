@@ -99,7 +99,7 @@ async function runnerTokenWorks(config) {
       method: "POST",
       headers: { authorization: `Bearer ${config.token}` },
       body: JSON.stringify({
-        version: "1.4.0",
+        version: "1.4.1",
         comfyUrl: comfyOrigin,
         comfyVersion: null,
         device: "Local startup check",

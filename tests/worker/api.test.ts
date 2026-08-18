@@ -459,7 +459,7 @@ describe("Creative Studio Worker API", () => {
     expect(completedPayload.trainingJob.resultDnaArtifactId).toBeTruthy();
 
     const dna = await result(await routeCreativeStudioApi(request("/api/creative-studio/dna"), production)) as {
-      artifacts: Array<{ artifactId: string; source: { kind: string; referenceLabel: string | null }; rights: { policy: string }; lineage: { parentArtifactId: string | null }; training: null | { jobId: string; runnerId: string; assetIds: string[]; analysis: { sources: Array<{ mediaId: string; sourceType: string; kind: string; label: string }>; dimensions: Record<string, { confidence: number }> } }; evidence: Array<{ path: string; class: string }> }>;
+      artifacts: Array<{ artifactId: string; source: { kind: string; directive: string; referenceLabel: string | null }; generationPrompts: { image: string }; rights: { policy: string }; lineage: { parentArtifactId: string | null }; training: null | { jobId: string; runnerId: string; assetIds: string[]; analysis: { sources: Array<{ mediaId: string; sourceType: string; kind: string; label: string }>; dimensions: Record<string, { confidence: number }> } }; evidence: Array<{ path: string; class: string }> }>;
     };
     expect(dna.artifacts[0]).toMatchObject({
       artifactId: completedPayload.trainingJob.resultDnaArtifactId,
@@ -471,9 +471,12 @@ describe("Creative Studio Worker API", () => {
       kind: "image",
       label: "Training Source",
       detailedDescription: {
+        schemaVersion: "creative-dna-media-description/1.1",
         provider: "local-comfyui",
         workflowId: "gemma4-multimodal-description",
         model: "gemma4_e4b_it_fp8_scaled.safetensors",
+        longSummary: "A luminous abstract form occupies the center of a cool, open landscape with soft depth and controlled highlights.",
+        shortSummary: "A luminous abstract form occupies the center of a cool, open landscape with soft depth and controlled highlights.",
       },
     });
     expect(dna.artifacts[0].evidence).toEqual(expect.arrayContaining([
@@ -484,6 +487,9 @@ describe("Creative Studio Worker API", () => {
       rights: { policy: "abstract-attributes-only" },
       lineage: { parentArtifactId: baseDna.artifactId },
     });
+    expect(dna.artifacts[0].source.directive).toBe("A luminous abstract form occupies the center of a cool, open landscape with soft depth and controlled highlights.");
+    expect(dna.artifacts[0].generationPrompts.image).toBe(dna.artifacts[0].source.directive);
+    expect(dna.artifacts[0].generationPrompts.image).not.toMatch(/Create an original image|Evidence-synthesized|CreativeDNA:/i);
 
     const trainedDnaArtifactId = completedPayload.trainingJob.resultDnaArtifactId;
     const postJson = (path: string, body: object) => routeCreativeStudioApi(request(path, {
@@ -557,6 +563,9 @@ describe("Creative Studio Worker API", () => {
       idempotencyKey: "training_review_approved_generation_001",
     });
     expect(approvedGeneration.status).toBe(202);
+    expect(await result(approvedGeneration)).toMatchObject({
+      job: { prompt: "A luminous abstract form occupies the center of a cool, open landscape with soft depth and controlled highlights." },
+    });
 
     const rejected = await postJson(`/api/creative-studio/training-jobs/${startedPayload.trainingJob.id}/review`, {
       decision: "rejected",

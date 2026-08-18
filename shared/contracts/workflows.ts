@@ -55,6 +55,21 @@ export type WorkflowGraphInspection = {
   models: string[];
 };
 
+export function primaryWorkflowPromptParameter(parameters: WorkflowParameter[], modality?: WorkflowModality | "image" | "music" | "video") {
+  const candidates = parameters.filter((parameter) => {
+    if (parameter.kind !== "text") return false;
+    const identity = `${parameter.label} ${parameter.id}`;
+    return /prompt|caption|description|text/i.test(identity) && !/negative|undesired|avoid/i.test(identity);
+  });
+  if (modality === "music" || modality === "audio") {
+    return candidates.find((parameter) => /caption/i.test(`${parameter.label} ${parameter.id}`)) ?? candidates[0] ?? null;
+  }
+  return candidates.find((parameter) => /positive/i.test(`${parameter.label} ${parameter.id}`))
+    ?? candidates.find((parameter) => /prompt/i.test(`${parameter.label} ${parameter.id}`))
+    ?? candidates[0]
+    ?? null;
+}
+
 type RecordValue = Record<string, unknown>;
 
 const MODEL_PATTERN = /[\w.-]+\.(?:safetensors|ckpt|pt|pth|gguf|onnx)/gi;

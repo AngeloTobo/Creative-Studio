@@ -1,10 +1,12 @@
 import {
+  creativeDnaGenerationPrompt,
   deriveProjectProductionLoop,
   deriveProductionCockpit,
   type AcceptanceDecision,
   type Capability,
   type CreateProjectRequest,
   matchCreativeStudioRoute,
+  primaryWorkflowPromptParameter,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaTrainingJobRequest,
   type GenerationModality,
@@ -407,10 +409,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           kind: resolvedInput!.kind,
         }));
         const parameterValues = Object.fromEntries(plan.workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
-        const workflowPrompt = plan.workflow.currentRevision.parameters
-          .filter((parameter) => parameter.kind === "text" && /prompt|caption|lyrics|text/i.test(`${parameter.label} ${parameter.id}`))
-          .map((parameter) => String(parameter.value).trim()).filter(Boolean).join("\n\n");
-        const prompt = boundedText(workflowPrompt, 2_000) || dna.generationPrompts[modality === "music" ? "music" : "image"];
+        const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);
+        const workflowPrompt = workflowPromptParameter ? String(workflowPromptParameter.value).trim() : "";
+        const prompt = boundedText(workflowPrompt, 4_000) || creativeDnaGenerationPrompt(dna, modality === "music" ? "music" : "image");
         const createdAt = new Date().toISOString();
         const created = await createQueuedJob(env, session.userId, {
           projectId: input.projectId,

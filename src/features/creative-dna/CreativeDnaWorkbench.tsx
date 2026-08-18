@@ -3,10 +3,13 @@ import {
   CREATIVE_DNA_DIMENSION_KEYS,
   DEFAULT_CREATIVE_DNA_DIMENSIONS,
   DEFAULT_CREATIVE_DNA_INFLUENCE,
+  creativeDnaDescriptionSummaries,
+  creativeDnaGenerationPrompt,
   type CreativeDnaArtifact,
   type CreativeDnaDimensionKey,
   type CreativeDnaDimensions,
   type CreativeDnaInfluence,
+  type CreativeDnaMediaDescription,
   type CreativeDnaSourceKind,
   type CreativeDnaTarget,
 } from "../../../shared/contracts";
@@ -26,6 +29,11 @@ const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   organicity: "Organic",
   polish: "Polish",
 };
+
+function SourceDescriptionSummaries({ description }: { description: CreativeDnaMediaDescription }) {
+  const summaries = creativeDnaDescriptionSummaries(description);
+  return <><span className="dna-description-label">Short summary</span><p>{summaries.shortSummary}</p><details className="dna-description-long"><summary>Long summary · {summaries.longSummary.length.toLocaleString()} characters</summary><p>{summaries.longSummary}</p></details></>;
+}
 
 type CreativeDnaWorkspace = "design" | "train" | "generate";
 
@@ -99,7 +107,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
 
   const copyPrompt = async () => {
     if (!activeDna) return;
-    await navigator.clipboard.writeText(activeDna.generationPrompts[activeDna.targetModality]);
+    await navigator.clipboard.writeText(creativeDnaGenerationPrompt(activeDna, activeDna.targetModality));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_500);
   };
@@ -172,7 +180,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, initialRe
             <p>{activeDna.source.directive}</p>
             {activeDna.training?.analysis.sources.some((source) => source.detailedDescription) ? <details className="dna-source-descriptions">
               <summary>Detailed source descriptions · {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).length}</summary>
-              {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).map((source) => <article key={source.sourceId}><strong>{source.label}</strong><small>{source.kind} · Gemma 4</small><p>{source.detailedDescription?.text}</p></article>)}
+              {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).map((source) => <article key={source.sourceId}><strong>{source.label}</strong><small>{source.kind} · Gemma 4</small><SourceDescriptionSummaries description={source.detailedDescription!} /></article>)}
             </details> : null}
             <small className="dna-result-next">Training and generation controls use this saved version below.</small>
           </div> : <div className="dna-empty"><Icon name="dna" size={30} /><strong>Your versioned blueprint appears here.</strong><span>Build it, reopen it, then evolve it without overwriting history.</span></div>}

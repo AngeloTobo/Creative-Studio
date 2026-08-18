@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   CREATIVE_DNA_DIMENSION_KEYS,
+  creativeDnaDescriptionSummaries,
   type CreativeDnaArtifact,
   type CreativeDnaDimensionKey,
   type CreativeDnaTrainingJob,
@@ -101,16 +102,19 @@ export function TrainingReviewPanel({
       <section className="training-source-evidence" aria-label="Training source evidence">
         <header><span><strong>Source evidence</strong><small>{analysis.summary}</small></span><b>{analysis.sources.length}</b></header>
         <div>
-          {analysis.sources.map((source) => <details key={source.sourceId} className="training-source-card" open={analysis.sources.length === 1}>
+          {analysis.sources.map((source) => {
+            const summaries = source.detailedDescription ? creativeDnaDescriptionSummaries(source.detailedDescription) : null;
+            return <details key={source.sourceId} className="training-source-card" open={analysis.sources.length === 1}>
             <summary><span><Icon name={source.kind === "audio" ? "music" : source.kind} size={17} /><span><strong>{source.label}</strong><small>{source.sourceType.replace("-", " ")} · {source.kind}</small></span></span><b>{Math.round(source.confidence * 100)}%</b></summary>
-            {source.detailedDescription ? <section className="training-source-description" aria-label={`Detailed description for ${source.label}`}>
-              <header><span><strong>Detailed media description</strong><small>Reusable prompt · Gemma 4 through local ComfyUI</small></span><span className="state-pill ready">retained</span></header>
-              <p>{source.detailedDescription.text}</p>
+            {source.detailedDescription && summaries ? <section className="training-source-description" aria-label={`Gemma summaries for ${source.label}`}>
+              <header><span><strong>Gemma media summaries</strong><small>Short generation prompt + long analysis · local ComfyUI</small></span><span className="state-pill ready">retained</span></header>
+              <div className="training-description-short"><strong>Short summary</strong><p>{summaries.shortSummary}</p></div>
+              <details className="training-description-long"><summary>Long summary · {summaries.longSummary.length.toLocaleString()} characters</summary><p>{summaries.longSummary}</p></details>
               <small>{source.detailedDescription.model} · workflow v{source.detailedDescription.workflowVersion} · prompt {source.detailedDescription.comfyPromptId}</small>
             </section> : <p className="training-source-description-legacy">This earlier training result predates detailed Gemma media descriptions.</p>}
             <ul>{source.observations.map((observation) => <li key={observation}>{observation}</li>)}</ul>
             <details className="training-source-technical"><summary>Measured technical evidence · {Object.keys(source.metrics).length}</summary><div className="training-source-metrics">{Object.entries(source.metrics).slice(0, 10).map(([key, value]) => <span key={key}><small>{key}</small><b>{String(value)}</b></span>)}</div></details>
-          </details>)}
+          </details>})}
         </div>
       </section>
 

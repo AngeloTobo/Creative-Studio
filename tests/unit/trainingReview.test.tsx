@@ -127,7 +127,9 @@ describe("CreativeDNA training review", () => {
     expect(markup).toContain("Dimension comparison");
     expect(markup).toContain("94%");
     expect(markup).toContain("Warm highlights remain controlled");
-    expect(markup).toContain("Detailed media description");
+    expect(markup).toContain("Gemma media summaries");
+    expect(markup).toContain("Short summary");
+    expect(markup).toContain("Long summary");
     expect(markup).toContain("A luminous glass form stands against a deep background");
     expect(markup).toContain("gemma4_e4b_it_fp8_scaled.safetensors");
     expect(markup).toContain("dominantTone");

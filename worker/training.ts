@@ -12,7 +12,12 @@ import type {
   MediaAsset,
   ReviewCreativeDnaTrainingRequest,
 } from "../shared/contracts";
-import { CREATIVE_DNA_DIMENSION_KEYS } from "../shared/contracts";
+import {
+  CREATIVE_DNA_DIMENSION_KEYS,
+  creativeDnaTrainingDescription,
+  resolveCreativeDnaGenerationArtifact,
+  splitCreativeDnaMediaDescriptionText,
+} from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
 import {
   createLocalDna,
@@ -378,20 +383,24 @@ function boundedNarrative(value: unknown, maxLength: number) {
 function safeDetailedDescription(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_training_analysis");
   const input = value as Record<string, unknown>;
-  const text = boundedNarrative(input.text, 12_000);
+  const summaries = input.schemaVersion === "creative-dna-media-description/1.1"
+    ? { longSummary: boundedNarrative(input.longSummary, 12_000), shortSummary: boundedNarrative(input.shortSummary, 2_400) }
+    : splitCreativeDnaMediaDescriptionText(boundedNarrative(input.text, 12_000));
   const prompt = boundedNarrative(input.prompt, 2_400);
   const comfyPromptId = boundedText(input.comfyPromptId, 120);
-  if (input.schemaVersion !== "creative-dna-media-description/1.0"
+  if ((input.schemaVersion !== "creative-dna-media-description/1.0" && input.schemaVersion !== "creative-dna-media-description/1.1")
     || input.provider !== "local-comfyui"
     || input.workflowId !== "gemma4-multimodal-description"
     || Number(input.workflowVersion) !== 1
     || input.model !== "gemma4_e4b_it_fp8_scaled.safetensors"
-    || text.length < 40
+    || summaries.longSummary.length < 40
+    || summaries.shortSummary.length < 40
     || prompt.length < 40
     || !/^[a-z0-9-]{8,120}$/i.test(comfyPromptId)) throw new Error("invalid_training_analysis");
   return {
-    schemaVersion: "creative-dna-media-description/1.0" as const,
-    text,
+    schemaVersion: "creative-dna-media-description/1.1" as const,
+    longSummary: summaries.longSummary,
+    shortSummary: summaries.shortSummary,
     provider: "local-comfyui" as const,
     workflowId: "gemma4-multimodal-description" as const,
     workflowVersion: 1 as const,
@@ -492,9 +501,12 @@ export async function completeCreativeDnaTrainingJob(
   const bundle = await creativeDnaTrainingBundle(env, ownerId, jobId);
   const analysis = sanitizeTrainingAnalysis(input.analysis, bundle.assets, bundle.trainingExamples);
   const baseDna = bundle.baseDna;
+  const descriptionDirective = creativeDnaTrainingDescription(analysis, job.targetModality);
+  if (!descriptionDirective) throw new Error("training_media_description_required");
 
   const artifact = await createLocalDna(env, ownerId, {
     ...input.dna,
+    directive: descriptionDirective,
     projectId: job.projectId,
     parentArtifactId: job.baseDnaArtifactId,
     name: boundedText(input.dna.name, 80) || job.name,
@@ -504,7 +516,7 @@ export async function completeCreativeDnaTrainingJob(
   });
   const overallConfidence = CREATIVE_DNA_DIMENSION_KEYS.reduce((total, key) => total + analysis.dimensions[key].confidence, 0)
     / CREATIVE_DNA_DIMENSION_KEYS.length;
-  const trainedArtifact = {
+  const trainedArtifact = resolveCreativeDnaGenerationArtifact({
     ...artifact,
     training: { jobId: job.id, runnerId: runner, assetIds: job.assetIds, trainingExampleIds: job.trainingExampleIds, analysis },
     evidence: [
@@ -518,7 +530,7 @@ export async function completeCreativeDnaTrainingJob(
         downstream: true,
       })),
     ],
-  };
+  });
   const now = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare("update creative_dna_artifacts set dna_json = ? where id = ? and owner_id = ?")

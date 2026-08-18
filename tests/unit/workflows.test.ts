@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkflowValues, inspectWorkflowGraph } from "../../shared/contracts";
+import { applyWorkflowValues, inspectWorkflowGraph, primaryWorkflowPromptParameter } from "../../shared/contracts";
 
 describe("ComfyUI workflow inspection", () => {
   it("recognizes API prompt graphs and exposes only safe scalar controls", () => {
@@ -52,5 +52,14 @@ describe("ComfyUI workflow inspection", () => {
       expect.objectContaining({ id: "1::audio", kind: "media", mediaKind: "audio" }),
       expect.objectContaining({ id: "2::video", kind: "media", mediaKind: "video" }),
     ]));
+  });
+
+  it("selects the positive ComfyUI prompt without treating negative text or lyrics as the generation description", () => {
+    const inspection = inspectWorkflowGraph({
+      "1": { class_type: "CLIPTextEncode", inputs: { text: "Concrete subject description" }, _meta: { title: "Positive Prompt" } },
+      "2": { class_type: "CLIPTextEncode", inputs: { text: "blur, artifacts" }, _meta: { title: "Negative Prompt" } },
+      "3": { class_type: "SaveImage", inputs: { images: ["4", 0] } },
+    });
+    expect(primaryWorkflowPromptParameter(inspection.parameters, "image")?.id).toBe("1::text");
   });
 });

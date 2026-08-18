@@ -1,8 +1,10 @@
 import {
   compileCreativeDna,
+  creativeDnaGenerationPrompt,
   deriveProductionCockpit,
   deriveProjectProductionLoop,
   PROJECT_HUES,
+  resolveCreativeDnaGenerationArtifact,
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
@@ -168,6 +170,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     if (raw) {
       try {
         const state = { ...emptyState(), ...(JSON.parse(raw) as Partial<DevelopmentState>) };
+        state.dnaArtifacts = state.dnaArtifacts.map(resolveCreativeDnaGenerationArtifact);
         state.jobs = state.jobs.map(normalizeJobTiming);
         return state;
       } catch {
@@ -255,7 +258,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     if (!project) throw new Error("project_not_found");
     if (project.status === "archived") throw new Error("project_archived");
     const createdAt = now().toISOString();
-    const prompt = dna.generationPrompts[input.modality];
+    const prompt = creativeDnaGenerationPrompt(dna, input.modality);
     const settingsStamp: GenerationSettingsStamp = {
       schemaVersion: 1, source: "creative-dna", createdAt, reusedFromJobId: retryOfJobId,
       prompt, provider: "development-renderer", modality: input.modality, workflow: null,

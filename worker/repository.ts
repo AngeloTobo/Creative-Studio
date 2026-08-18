@@ -1,6 +1,8 @@
 import {
   compileCreativeDna,
+  creativeDnaGenerationPrompt,
   PROJECT_HUES,
+  resolveCreativeDnaGenerationArtifact,
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
@@ -213,7 +215,7 @@ export async function archiveProject(env: Env, ownerId: string, projectId: strin
 type DnaRow = { id: string; rootArtifactId: string; parentArtifactId: string | null; version: number; dnaJson: string };
 
 function parseDna(row: DnaRow) {
-  try { return JSON.parse(row.dnaJson) as CreativeDnaArtifact; } catch { return null; }
+  try { return resolveCreativeDnaGenerationArtifact(JSON.parse(row.dnaJson) as CreativeDnaArtifact); } catch { return null; }
 }
 
 export async function listLocalDna(env: Env, ownerId: string): Promise<CreativeDnaArtifact[]> {
@@ -360,7 +362,7 @@ export async function createQueuedJob(
   const jobId = id("job");
   const now = new Date().toISOString();
   const timeoutAt = input.executionTarget === "local-comfyui" ? null : new Date(Date.now() + 30 * 60_000).toISOString();
-  const prompt = input.promptOverride ?? input.dna.generationPrompts[input.modality === "video" ? "image" : input.modality];
+  const prompt = input.promptOverride ?? creativeDnaGenerationPrompt(input.dna, input.modality === "video" ? "image" : input.modality);
   const settingsStamp: GenerationSettingsStamp = input.settingsStampOverride ?? {
     schemaVersion: 1,
     source: "creative-dna",

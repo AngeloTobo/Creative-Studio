@@ -357,15 +357,20 @@ function addTrainingExampleContext(profile, example) {
 
 function addDetailedDescriptionContext(profile, detailedDescription) {
   if (!detailedDescription) return profile;
-  const signals = promptSignals(detailedDescription.text);
+  const summaries = detailedDescription.schemaVersion === "creative-dna-media-description/1.1"
+    ? { longSummary: detailedDescription.longSummary, shortSummary: detailedDescription.shortSummary }
+    : { longSummary: detailedDescription.text, shortSummary: detailedDescription.text };
+  const descriptionText = `${summaries.longSummary} ${summaries.shortSummary}`.trim();
+  const signals = promptSignals(descriptionText);
   const dimensions = { ...profile.dimensions };
   for (const [key, value] of Object.entries(signals)) dimensions[key] = score(dimensions[key] * 0.88 + value * 0.12);
   return {
     ...profile,
-    observations: [...profile.observations, `Gemma 4 produced a durable ${detailedDescription.text.length}-character ${detailedDescription.workflowId} media description.`],
+    observations: [...profile.observations, `Gemma 4 produced durable long and short ${detailedDescription.workflowId} media summaries.`],
     metrics: {
       ...profile.metrics,
-      descriptionCharacters: detailedDescription.text.length,
+      longSummaryCharacters: summaries.longSummary.length,
+      shortSummaryCharacters: summaries.shortSummary.length,
       descriptionModel: detailedDescription.model,
     },
     dimensions,
@@ -401,12 +406,31 @@ function aggregateDimensions(sources, baseDna) {
   }, {});
 }
 
-function synthesisDirective(bundle, dimensions, sources) {
-  const ranked = DIMENSION_KEYS.map((key) => [key, dimensions[key].value]).sort((a, b) => b[1] - a[1]);
-  const strongest = ranked.slice(0, 3).map(([key, value]) => `${key} ${value}`).join(", ");
-  const restrained = [...ranked].sort((a, b) => a[1] - b[1]).slice(0, 2).map(([key, value]) => `${key} ${value}`).join(", ");
-  const sourceTypes = [...new Set(sources.map((source) => source.kind))].join(", ");
-  return `Evidence-synthesized ${bundle.trainingJob.targetModality} language from ${sources.length} consented ${sourceTypes} source${sources.length === 1 ? "" : "s"}. Emphasize ${strongest}; keep ${restrained} controlled. Preserve the measured balance as a reusable direction rather than reproducing any single source.`;
+function boundedDescription(value, maxLength = 2_400) {
+  const normalized = String(value || "").replace(/\r\n?/g, "\n").trim();
+  if (normalized.length <= maxLength) return normalized;
+  const candidate = normalized.slice(0, maxLength + 1);
+  const sentenceEnd = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf("! "), candidate.lastIndexOf("? "));
+  return (sentenceEnd >= Math.floor(maxLength * 0.6) ? candidate.slice(0, sentenceEnd + 1) : candidate.slice(0, maxLength)).trim();
+}
+
+function polishedDescription(value) {
+  const paragraphs = String(value || "").replace(/\r\n?/g, "\n").split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const finalParagraph = paragraphs.at(-1);
+  return boundedDescription(finalParagraph && finalParagraph.length >= 160 ? finalParagraph : paragraphs.join(" "));
+}
+
+export function synthesisDirective(bundle, _dimensions, sources) {
+  const preferredKinds = bundle.trainingJob.targetModality === "image" ? ["image", "video"] : ["audio", "video"];
+  const descriptions = preferredKinds.flatMap((kind) => sources
+    .filter((source) => source.kind === kind && source.detailedDescription)
+    .map((source) => source.detailedDescription.schemaVersion === "creative-dna-media-description/1.1"
+      ? boundedDescription(source.detailedDescription.shortSummary)
+      : polishedDescription(source.detailedDescription.text)))
+    .filter(Boolean);
+  if (descriptions.length) return boundedDescription([...new Set(descriptions)].join(" "));
+  throw new Error("training_media_description_required");
 }
 
 export async function synthesizeCreativeDna(bundle, { download, describe, heartbeat = async () => undefined } = {}) {

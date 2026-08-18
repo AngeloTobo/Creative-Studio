@@ -58,7 +58,7 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
 
   return <section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
-      <div><span className="eyebrow">Upload-based learning</span><h2 id="dna-training-title">Train CreativeDNA</h2><p>Gemma 4 writes a detailed reusable description of every selected image, audio file, and video while measured evidence shapes the DNA.</p></div>
+      <div><span className="eyebrow">Upload-based learning</span><h2 id="dna-training-title">Train CreativeDNA</h2><p>Gemma 4 retains a long analysis and a short generation summary for every selected image, audio file, and video while measured evidence shapes the DNA.</p></div>
       <span className="training-runner-state"><i /> Local runner + Gemma 4</span>
     </header>
 

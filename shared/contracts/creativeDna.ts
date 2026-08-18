@@ -18,9 +18,7 @@ export type CreativeDnaTarget = "music" | "image";
 export type CreativeDnaSourceKind = "original" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
 
-export type CreativeDnaMediaDescription = {
-  schemaVersion: "creative-dna-media-description/1.0";
-  text: string;
+type CreativeDnaMediaDescriptionProvenance = {
   provider: "local-comfyui";
   workflowId: "gemma4-multimodal-description";
   workflowVersion: 1;
@@ -29,6 +27,11 @@ export type CreativeDnaMediaDescription = {
   comfyPromptId: string;
   settings: Record<string, string | number | boolean>;
 };
+
+export type CreativeDnaMediaDescription = CreativeDnaMediaDescriptionProvenance & (
+  | { schemaVersion: "creative-dna-media-description/1.0"; text: string }
+  | { schemaVersion: "creative-dna-media-description/1.1"; longSummary: string; shortSummary: string }
+);
 
 export type CreativeDnaTrainingSourceAnalysis = {
   sourceId: string;
@@ -175,20 +178,88 @@ function axisPrompt(dimensions: CreativeDnaDimensions) {
     .join(", ");
 }
 
+function boundedNarrative(value: unknown, maxLength: number) {
+  const normalized = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  if (normalized.length <= maxLength) return normalized;
+  const candidate = normalized.slice(0, maxLength + 1);
+  const sentenceEnd = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf("! "), candidate.lastIndexOf("? "));
+  return (sentenceEnd >= Math.floor(maxLength * 0.6) ? candidate.slice(0, sentenceEnd + 1) : candidate.slice(0, maxLength)).trim();
+}
+
+function withoutSummaryLabel(value: string, kind: "long" | "short") {
+  const label = kind === "long" ? /^(?:long|detailed|full)\s+summary\s*:\s*/i : /^(?:short|concise|generation)\s+(?:summary|prompt)\s*:\s*/i;
+  return value.replace(label, "").trim();
+}
+
+export function splitCreativeDnaMediaDescriptionText(value: unknown) {
+  const normalized = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  const labeled = normalized.match(/(?:^|\n)\s*(?:long|detailed|full)\s+summary\s*:\s*([\s\S]*?)(?:\n+\s*(?:short|concise|generation)\s+(?:summary|prompt)\s*:\s*)([\s\S]+)$/i);
+  if (labeled) {
+    return {
+      longSummary: boundedNarrative(labeled[1], 12_000),
+      shortSummary: boundedNarrative(labeled[2], 2_400),
+    };
+  }
+  const paragraphs = normalized.split(/\n{2,}/).map((paragraph) => paragraph.replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (paragraphs.length > 1 && paragraphs.at(-1)!.length >= 40) {
+    return {
+      longSummary: boundedNarrative(paragraphs.slice(0, -1).join("\n\n"), 12_000),
+      shortSummary: boundedNarrative(withoutSummaryLabel(paragraphs.at(-1)!, "short"), 2_400),
+    };
+  }
+  const summary = boundedNarrative(withoutSummaryLabel(normalized, "short"), 2_400);
+  return { longSummary: boundedNarrative(normalized, 12_000), shortSummary: summary };
+}
+
+export function creativeDnaDescriptionSummaries(description: CreativeDnaMediaDescription) {
+  if (description.schemaVersion === "creative-dna-media-description/1.1") {
+    return {
+      longSummary: boundedNarrative(withoutSummaryLabel(description.longSummary, "long"), 12_000),
+      shortSummary: boundedNarrative(withoutSummaryLabel(description.shortSummary, "short"), 2_400),
+    };
+  }
+  return splitCreativeDnaMediaDescriptionText(description.text);
+}
+
+export function creativeDnaTrainingDescription(analysis: CreativeDnaTrainingAnalysis | null | undefined, target: CreativeDnaTarget) {
+  if (!analysis) return null;
+  const preferredKinds = target === "image" ? ["image", "video"] : ["audio", "video"];
+  const descriptions = preferredKinds.flatMap((kind) => analysis.sources
+    .filter((source) => source.kind === kind && source.detailedDescription)
+    .map((source) => creativeDnaDescriptionSummaries(source.detailedDescription!).shortSummary))
+    .filter(Boolean);
+  if (!descriptions.length) return null;
+  return boundedNarrative([...new Set(descriptions)].join(" "), 2_400) || null;
+}
+
 function compileGenerationPrompt(
   modality: CreativeDnaTarget,
   directive: string,
   sourceKind: CreativeDnaSourceKind,
   dimensions: CreativeDnaDimensions,
 ) {
+  if (modality === "image") return boundedNarrative(directive, 2_400);
   const rightsGuard = sourceKind === "commercial_reference"
     ? "Use rights-safe abstract attributes only; do not reproduce lyrics, identifiable melody, vocal likeness, composition, or protected passages. "
     : "Keep the result original. ";
-  const instruction = modality === "music"
-    ? "Compose an original 60-second track with a clear arrival, development, contrast, and resolve."
-    : "Create an original image with a decisive focal hierarchy, material texture, and intentional negative space.";
+  const instruction = "Compose an original 60-second track with a clear arrival, development, contrast, and resolve.";
   return `${instruction} ${rightsGuard}Direction: ${directive}. CreativeDNA: ${axisPrompt(dimensions)}.`
-    .slice(0, modality === "music" ? 500 : 700);
+    .slice(0, 500);
+}
+
+export function resolveCreativeDnaGenerationArtifact(artifact: CreativeDnaArtifact): CreativeDnaArtifact {
+  const trainedDescription = creativeDnaTrainingDescription(artifact.training?.analysis, "image");
+  const imageDirective = trainedDescription ?? artifact.source.directive;
+  const imagePrompt = compileGenerationPrompt("image", imageDirective, artifact.source.kind, artifact.shared);
+  const source = trainedDescription && artifact.targetModality === "image"
+    ? { ...artifact.source, directive: trainedDescription }
+    : artifact.source;
+  if (source === artifact.source && imagePrompt === artifact.generationPrompts.image) return artifact;
+  return { ...artifact, source, generationPrompts: { ...artifact.generationPrompts, image: imagePrompt } };
+}
+
+export function creativeDnaGenerationPrompt(artifact: CreativeDnaArtifact, target: CreativeDnaTarget) {
+  return resolveCreativeDnaGenerationArtifact(artifact).generationPrompts[target];
 }
 
 function nativeDna(target: CreativeDnaTarget, dimensions: CreativeDnaDimensions) {
@@ -215,7 +286,7 @@ function nativeDna(target: CreativeDnaTarget, dimensions: CreativeDnaDimensions)
 }
 
 export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCompileMeta): CreativeDnaArtifact {
-  const directive = boundedText(input.directive, 1200);
+  const directive = boundedNarrative(input.directive, 2_400);
   if (directive.length < 4) throw new Error("directive_required");
 
   const targetModality = TARGETS.has(input.targetModality) ? input.targetModality : null;

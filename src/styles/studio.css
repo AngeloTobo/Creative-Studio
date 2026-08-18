@@ -153,6 +153,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .dna-source-descriptions article strong, .dna-source-descriptions article small { display: block; }
 .dna-source-descriptions article small { margin-top: 3px; color: var(--text-faint); font-size: 8px; text-transform: capitalize; }
 .dna-source-descriptions article p { max-height: 170px; margin-top: 8px; overflow: auto; color: var(--text-soft); font-size: 9px; line-height: 1.55; white-space: pre-wrap; }
+.dna-description-label { display: block; margin-top: 10px; color: var(--pink); font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.dna-source-descriptions .dna-description-long { margin-top: 9px; border: 1px solid var(--border-soft); border-radius: 9px; }
+.dna-source-descriptions .dna-description-long > summary { padding: 8px 9px; color: var(--text-muted); }
+.dna-source-descriptions .dna-description-long > p { margin: 0; padding: 0 9px 9px; }
 .dna-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
 .dna-empty { display: grid; min-height: 175px; margin-top: 16px; place-items: center; align-content: center; gap: 8px; border: 1px dashed var(--border-mid); border-radius: 18px; color: var(--text-muted); text-align: center; }
 .dna-empty strong { color: var(--text-soft); }
@@ -258,7 +262,12 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .training-source-description header > span:first-child { display: flex; flex-direction: column; gap: 3px; }
 .training-source-description header strong { font-family: var(--font-display); font-size: 13px; }
 .training-source-description header small, .training-source-description > small { color: var(--text-faint); font-size: 8px; line-height: 1.4; }
-.training-source-description > p { max-height: 260px; margin: 10px 0; overflow: auto; color: var(--text-soft); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
+.training-description-short { margin: 10px 0; }
+.training-description-short > strong { color: var(--cyan); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
+.training-description-short > p, .training-description-long > p { margin-top: 6px; color: var(--text-soft); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
+.training-description-long { margin: 10px 0; border: 1px solid var(--border-soft); border-radius: 9px; }
+.training-source-card .training-description-long > summary { display: block; padding: 8px 9px; color: var(--text-muted); font-size: 8px; font-weight: 800; cursor: pointer; }
+.training-description-long > p { max-height: 260px; margin: 0; overflow: auto; padding: 0 9px 9px; }
 .training-source-description-legacy { margin: 0 12px 11px; padding: 10px 12px; border-radius: 10px; background: rgba(148,163,184,.06); color: var(--text-muted); font-size: 9px; }
 .training-source-technical { margin: 0 12px 12px; border: 1px solid var(--border-soft); border-radius: 10px; }
 .training-source-technical > summary { padding: 9px 10px; color: var(--text-muted); font-size: 8px; font-weight: 750; cursor: pointer; }
@@ -294,7 +303,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .prompt-translations { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
 .prompt-translations article { display: flex; min-height: 245px; flex-direction: column; padding: 17px; border: 1px solid var(--border-soft); border-radius: 16px; background: rgba(255,255,255,.035); }
 .prompt-translations article > span { display: flex; align-items: center; gap: 8px; font-weight: 700; }
-.prompt-translations article > p { flex: 1; margin: 13px 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.prompt-translations article > p { flex: 1; max-height: 220px; margin: 13px 0; overflow-y: auto; padding-right: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 .rights-panel { display: flex; gap: 11px; margin-top: 14px; padding: 13px; border: 1px solid rgba(251,191,36,.18); border-radius: 14px; background: rgba(120,53,15,.12); color: #fde68a; }
 .rights-panel p { margin-top: 4px; color: #d6d3d1; font-size: 11px; }
 .generation-history { min-height: 500px; }

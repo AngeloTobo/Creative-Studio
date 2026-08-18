@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import sharp from "sharp";
-import { analyzeAudio, analyzeImage, synthesizeCreativeDna } from "./training.mjs";
+import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.4.0";
+export const RUNNER_VERSION = "1.4.1";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -133,10 +133,21 @@ async function uploadTrainingComfyInput(config, sourceId, media) {
 }
 
 function descriptionPrompt(kind, label) {
-  const shared = `Describe the uploaded ${kind} named "${String(label || "Untitled media").slice(0, 160)}" as a detailed, reusable generation prompt. Be specific and concrete. Describe only what is present; do not invent identity, context, or hidden intent. Do not refer to this request, the upload process, or the model.`;
-  if (kind === "image") return `${shared} Cover subject and environment, composition and camera viewpoint, pose or action, materials and surface qualities, lighting, color palette, depth, mood, artistic medium or rendering style, fine details, and any visible text. End with one polished paragraph that could reproduce the image's observable content and visual treatment.`;
-  if (kind === "audio") return `${shared} Cover voices and language when discernible, instruments and sound sources, tempo and rhythm, melody and harmony, structure and transitions, timbre, dynamics, spatial mix, production treatment, mood, and notable sonic details. End with one polished paragraph that could reproduce the audio's observable content and production character.`;
-  return `${shared} Cover subjects and environment, the sequence of visible events, composition and camera movement, motion and timing, materials, lighting, color, depth, editing, mood, artistic treatment, visible text, dialogue or voices, music, ambience, and sound effects. End with one polished paragraph that could reproduce the video's observable content, motion, and sound.`;
+  const shared = `Describe the uploaded ${kind} named "${String(label || "Untitled media").slice(0, 160)}". Be specific and concrete. Describe only what is present; do not invent identity, context, or hidden intent. Do not refer to this request, the upload process, or the model. Return exactly two labeled paragraphs separated by a blank line: LONG SUMMARY: a full detailed analysis; then SHORT SUMMARY: one polished reusable generation prompt.`;
+  if (kind === "image") return `${shared} Cover subject and environment, composition and camera viewpoint, pose or action, materials and surface qualities, lighting, color palette, depth, mood, artistic medium or rendering style, fine details, and any visible text.`;
+  if (kind === "audio") return `${shared} Cover voices and language when discernible, instruments and sound sources, tempo and rhythm, melody and harmony, structure and transitions, timbre, dynamics, spatial mix, production treatment, mood, and notable sonic details.`;
+  return `${shared} Cover subjects and environment, the sequence of visible events, composition and camera movement, motion and timing, materials, lighting, color, depth, editing, mood, artistic treatment, visible text, dialogue or voices, music, ambience, and sound effects.`;
+}
+
+function descriptionSummaries(value) {
+  const normalized = String(value || "").replace(/\r\n?/g, "\n").trim();
+  const labeled = normalized.match(/(?:^|\n)\s*(?:long|detailed|full)\s+summary\s*:\s*([\s\S]*?)(?:\n+\s*(?:short|concise|generation)\s+(?:summary|prompt)\s*:\s*)([\s\S]+)$/i);
+  if (labeled) return { longSummary: labeled[1].trim(), shortSummary: labeled[2].trim() };
+  const paragraphs = normalized.split(/\n{2,}/).map((paragraph) => paragraph.replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (paragraphs.length > 1 && paragraphs.at(-1).length >= 40) {
+    return { longSummary: paragraphs.slice(0, -1).join("\n\n"), shortSummary: paragraphs.at(-1) };
+  }
+  return { longSummary: normalized, shortSummary: normalized };
 }
 
 export function buildGemmaDescriptionGraph(kind, filename, label = "Untitled media") {
@@ -379,9 +390,12 @@ async function describeTrainingMedia(config, trainingJobId, specification, media
     await heartbeat(progress);
   });
   if (text.length < 40) throw new Error("comfyui_description_too_short");
+  const summaries = descriptionSummaries(text);
+  if (summaries.longSummary.length < 40 || summaries.shortSummary.length < 40) throw new Error("comfyui_description_summary_invalid");
   return {
-    schemaVersion: "creative-dna-media-description/1.0",
-    text: text.slice(0, 12_000),
+    schemaVersion: "creative-dna-media-description/1.1",
+    longSummary: summaries.longSummary.slice(0, 12_000),
+    shortSummary: summaries.shortSummary.slice(0, 2_400),
     provider: "local-comfyui",
     workflowId: GEMMA_DESCRIPTION_WORKFLOW_ID,
     workflowVersion: GEMMA_DESCRIPTION_WORKFLOW_VERSION,
@@ -530,6 +544,18 @@ async function selfTest() {
   }
   const description = findComfyTextOutput({ outputs: { "4": { text: ["Detailed reusable media description."] } } }, descriptionGraph);
   if (description !== "Detailed reusable media description.") throw new Error("runner_self_test_description_output_failed");
+  const descriptionDirective = synthesisDirective(
+    { trainingJob: { targetModality: "image" } },
+    Object.fromEntries(["energy", "tension", "contrast", "warmth", "spaciousness", "rhythmicity", "organicity", "polish"].map((key) => [key, { value: 50 }])),
+    [{ kind: "image", detailedDescription: {
+      schemaVersion: "creative-dna-media-description/1.1",
+      longSummary: "The source contains a centered matte black balloon above a green field beneath diffuse overcast light, with detailed material, composition, and depth evidence.",
+      shortSummary: "A matte black balloon with a golden eye-like tuft floats above a flat green field beneath a pale overcast sky, centered in a wide landscape composition with soft diffused light and fine filament details.",
+    } }],
+  );
+  if (!descriptionDirective.startsWith("A matte black balloon") || /Evidence-synthesized|Create an original image/i.test(descriptionDirective)) {
+    throw new Error("runner_self_test_generation_description_failed");
+  }
   if (!isTransientComfyPollError({ name: "TimeoutError" }) || isTransientComfyPollError(new Error("invalid_history"))) {
     throw new Error("runner_self_test_transient_poll_failed");
   }

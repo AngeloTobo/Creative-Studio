@@ -5,9 +5,12 @@ import { StatusDot } from "../../components/Visuals";
 import {
   GENERATION_LONG_RUN_THRESHOLD_MS,
   analyzeGenerationWorkload,
+  creativeDnaGenerationPrompt,
   formatGenerationDuration,
+  primaryWorkflowPromptParameter,
   workflowRuntimeHistory,
   type GenerationModality,
+  type WorkflowParameter,
   type WorkflowScalar,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
@@ -29,13 +32,20 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
   const scalarParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind !== "media") ?? [];
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
-  const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value));
+  const imagePrompt = selected ? creativeDnaGenerationPrompt(selected, "image") : "";
+  const musicPrompt = selected ? creativeDnaGenerationPrompt(selected, "music") : "";
+  const dnaWorkflowPrompt = workflow?.modality === "music" || workflow?.modality === "audio" ? musicPrompt : imagePrompt;
+  const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
+  const parameterValue = (parameter: WorkflowParameter) => {
+    if (Object.prototype.hasOwnProperty.call(effectiveValues, parameter.id)) return effectiveValues[parameter.id];
+    if (parameter.id === workflowPromptParameter?.id && dnaWorkflowPrompt) return dnaWorkflowPrompt;
+    return parameter.value;
+  };
+  const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)));
   const runnerOnline = snapshot?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
-  const performanceParameters = Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, effectiveValues[parameter.id] ?? parameter.value]));
-  const stampedPrompt = scalarParameters
-    .filter((parameter) => parameter.kind === "text" && /prompt|caption|lyrics|text/i.test(`${parameter.label} ${parameter.id}`))
-    .map((parameter) => String(effectiveValues[parameter.id] ?? parameter.value).trim()).filter(Boolean).join("\n\n");
-  const workflowPrompt = stampedPrompt || (workflow?.modality === "music" || workflow?.modality === "audio" ? selected?.generationPrompts.music : selected?.generationPrompts.image) || "";
+  const performanceParameters = Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameterValue(parameter)]));
+  const stampedPrompt = workflowPromptParameter ? String(parameterValue(workflowPromptParameter)).trim() : "";
+  const workflowPrompt = stampedPrompt || dnaWorkflowPrompt;
   const workflowWorkload = workflow ? analyzeGenerationWorkload({
     parameters: performanceParameters,
     models: workflow.currentRevision.models,
@@ -58,8 +68,8 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
     let runWorkflow = workflow;
     if (settingsChanged) {
       const modified = Object.fromEntries(scalarParameters
-        .filter((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value))
-        .map((parameter) => [parameter.id, effectiveValues[parameter.id]]));
+        .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
+        .map((parameter) => [parameter.id, parameterValue(parameter)]));
       runWorkflow = await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified);
       setValuesRevisionId(runWorkflow.currentRevision.id);
       setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
@@ -77,11 +87,10 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
       <section className="generation-dna glass">
         <div className="generation-head"><div><span className="eyebrow">Source blueprint</span><h2>{selected?.name ?? "Choose CreativeDNA"}</h2></div>{selected ? <span className="dna-version">v{selected.version}</span> : null}</div>
         {selected ? <>
-          <p>{selected.source.directive}</p>
           <div className="generation-axis-row">{Object.entries(selected.shared).map(([key, value]) => <span key={key}><small>{key}</small><b>{value}</b></span>)}</div>
           <div className="prompt-translations">
-            <article><span><Icon name="music" size={18} /> Music translation</span><p>{selected.generationPrompts.music}</p><button className="btn btn-ghost" disabled={busy} onClick={() => void submit("music")}><Icon name="send" size={16} /> Queue music</button></article>
-            <article><span><Icon name="image" size={18} /> Image translation</span><p>{selected.generationPrompts.image}</p><button className="btn btn-primary" disabled={busy} onClick={() => void submit("image")}><Icon name="send" size={16} /> Queue image</button></article>
+            <article><span><Icon name="music" size={18} /> Music translation</span><p>{musicPrompt}</p><button className="btn btn-ghost" disabled={busy} onClick={() => void submit("music")}><Icon name="send" size={16} /> Queue music</button></article>
+            <article><span><Icon name="image" size={18} /> Image description</span><p>{imagePrompt}</p><button className="btn btn-primary" disabled={busy} onClick={() => void submit("image")}><Icon name="send" size={16} /> Queue image</button></article>
           </div>
           <section className="workflow-generate">
             <header><span><Icon name="flows" size={18} /><strong>Run a local ComfyUI workflow</strong></span><em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em></header>
@@ -105,7 +114,7 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
               {scalarParameters.length ? <details className="workflow-run-settings" open>
                 <summary><span>Run settings</span><em>{settingsChanged ? `Will save as v${workflow!.currentRevision.version + 1}` : `Using v${workflow!.currentRevision.version}`}</em></summary>
                 <div className="workflow-run-parameters">
-                  {scalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={effectiveValues[parameter.id] ?? parameter.value} showBinding={false} onChange={(value) => {
+                  {scalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} onChange={(value) => {
                     if (valuesRevisionId !== workflow!.currentRevision.id) {
                       setValuesRevisionId(workflow!.currentRevision.id);
                       setWorkflowValues({ ...Object.fromEntries(scalarParameters.map((item) => [item.id, item.value])), [parameter.id]: value });
@@ -136,7 +145,7 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
 
       <aside className="generation-history glass">
         <div className="generation-media-link"><span><span className="eyebrow">Project media</span><strong>{projectMedia.length} retained</strong><small>Provenance-ready source assets</small></span><button className="btn-icon" aria-label="Open project media" onClick={onMedia}><Icon name="image" size={18} /></button></div>
-        <p className="generation-media-note">Direct generation uses the saved DNA prompt. Local workflows use their exact saved prompt, settings, and bound media inputs.</p>
+        <p className="generation-media-note">Direct generation uses this saved description. Local runs save it into the workflow's primary prompt with the exact settings and bound inputs.</p>
         <span className="eyebrow">Saved DNA</span>
         <div className="generation-dna-list">
           {projectDna.map((artifact) => {
