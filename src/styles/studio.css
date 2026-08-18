@@ -13,7 +13,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .sp-meta, .su-meta, .runtime-row span, .act-row span { display: flex; min-width: 0; flex-direction: column; text-align: left; }
 .sp-name, .su-name, .runtime-row strong, .act-row strong { font-size: 12.5px; }
 .sp-sub, .su-role, .runtime-row small, .act-row small { margin-top: 2px; color: var(--text-muted); font-size: 10.5px; }
-.sb-user { display: flex; align-items: center; gap: 10px; border-radius: 14px; padding: 10px; }
+.sb-user { display: flex; width: 100%; align-items: center; gap: 10px; border-radius: 14px; padding: 10px; text-align: left; }
 .sb-user > svg { color: var(--text-faint); }
 
 .development-flag {
@@ -614,6 +614,15 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .runner-empty span { display: flex; flex-direction: column; gap: 4px; }
 .runner-empty small { color: var(--text-muted); }
 
+/* System */
+.system-view { display: flex; flex-direction: column; gap: 15px; }
+.system-tabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; max-width: 560px; padding: 5px; border-radius: 16px; }
+.system-tabs button { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 9px; border-radius: 12px; padding: 10px 12px; color: var(--text-muted); }
+.system-tabs button.on { background: linear-gradient(135deg,rgba(34,211,238,.13),rgba(139,92,246,.1)); color: #fff; box-shadow: inset 0 0 0 1px rgba(34,211,238,.18); }
+.system-tabs button > span { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 2px; }
+.system-tabs strong { font-size: 11px; }
+.system-tabs small { overflow: hidden; color: var(--text-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Runtime */
 .adapter-banner { display: flex; align-items: center; gap: 13px; padding: 16px; border: 1px solid var(--border-mid); border-radius: var(--r-lg); }
 .adapter-banner.development { border-color: rgba(251,191,36,.25); background: rgba(120,53,15,.12); }
@@ -724,6 +733,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 @media (max-width: 859px) {
   html, body, #root { min-height: 100%; height: 100%; }
   .development-flag { top: auto; bottom: 75px; max-width: calc(100vw - 24px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mtab { min-width: 0; font-size: 8.5px; }
+  .mtab-ic svg { width: 19px; height: 19px; }
   .mview-head { padding-top: 6px; }
   .cockpit-head { align-items: stretch; flex-direction: column; }
   .cockpit-head .btn { width: 100%; }
@@ -819,6 +830,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 @media (max-width: 520px) {
   .cockpit-summary, .cockpit-filters { grid-template-columns: 1fr; }
   .cockpit-summary article { padding: 13px; }
+  .system-tabs { max-width: none; }
+  .system-tabs small { display: none; }
   .cockpit-run { grid-template-columns: auto minmax(0,1fr); }
   .cockpit-run > span:nth-child(3), .cockpit-run > span:nth-child(4) { grid-column: 2; }
   .mbody-dna > .mview-head { display: none; }

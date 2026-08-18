@@ -15,9 +15,10 @@ import { PlaceholderView } from "../features/placeholder/PlaceholderView";
 import { FlowsView } from "../features/workflows/FlowsView";
 import { SettingsView } from "../features/settings/SettingsView";
 import { CockpitView } from "../features/cockpit/CockpitView";
+import { SystemView } from "../features/system/SystemView";
 import type { ProductionCockpitAction } from "../../shared/contracts";
 
-const VIEWS = new Set<StudioView>(["portal", "cockpit", "dna", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings"]);
+const VIEWS = new Set<StudioView>(["portal", "cockpit", "dna", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings", "system"]);
 
 function hashView(): StudioView {
   const raw = window.location.hash.replace(/^#\/?/, "");
@@ -66,7 +67,7 @@ export function App() {
   };
 
   const content = (() => {
-    if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings") return <ProjectsView />;
+    if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "cockpit": return <CockpitView onOpen={openCockpitAction} />;
@@ -79,6 +80,7 @@ export function App() {
       case "runtime": return <RuntimeView />;
       case "flows": return <FlowsView />;
       case "settings": return <SettingsView />;
+      case "system": return <SystemView />;
       default: return <PlaceholderView view={view} goBack={() => navigate("portal")} />;
     }
   })();

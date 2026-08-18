@@ -7,7 +7,6 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
   const dnaButton = page.getByRole("button", { name: /CreativeDNA/ }).first();
   await expect(dnaButton).toBeFocused();
   const focusStyle = await dnaButton.evaluate((element) => {
@@ -20,6 +19,31 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("heading", { name: "CreativeDNA Studio", exact: true }).first()).toBeVisible();
+});
+
+test("the consolidated shell exposes six primary destinations without repeated desktop chrome", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop shell coverage needs one browser shape");
+  await page.goto("/#/portal");
+
+  const navigation = page.locator(".sidebar .nav-item");
+  await expect(navigation).toHaveCount(6);
+  await expect(navigation).toHaveText(["Home", "CreativeDNATRAIN", "Artifacts", "ProductionLIVE", "Projects", "System"]);
+  await expect(page.locator(".rightpanel")).toHaveCount(0);
+  await expect(page.locator(".player")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "System", exact: true }).click();
+  await expect(page).toHaveURL(/#\/system$/);
+  await expect(page.getByRole("tab", { name: /Status/ })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: /Runners/ }).click();
+  await expect(page.getByRole("heading", { name: "Creative Studio Local Runner" })).toBeVisible();
+});
+
+test("mobile primary pages render one route heading", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "Mobile heading coverage needs one browser shape");
+  await page.goto("/#/cockpit");
+
+  await expect(page.getByRole("heading", { name: "Production cockpit", exact: true })).toHaveCount(1);
+  await expect(page.locator(".mtabbar .mtab")).toHaveCount(6);
 });
 
 test("reduced-motion preference suppresses portal animation", async ({ page }) => {

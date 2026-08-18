@@ -5,12 +5,10 @@ import type { StudioView } from "../../app/views";
 
 const NODES: Array<{ id: StudioView; label: string; sub: string; icon: IconName; accent: string; angle: number }> = [
   { id: "dna", label: "CreativeDNA", sub: "Build, train, and generate", icon: "dna", accent: "var(--pink)", angle: 220 },
-  { id: "media", label: "Media", sub: "Upload training sources", icon: "image", accent: "var(--purple)", angle: 178 },
-  { id: "library", label: "Library", sub: "DNA, rules, and memory", icon: "library", accent: "var(--blue)", angle: 136 },
-  { id: "projects", label: "Projects", sub: "Your worlds and systems", icon: "projects", accent: "var(--teal)", angle: 92 },
-  { id: "gallery", label: "Gallery", sub: "Review retained artifacts", icon: "gallery", accent: "var(--amber)", angle: 50 },
-  { id: "flows", label: "Workflows", sub: "Import or build a ComfyUI graph", icon: "flows", accent: "var(--rose)", angle: 8 },
-  { id: "queue", label: "Queue", sub: "Durable generation state", icon: "queue", accent: "var(--violet)", angle: 312 },
+  { id: "gallery", label: "Artifacts", sub: "Review retained outputs", icon: "gallery", accent: "var(--amber)", angle: 140 },
+  { id: "projects", label: "Projects", sub: "Your creative workspaces", icon: "projects", accent: "var(--teal)", angle: 90 },
+  { id: "cockpit", label: "Production", sub: "Runs, decisions, and recovery", icon: "analytics", accent: "var(--violet)", angle: 40 },
+  { id: "system", label: "System", sub: "Local runner and services", icon: "runtime", accent: "var(--cyan)", angle: 320 },
 ];
 
 const CREATE_CARDS: Array<{ id: StudioView; label: string; desc: string; icon: IconName; accent: string }> = [
@@ -61,7 +59,7 @@ export function PortalView({ navigate }: { navigate: (view: StudioView) => void 
       <div className="portal-status-row">
         {project ? <button className="mproj-card glass" onClick={() => navigate("projects")}><ProjectAvatar project={project} size={50} /><span className="mp-body"><strong className="mp-name">{project.name} <i className="badge active">{project.status}</i></strong><span className="mp-desc">{project.description}</span></span><Icon name="chevron" size={18} /></button> : null}
         <div className="mact-card glass">
-          <SectionHead label="Creative Queue" action="View all" onAction={() => navigate("queue")} />
+          <SectionHead label="Active Production" action="View all" onAction={() => navigate("cockpit")} />
           {activeJobs.slice(0, 3).map((job) => <div className="mact-row" key={job.id}><span className="mini-job-art" style={{ background: job.modality === "music" ? "linear-gradient(135deg,#9d174d,#7c3aed)" : job.modality === "video" ? "linear-gradient(135deg,#312e81,#db2777)" : "linear-gradient(135deg,#0e7490,#a21caf)" }} /><span><strong className="ar-title">{job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} generation</strong><span className="ar-sub">{job.status} · {job.progress}%</span></span><StatusDot status={job.status} /></div>)}
           {!activeJobs.length ? <div className="empty-copy">Queue is clear.</div> : null}
         </div>
