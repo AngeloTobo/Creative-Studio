@@ -71,7 +71,7 @@ export function App() {
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "cockpit": return <CockpitView onOpen={openCockpitAction} />;
-      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
+      case "dna": return <CreativeDnaWorkbench onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "media": return <MediaView onGenerate={() => navigate("dna")} />;
       case "queue": return <QueueView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} />;
       case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;

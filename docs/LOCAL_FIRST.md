@@ -35,7 +35,7 @@ The local browser refreshes active work every two seconds and the local runner c
 
 ## Remote mode
 
-`https://cs.angelotoborg.com` remains the remote experience. It uses Creative Studio's protected Cloudflare BFF, durable cloud storage, the allowlisted AFDFW image/music capabilities, and the authenticated workstation runner for imported ComfyUI workflows. Its browser and runner cadences remain constrained by the Cloudflare free-tier budget.
+`https://cs.angelotoborg.com` remains the remote experience. Its primary generation route still uses Creative Studio's authenticated workstation runner and imported ComfyUI workflows, with the protected Cloudflare BFF providing durable cloud job and artifact storage. The allowlisted AFDFW image/music capabilities are separate optional actions and are never chosen automatically. Browser and runner cadences remain constrained by the Cloudflare free-tier budget.
 
 Local and remote D1/R2 stores are intentionally separate. Local work is not silently uploaded or synchronized to the remote account. A future explicit publish/sync action must preserve settings stamps, provenance, review decisions, and collision-safe artifact identity; it must never run as an invisible background side effect.
 

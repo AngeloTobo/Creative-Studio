@@ -13,7 +13,7 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 | `GET` | `/api/creative-studio/dna` | List versioned CreativeDNA artifacts |
 | `POST` | `/api/creative-studio/dna` | Create a root or child DNA version |
 | `GET` | `/api/creative-studio/jobs` | List durable jobs without driving their lifecycle |
-| `POST` | `/api/creative-studio/jobs` | Persist one idempotent image, music, or API-format video workflow job |
+| `POST` | `/api/creative-studio/jobs` | Persist one idempotent ComfyUI workflow job or explicitly selected optional AFDFW image/music job |
 | `POST` | `/api/creative-studio/jobs/:id/retry` | Create a lineage-linked retry of a failed or cancelled job |
 | `POST` | `/api/creative-studio/jobs/:id/cancel` | Stop Creative Studio tracking for an active job |
 | `GET` | `/api/creative-studio/artifacts` | List artifacts and acceptance history |
@@ -30,6 +30,8 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 Every other Creative Studio API path returns `404`. There is no arbitrary forwarding route.
 
 When `BACKEND_MODE=development` and `LOCAL_HARDWARE_ONLY=true`, the BFF is a localhost hardware runtime rather than a media simulator. A generation request without an owned executable ComfyUI workflow returns `local_comfyui_workflow_required`; reuse and retry enforce the same boundary. Capabilities identify local D1/R2, Local Runner, and ComfyUI as the providers, while AFDFW remains unavailable. Production requires `LOCAL_HARDWARE_ONLY=false` and retains the remote allowlist below.
+
+The generation request chooses exactly one execution route. A `workflow` bundle creates a Creative Studio `local-comfyui` job and cannot also name a provider. A direct production image/music request must include `provider: "afdfw"`; omitting it returns `generation_provider_required`, so AFDFW can never become an implicit fallback. The browser-storage and simulated Worker development paths likewise require the explicit `development-preview` provider label.
 
 Project lists may be empty. The Worker never creates seeded projects, and archived projects remain available for historical counts while being excluded from new DNA and generation writes.
 

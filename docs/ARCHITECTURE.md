@@ -13,7 +13,7 @@ flowchart LR
   WORKER --> D1
   BFF --> R2["Creative Studio R2"]
   UI -->|"owned media upload"| BFF
-  WORKER -->|"exact allowlist only"| AF["AFDFW capabilities"]
+  WORKER -->|"explicit optional jobs only"| AF["AFDFW capabilities"]
   AF --> GEN["Existing generation workers"]
   BFF -->|"lease + immutable bundle"| LR["Windows Local Runner"]
   LR -->|"localhost only"| COMFY["ComfyUI 127.0.0.1:8188"]
@@ -25,7 +25,7 @@ flowchart LR
 The same typed contract has two explicit deployments:
 
 - Local-first: Vite, Wrangler-local BFF, local D1/R2 state, Local Runner, and ComfyUI all stay on `127.0.0.1`. Real generation requires an imported API-format workflow and uses this machine's hardware. AFDFW and Cloudflare are not runtime dependencies.
-- Remote: `cs.angelotoborg.com` uses the Cloudflare Worker, production D1/R2/Queue, the allowlisted AFDFW capabilities, and the authenticated workstation runner where a local ComfyUI workflow is selected.
+- Remote: `cs.angelotoborg.com` uses the Cloudflare Worker, production D1/R2/Queue, and the authenticated workstation runner for Creative Studio ComfyUI generation. The narrow allowlisted AFDFW image/music capabilities remain separate optional routes that the owner must select explicitly.
 
 Local and remote storage never synchronize implicitly. This prevents local experiments, large media, or review decisions from becoming cloud writes merely because both experiences use the same contracts.
 
@@ -33,7 +33,7 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 
 - The frontend owns presentation and interaction only. It imports shared types but no Worker or AFDFW source.
 - The BFF owns authentication handoff, validation, idempotent job creation, capability translation, and media mediation.
-- The queue consumer owns generation submission and per-generation reconciliation. A scheduled sweep re-enqueues due jobs after delivery or runtime interruptions.
+- The queue consumer owns only explicitly selected AFDFW submission and per-generation reconciliation. A scheduled sweep re-enqueues due AFDFW jobs after delivery or runtime interruptions; local workflow jobs are claimed by the Local Runner instead.
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
@@ -46,10 +46,10 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 2. The deterministic compiler normalizes eight shared dimensions and three gravity weights.
 3. Commercial identity is retained as provenance but omitted from provider prompts.
 4. Saving creates a root or child version without overwriting history.
-5. Music and image translations create idempotent durable jobs tied to the exact DNA artifact, then return before generation starts.
-6. The queue consumer submits to AFDFW and reconciles the individual upstream generation without a browser session. It retains only the verified Access email needed to resolve the approved AFDFW owner; browser cookies and Access JWTs are not stored.
-7. Upstream completion creates a `retaining` artifact. The consumer streams the source into a deterministic owner/artifact R2 key, conditionally avoids overwriting an existing copy, verifies the stored size, and records the retained pointer.
-8. Only after verification does the job become `completed` and the artifact become `ready`. Accept, reject, and archive then record decisions without changing retention or AFDFW canonical state.
+5. The primary image/music actions select a compatible imported API-format workflow, save the DNA translation into its primary prompt as an immutable revision, and create a durable `local-comfyui` job tied to that exact DNA and workflow revision.
+6. The authenticated Local Runner claims the job and executes it through localhost ComfyUI without requiring the browser to remain open.
+7. AFDFW image/music generation is a distinct optional action. Its request must explicitly name the `afdfw` provider; the Worker never falls through to AFDFW when no workflow was supplied.
+8. Either completion path creates a `retaining` artifact and writes the result to a deterministic Creative Studio R2 key. Only after size verification does the job become `completed` and the artifact become `ready`; later review never changes AFDFW canonical state.
 
 ## Adapters
 
@@ -64,7 +64,7 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 2. The Worker validates ownership, project state, type, and the 100 MB limit before writing.
 3. The Worker streams the body to a project-scoped R2 key and verifies its stored size.
 4. D1 metadata is committed only after verification, then the asset becomes available through an owner-scoped content route.
-5. Consent and provenance make the asset eligible for a later training workflow. Intake itself never starts training. Narrow AFDFW image/music generation remains CreativeDNA text-conditioned; imported local ComfyUI workflows may explicitly bind compatible retained uploads or generated artifacts to detected media inputs.
+5. Consent and provenance make the asset eligible for a later training workflow. Intake itself never starts training. Creative Studio ComfyUI workflows may explicitly bind compatible retained uploads or generated artifacts to detected media inputs; optional AFDFW image/music generation remains CreativeDNA text-conditioned.
 
 ## CreativeDNA evidence synthesis
 

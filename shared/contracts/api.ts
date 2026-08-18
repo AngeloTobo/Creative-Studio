@@ -136,6 +136,7 @@ export type SubmitJobRequest = {
   dnaArtifactId: string;
   modality: GenerationModality;
   idempotencyKey: string;
+  provider?: "afdfw" | "development-preview";
   workflow?: {
     workflowId: string;
     revisionId: string;

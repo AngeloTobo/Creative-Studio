@@ -23,7 +23,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(page.getByText(/retains a long analysis and a short generation summary for every selected image, audio file, and video/)).toBeVisible();
   await page.getByRole("tab", { name: /Generate/ }).click();
   await expect(page.getByRole("heading", { name: "Generate", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Queue image" }).click();
+  await page.getByRole("button", { name: "Queue development image preview" }).click();
   await expect(page).toHaveURL(/#\/queue$/);
   await expect(page.getByText("running").first()).toBeVisible({ timeout: 5_000 });
 
@@ -64,7 +64,7 @@ test("cancelled generation explains the retained history and offers a durable re
   await page.locator(".dna-compose").getByRole("button", { name: "image", exact: true }).click();
   await page.getByRole("button", { name: "Build CreativeDNA" }).click();
   await page.getByRole("tab", { name: /Generate/ }).click();
-  await page.getByRole("button", { name: "Queue image" }).click();
+  await page.getByRole("button", { name: "Queue development image preview" }).click();
   await page.getByRole("button", { name: "Cancel tracking" }).click();
 
   await expect(page.getByRole("region", { name: "Tracking cancelled" })).toContainText("cancelled_by_user");

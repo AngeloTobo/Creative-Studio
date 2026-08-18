@@ -221,6 +221,8 @@ export type CapabilityKey =
   | "music-generation"
   | "image-generation"
   | "video-generation"
+  | "afdfw-music-generation"
+  | "afdfw-image-generation"
   | "local-runner"
   | "artifact-review"
   | "artifact-retention"

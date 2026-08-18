@@ -149,6 +149,8 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "music-generation", label: "Music generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable audio workflow is required; no development media is generated.", checkedAt },
       { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable image workflow is required; no development media is generated.", checkedAt },
       { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable video workflow is required and runs on this machine.", checkedAt },
+      { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends music generation to AFDFW.", checkedAt },
+      { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends image generation to AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Local Creative Studio D1", detail: "Review decisions are explicit, append-only, and local.", checkedAt },
       { key: "artifact-retention", label: "Artifact retention", state: env.ARTIFACTS ? "available" : "unavailable", provider: "Local Creative Studio R2", detail: env.ARTIFACTS ? "Every completed local result is byte-verified before review." : "Local jobs cannot complete without object storage.", checkedAt },
       { key: "afdfw-session", label: "AFDFW backend", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never calls AFDFW or Cloudflare generation services.", checkedAt },
@@ -163,6 +165,8 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "music-generation", label: "Music generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "video-generation", label: "Video generation", state: "unavailable", provider: "local runner required", detail: "Video workflow execution requires a paired Local Runner.", checkedAt },
+      { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
+      { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
       { key: "artifact-retention", label: "Artifact retention", state: "degraded", provider: "Creative Studio D1", detail: "History is durable; standalone media retention awaits the Creative Studio R2 boundary.", checkedAt },
       { key: "afdfw-session", label: "AFDFW backend", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
@@ -180,9 +184,11 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
     { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + Gemma 4", detail: trainingRunnerAvailable ? "The paired machine measures selected media and uses Gemma 4 to retain a detailed image, audio, or video description with each source." : "Training jobs remain durable until a paired Local Runner 1.2 or newer comes online.", checkedAt },
     { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Windows agent", detail: runnerAvailable ? "A paired machine is online and can claim ComfyUI workflow jobs without an open browser." : "Pair and start the Windows agent in Settings to execute imported API-format workflows.", checkedAt },
-    { key: "music-generation", label: "Music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "The approved AFDFW session can submit the allowlisted generation route; availability is checked again when you act.", checkedAt },
-    { key: "image-generation", label: "Image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "The approved AFDFW session can submit the allowlisted generation route; availability is checked again when you act.", checkedAt },
+    { key: "music-generation", label: "Music generation", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ComfyUI", detail: runnerAvailable ? "Imported API-format audio workflows execute on the paired machine." : "Music jobs remain durable and wait for the paired machine to come online.", checkedAt },
+    { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ComfyUI", detail: runnerAvailable ? "Imported API-format image workflows execute on the paired machine." : "Image jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local Runner + ComfyUI", detail: runnerAvailable ? "Versioned API-format video workflows can execute on the paired machine." : "Video jobs remain durable and wait for the paired machine to come online.", checkedAt },
+    { key: "afdfw-music-generation", label: "AFDFW music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "Optional remote route through the exact allowlisted AFDFW music capability; it is never selected automatically.", checkedAt },
+    { key: "afdfw-image-generation", label: "AFDFW image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "Optional remote route through the exact allowlisted AFDFW image capability; it is never selected automatically.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
     { key: "artifact-retention", label: "Artifact retention", state: env.ARTIFACTS ? "available" : "degraded", provider: env.ARTIFACTS ? "Creative Studio R2" : "AFDFW temporary media + Creative Studio history", detail: env.ARTIFACTS ? "Every completed result is copied and size-verified under Creative Studio ownership before its job completes." : "Jobs cannot complete without a Creative Studio R2 binding.", checkedAt },
     { key: "afdfw-session", label: "AFDFW session", state: session.status === "approved" ? "available" : "unavailable", provider: "approved-session handoff", detail: "The browser sees only the same-origin Creative Studio session route.", checkedAt },
@@ -377,7 +383,11 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (project.status === "archived") return json({ ok: false, error: "project_archived" }, { status: 400 });
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const modality = input.modality as GenerationModality;
+      if (input.provider !== undefined && input.provider !== "afdfw" && input.provider !== "development-preview") {
+        throw new Error("invalid_generation_provider");
+      }
       if (input.workflow) {
+        if (input.provider) throw new Error("workflow_provider_conflict");
         if (!input.workflow.workflowId || !input.workflow.revisionId || !input.workflow.inputBindings || typeof input.workflow.inputBindings !== "object") {
           throw new Error("invalid_workflow_job_request");
         }
@@ -458,9 +468,11 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (modality === "video") throw new Error("video_workflow_required");
       if (localHardwareMode(env)) throw new Error("local_comfyui_workflow_required");
       if (developmentMode(env)) {
+        if (input.provider !== "development-preview") throw new Error("generation_provider_required");
         const job = await createDevelopmentJob(env, session.userId, input.projectId, dna, modality, requestKey);
         return json({ ok: true, job }, { status: 202 });
       }
+      if (input.provider !== "afdfw") throw new Error("generation_provider_required");
       const created = await createQueuedJob(env, session.userId, {
         projectId: input.projectId,
         dna,

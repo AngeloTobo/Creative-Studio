@@ -35,7 +35,8 @@ type StudioContextValue = {
   updateProject: (projectId: string, input: UpdateProjectRequest) => Promise<Project>;
   archiveProject: (projectId: string) => Promise<Project>;
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
-  submitJob: (modality: GenerationModality, dnaArtifactId?: string) => Promise<void>;
+  submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
+  submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => Promise<void>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
@@ -187,12 +188,20 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return artifact;
   }), [activeProjectId, adapter, transact]);
 
-  const submitJob = useCallback(async (modality: GenerationModality, dnaArtifactId?: string) => {
+  const submitProviderJob = useCallback(async (provider: "afdfw" | "development-preview", modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
-    await transact(() => adapter.submitJob({ projectId: activeProjectId, dnaArtifactId: dnaId, modality, idempotencyKey: operationKey("submit") }));
+    await transact(() => adapter.submitJob({ projectId: activeProjectId, dnaArtifactId: dnaId, modality, provider, idempotencyKey: operationKey(provider) }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
+
+  const submitAfdfwJob = useCallback((modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => (
+    submitProviderJob("afdfw", modality, dnaArtifactId)
+  ), [submitProviderJob]);
+
+  const submitDevelopmentPreviewJob = useCallback((modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => (
+    submitProviderJob("development-preview", modality, dnaArtifactId)
+  ), [submitProviderJob]);
 
   const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => {
     if (!activeProjectId) throw new Error("project_required");
@@ -305,7 +314,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     updateProject,
     archiveProject,
     saveDna,
-    submitJob,
+    submitAfdfwJob,
+    submitDevelopmentPreviewJob,
     submitWorkflowJob,
     retryJob,
     reuseJob,
@@ -320,7 +330,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     enrollLocalRunner,
     revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, reviewDnaTraining, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, reviewDnaTraining, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

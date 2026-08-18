@@ -199,6 +199,31 @@ describe("Creative Studio Worker API", () => {
     expect(await env.DB.prepare("select count(*) as count from creative_jobs").first<{ count: number }>()).toMatchObject({ count: 0 });
   });
 
+  it("requires an explicit AFDFW provider instead of using it as a production fallback", async () => {
+    const ownerId = "owner-explicit-provider";
+    const project = await testProject(ownerId, "Explicit Provider");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Explicit route DNA",
+      directive: "A controlled image study with a clear central subject.",
+      targetModality: "image",
+    });
+    const production = workerEnv("afdfw", afdfwFor(ownerId), memoryBucket().bucket);
+    const response = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "explicit@example.com" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        idempotencyKey: "explicit_provider_required_001",
+      }),
+    }), production);
+    expect(response.status).toBe(400);
+    expect(await result(response)).toMatchObject({ ok: false, error: "generation_provider_required" });
+    expect(await env.DB.prepare("select count(*) as count from creative_jobs where owner_id = ?").bind(ownerId).first<{ count: number }>()).toMatchObject({ count: 0 });
+  });
+
   it("starts empty and creates, edits, and archives an owned project", async () => {
     const local = workerEnv("development");
     const empty = await routeCreativeStudioApi(request("/api/creative-studio/projects"), local);
@@ -507,6 +532,7 @@ describe("Creative Studio Worker API", () => {
       projectId: project.id,
       dnaArtifactId: trainedDnaArtifactId,
       modality: "image",
+      provider: "afdfw",
       idempotencyKey: "training_review_pending_generation_001",
     });
     expect(pendingGeneration.status).toBe(409);
@@ -560,6 +586,7 @@ describe("Creative Studio Worker API", () => {
       projectId: project.id,
       dnaArtifactId: trainedDnaArtifactId,
       modality: "image",
+      provider: "afdfw",
       idempotencyKey: "training_review_approved_generation_001",
     });
     expect(approvedGeneration.status).toBe(202);
@@ -581,6 +608,7 @@ describe("Creative Studio Worker API", () => {
       projectId: project.id,
       dnaArtifactId: trainedDnaArtifactId,
       modality: "image",
+      provider: "afdfw",
       idempotencyKey: "training_review_rejected_generation_001",
     });
     expect(rejectedGeneration.status).toBe(409);
@@ -679,7 +707,7 @@ describe("Creative Studio Worker API", () => {
     const createJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dnaPayload.artifact.artifactId, modality: "image", idempotencyKey: "worker_test_submit_001" }),
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dnaPayload.artifact.artifactId, modality: "image", provider: "development-preview", idempotencyKey: "worker_test_submit_001" }),
     }), local);
     const jobPayload = await result(createJob) as { job: { id: string; status: string } };
     expect(createJob.status).toBe(202);
@@ -782,7 +810,7 @@ describe("Creative Studio Worker API", () => {
     const created = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
-      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", idempotencyKey: "background_submit_001" }),
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", provider: "afdfw", idempotencyKey: "background_submit_001" }),
     }), production);
     const payload = await result(created) as { job: { id: string; status: string; settingsStamp: { parameters: Record<string, unknown>; models: string[]; workloadEvidence: { profileId: string } } } };
     expect(created.status).toBe(202);
@@ -835,7 +863,7 @@ describe("Creative Studio Worker API", () => {
     const create = () => routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
-      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", idempotencyKey: "controls_submit_0001" }),
+      body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", provider: "afdfw", idempotencyKey: "controls_submit_0001" }),
     }), production);
     const first = await result(await create()) as { job: { id: string } };
     const duplicate = await result(await create()) as { job: { id: string } };
@@ -1170,6 +1198,7 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "image",
+        provider: "development-preview",
         idempotencyKey: "production_loop_generation_001",
       }),
     }), local)) as { job: { id: string } };
