@@ -20,7 +20,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
 
   await page.getByRole("tab", { name: /Train/ }).click();
   await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
-  await expect(page.getByText(/detailed reusable description of every selected image, audio file, and video/)).toBeVisible();
+  await expect(page.getByText(/retains a long analysis and a short generation summary for every selected image, audio file, and video/)).toBeVisible();
   await page.getByRole("tab", { name: /Generate/ }).click();
   await expect(page.getByRole("heading", { name: "Generate", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Queue image" }).click();
