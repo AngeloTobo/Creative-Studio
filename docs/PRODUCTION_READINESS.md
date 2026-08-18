@@ -14,8 +14,8 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Custom domain: `cs.angelotoborg.com`
 - Local Runner API domain: `runner.cs.angelotoborg.com` (runner routes only; no shell)
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-17: `c1928ed2-1cda-4c05-a1f8-ad2ef6760079`
-- Installed runner process: `Angelo RTX 3090 workstation`, runner `1.3.0`, ComfyUI `0.33.0`; its first new production heartbeat is pending the current Workers Free daily-request reset after a confirmed runtime `429`
+- Production Worker version verified on 2026-08-17: `aa11b082-0f8d-4f66-94e2-3a969c4b66ad`
+- Installed runner process: `Angelo RTX 3090 workstation`, runner `1.3.0`, ComfyUI `0.33.0`; D1 recorded a healthy idle heartbeat at `2026-08-18T00:29:05.960Z` with no runner error
 
 ## Release sequence
 
