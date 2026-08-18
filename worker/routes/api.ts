@@ -442,6 +442,11 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             },
             parameters: parameterValues,
             models: plan.workflow.currentRevision.models,
+            workloadEvidence: {
+              source: "workflow-revision",
+              profileId: plan.workflow.currentRevision.id,
+              label: `${plan.workflow.name} v${plan.workflow.currentRevision.version}`,
+            },
             inputAssetIds: inputSources.filter((inputSource) => inputSource.source === "upload").map((inputSource) => inputSource.id),
             inputArtifactIds: inputSources.filter((inputSource) => inputSource.source === "artifact").map((inputSource) => inputSource.id),
             inputSources,

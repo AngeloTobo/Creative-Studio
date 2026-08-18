@@ -35,6 +35,7 @@ export function JobPerformance({ job, jobs }: { job: Job; jobs: Job[] }) {
         {history?.count ? <span><small>Same v median</small><b>{formatGenerationDuration(history.medianMs)}</b></span> : null}
       </div>
       {workload.facts.length ? <div className="job-performance-facts">{workload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : null}
+      {job.settingsStamp.models.length ? <div className="job-performance-models"><small>Model load evidence</small><div>{job.settingsStamp.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}
       <p>{timing.isLongRunning
         ? `This run passed the ${Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}-minute awareness threshold. Local ComfyUI keeps rendering; Creative Studio does not cancel it at this point. ${likely}`
         : likely}</p>
@@ -42,6 +43,7 @@ export function JobPerformance({ job, jobs }: { job: Job; jobs: Job[] }) {
       {history ? <footer>{history.count
         ? `${history.count} completed ${history.count === 1 ? "run" : "runs"} on this exact workflow revision · fastest ${formatGenerationDuration(history.fastestMs)}.`
         : "No completed timing exists for this exact workflow revision yet."}</footer> : null}
+      {job.settingsStamp.workloadEvidence ? <footer>Settings source: {job.settingsStamp.workloadEvidence.label}.</footer> : null}
       <footer>Stage timing is measured by Creative Studio. Exact node or GPU bottlenecks require ComfyUI node-level profiling, so likely causes are labeled rather than guessed.</footer>
     </div>
   </details>;

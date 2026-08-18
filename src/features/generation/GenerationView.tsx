@@ -7,6 +7,7 @@ import {
   analyzeGenerationWorkload,
   creativeDnaGenerationPrompt,
   formatGenerationDuration,
+  generationProviderWorkloadProfile,
   primaryWorkflowPromptParameter,
   workflowRuntimeHistory,
   type GenerationModality,
@@ -54,6 +55,17 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
     prompt: workflowPrompt,
   }) : null;
   const workflowHistory = workflow && !settingsChanged ? workflowRuntimeHistory(snapshot?.jobs ?? [], workflow.currentRevision.id) : null;
+  const remoteImageCapability = snapshot?.capabilities.find((capability) => capability.key === "image-generation");
+  const directImageProfile = remoteImageCapability?.provider === "AFDFW Z-Image adapter"
+    ? generationProviderWorkloadProfile("afdfw-z-image", "image")
+    : null;
+  const directImageWorkload = directImageProfile ? analyzeGenerationWorkload({
+    parameters: directImageProfile.parameters,
+    models: directImageProfile.models,
+    inputAssetIds: [],
+    inputArtifactIds: [],
+    prompt: imagePrompt,
+  }) : null;
 
   const submit = async (modality: GenerationModality) => {
     if (!selected) return;
@@ -90,7 +102,7 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
           <div className="generation-axis-row">{Object.entries(selected.shared).map(([key, value]) => <span key={key}><small>{key}</small><b>{value}</b></span>)}</div>
           <div className="prompt-translations">
             <article><span><Icon name="music" size={18} /> Music translation</span><p>{musicPrompt}</p><button className="btn btn-ghost" disabled={busy} onClick={() => void submit("music")}><Icon name="send" size={16} /> Queue music</button></article>
-            <article><span><Icon name="image" size={18} /> Image description</span><p>{imagePrompt}</p><button className="btn btn-primary" disabled={busy} onClick={() => void submit("image")}><Icon name="send" size={16} /> Queue image</button></article>
+            <article><span><Icon name="image" size={18} /> Image description</span><p>{imagePrompt}</p>{directImageWorkload && directImageProfile ? <div className="direct-generation-profile"><div>{directImageWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div><details><summary>Model load evidence · {directImageProfile.models.length} files</summary>{directImageProfile.models.map((model) => <code key={model}>{model}</code>)}</details><small>{directImageProfile.label} · stamped with the job</small></div> : null}<button className="btn btn-primary" disabled={busy} onClick={() => void submit("image")}><Icon name="send" size={16} /> Queue image</button></article>
           </div>
           <section className="workflow-generate">
             <header><span><Icon name="flows" size={18} /><strong>Run a local ComfyUI workflow</strong></span><em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em></header>
@@ -129,6 +141,7 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
                 <summary><span><Icon name="analytics" size={15} /><strong>Performance profile</strong><small>{settingsChanged ? "New settings · timing starts with this run" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} exact ${workflowHistory.count === 1 ? "run" : "runs"}` : "No exact-revision history yet"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m long-run alert</em></summary>
                 <div className="workflow-performance-body">
                   {workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No size, step, frame, duration, or model workload is exposed by this workflow.</p>}
+                  {workflow.currentRevision.models.length ? <div className="job-performance-models"><small>Model load evidence</small><div>{workflow.currentRevision.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}
                   <p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No single high-cost setting stands out from the exposed values."}</p>
                   <small>{workflowWorkload.promptAssessment}</small>
                   <footer>{workflowHistory?.count ? `Fastest exact-revision run: ${formatGenerationDuration(workflowHistory.fastestMs)}. Change one stamped setting at a time, then use retained review decisions to compare speed with quality.` : "Creative Studio will retain execution time for this immutable revision after a successful run, creating a real speed baseline without estimating minutes."}</footer>

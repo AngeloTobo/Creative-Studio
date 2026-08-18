@@ -3,6 +3,7 @@ import {
   creativeDnaGenerationPrompt,
   PROJECT_HUES,
   resolveCreativeDnaGenerationArtifact,
+  withGenerationProviderWorkload,
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
@@ -295,11 +296,11 @@ const BACKGROUND_JOB_COLUMNS = `${PUBLIC_JOB_COLUMNS}, owner_id as ownerId, upst
 function parseSettingsStamp(value: string, fallback: Omit<GenerationSettingsStamp, "schemaVersion">): GenerationSettingsStamp {
   try {
     const parsed = JSON.parse(value) as GenerationSettingsStamp;
-    if (parsed?.schemaVersion === 1) return parsed;
+    if (parsed?.schemaVersion === 1) return withGenerationProviderWorkload(parsed);
   } catch {
     // Older rows are represented by a truthful, minimal fallback.
   }
-  return { schemaVersion: 1, ...fallback };
+  return withGenerationProviderWorkload({ schemaVersion: 1, ...fallback });
 }
 
 function mapJob(row: JobRow): Job {
@@ -363,7 +364,7 @@ export async function createQueuedJob(
   const now = new Date().toISOString();
   const timeoutAt = input.executionTarget === "local-comfyui" ? null : new Date(Date.now() + 30 * 60_000).toISOString();
   const prompt = input.promptOverride ?? creativeDnaGenerationPrompt(input.dna, input.modality === "video" ? "image" : input.modality);
-  const settingsStamp: GenerationSettingsStamp = input.settingsStampOverride ?? {
+  const settingsStamp = withGenerationProviderWorkload(input.settingsStampOverride ?? {
     schemaVersion: 1,
     source: "creative-dna",
     createdAt: now,
@@ -375,7 +376,7 @@ export async function createQueuedJob(
     parameters: { prompt },
     models: [],
     inputAssetIds: [],
-  };
+  });
   const job: Job = {
     id: jobId,
     projectId: input.projectId,
@@ -499,11 +500,20 @@ export async function attachAfdfwGeneration(env: Env, jobId: string, generation:
   const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${current.modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
   const nextAt = upstream === "completed" ? null : status === "queued" || status === "running" ? new Date(Date.now() + 60_000).toISOString() : null;
   const retentionTimeout = upstream === "completed" ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : current.timeoutAt;
+  const currentJob = mapJob(current);
+  const responseParameters = current.modality === "image" ? Object.fromEntries([
+    ["medium", generation.medium], ["size", generation.size], ["width", generation.width], ["height", generation.height],
+  ].filter((entry): entry is [string, string | number] => typeof entry[1] === "string" || (typeof entry[1] === "number" && Number.isFinite(entry[1])))) : {};
+  const settingsStamp = withGenerationProviderWorkload({
+    ...currentJob.settingsStamp,
+    parameters: { ...currentJob.settingsStamp.parameters, ...responseParameters },
+  });
   const changed = await env.DB.prepare(`update creative_jobs set upstream_id = ?, upstream_media_path = coalesce(?, upstream_media_path), status = ?, progress = ?,
       error = ?, last_reconcile_error = null, started_at = coalesce(started_at, ?), execution_stage = ?, stage_updated_at = ?,
       updated_at = ?, completed_at = case when ? = 'failed' then ? else completed_at end,
-      next_reconcile_at = ?, timeout_at = ? where id = ? and status in ('queued', 'running')`)
-    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, executionStage, now, now, upstream, now, nextAt, retentionTimeout, jobId).run();
+      next_reconcile_at = ?, timeout_at = ?, settings_stamp_json = ? where id = ? and status in ('queued', 'running')`)
+    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, executionStage, now, now, upstream, now, nextAt, retentionTimeout,
+      JSON.stringify(settingsStamp), jobId).run();
   if (!changed.meta.changes) {
     const unchanged = await jobById(env, current.ownerId, jobId);
     if (!unchanged) throw new Error("job_not_found");
@@ -512,7 +522,7 @@ export async function attachAfdfwGeneration(env: Env, jobId: string, generation:
   if (upstream === "completed") {
     if (!mediaPath) throw new Error("generation_media_missing");
     const dna = (await listLocalDna(env, current.ownerId)).find((item) => item.artifactId === current.dnaArtifactId);
-    await ensureArtifactForJob(env, current.ownerId, mapJob({ ...current, upstreamId: generation.id, status, progress, updatedAt: now, completedAt: null }), dna?.name ?? `${current.modality} artifact`, mediaPath);
+    await ensureArtifactForJob(env, current.ownerId, mapJob({ ...current, settingsStampJson: JSON.stringify(settingsStamp), upstreamId: generation.id, status, progress, updatedAt: now, completedAt: null }), dna?.name ?? `${current.modality} artifact`, mediaPath);
   }
   const updated = await jobById(env, current.ownerId, jobId);
   if (!updated) throw new Error("job_not_found");

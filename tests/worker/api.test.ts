@@ -763,11 +763,11 @@ describe("Creative Studio Worker API", () => {
         expect(upstream.headers.get("cf-access-authenticated-user-email")).toBe(accessEmail);
         if (path === "/api/profile-image/generate" && upstream.method === "POST") {
           submissions += 1;
-          return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, status: "running", progress: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+          return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, medium: "Digital Art", size: "portrait", width: 768, height: 1216, status: "running", progress: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
         }
         if (path === "/api/profile-image/generations/generation-background") {
           statusReads += 1;
-          return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, status: "completed", progress: 100, previewMediaId: "test-image", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+          return Response.json({ generation: { id: "generation-background", prompt: dna.generationPrompts.image, medium: "Digital Art", size: "portrait", width: 768, height: 1216, status: "completed", progress: 100, previewMediaId: "test-image", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
         }
         if (path === "/api/profile-image/media/test-image") {
           mediaReads += 1;
@@ -784,9 +784,14 @@ describe("Creative Studio Worker API", () => {
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
       body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", idempotencyKey: "background_submit_001" }),
     }), production);
-    const payload = await result(created) as { job: { id: string; status: string } };
+    const payload = await result(created) as { job: { id: string; status: string; settingsStamp: { parameters: Record<string, unknown>; models: string[]; workloadEvidence: { profileId: string } } } };
     expect(created.status).toBe(202);
     expect(payload.job.status).toBe("queued");
+    expect(payload.job.settingsStamp).toMatchObject({
+      parameters: { width: 768, height: 1216, steps: 32, frames: 1, batch_size: 1 },
+      models: ["z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors"],
+      workloadEvidence: { profileId: "afdfw-z-image-bridge-v1" },
+    });
     expect(submissions).toBe(0);
     expect(messages[0]?.body.jobId).toBe(payload.job.id);
 
@@ -1022,8 +1027,9 @@ describe("Creative Studio Worker API", () => {
           inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
         },
       }),
-    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string> } } };
+    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string } } } };
     expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
+    expect(created.job.settingsStamp.workloadEvidence).toEqual({ source: "workflow-revision", profileId: imported.workflow.currentRevision.id, label: "MiniMax H3 I2V v1" });
     expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
 
     await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {

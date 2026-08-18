@@ -19,6 +19,13 @@ export type GenerationWorkload = {
   promptAssessment: string;
 };
 
+export type GenerationProviderWorkloadProfile = {
+  profileId: string;
+  label: string;
+  parameters: Record<string, string | number | boolean>;
+  models: string[];
+};
+
 export type WorkflowRuntimeHistory = {
   count: number;
   medianMs: number | null;
@@ -35,6 +42,45 @@ export type GenerationTiming = {
 };
 
 type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt">;
+
+const AFDFW_Z_IMAGE_PROFILE: GenerationProviderWorkloadProfile = {
+  profileId: "afdfw-z-image-bridge-v1",
+  label: "AFDFW Z-Image bridge profile v1",
+  parameters: {
+    medium: "Digital Art",
+    size: "portrait",
+    width: 768,
+    height: 1216,
+    steps: 32,
+    frames: 1,
+    batch_size: 1,
+  },
+  models: ["z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors"],
+};
+
+export function generationProviderWorkloadProfile(provider: string, modality: string): GenerationProviderWorkloadProfile | null {
+  if (provider !== "afdfw-z-image" || modality !== "image") return null;
+  return {
+    ...AFDFW_Z_IMAGE_PROFILE,
+    parameters: { ...AFDFW_Z_IMAGE_PROFILE.parameters },
+    models: [...AFDFW_Z_IMAGE_PROFILE.models],
+  };
+}
+
+export function withGenerationProviderWorkload(stamp: GenerationSettingsStamp): GenerationSettingsStamp {
+  const profile = generationProviderWorkloadProfile(stamp.provider, stamp.modality);
+  if (!profile) return stamp;
+  return {
+    ...stamp,
+    parameters: { ...profile.parameters, ...stamp.parameters },
+    models: stamp.models.length ? stamp.models : profile.models,
+    workloadEvidence: stamp.workloadEvidence ?? {
+      source: "provider-profile",
+      profileId: profile.profileId,
+      label: profile.label,
+    },
+  };
+}
 
 const STAGE_LABELS: Record<GenerationExecutionStage, string> = {
   queued: "Waiting in Creative Studio",
@@ -87,7 +133,7 @@ export function analyzeGenerationWorkload(source: WorkloadSource): GenerationWor
   if (width && height) facts.push(`${Math.round(width)}×${Math.round(height)} · ${compactNumber(megapixels ?? 0)} MP`);
   else if (megapixels) facts.push(`${compactNumber(megapixels)} MP target`);
   if (steps) facts.push(`${compactNumber(steps)} steps`);
-  if (frames) facts.push(`${compactNumber(frames)} frames`);
+  if (frames) facts.push(`${compactNumber(frames)} ${frames === 1 ? "frame" : "frames"}`);
   if (durationSeconds) facts.push(`${compactNumber(durationSeconds)}s duration`);
   if (fps) facts.push(`${compactNumber(fps)} fps`);
   if (batchSize && batchSize > 1) facts.push(`batch ${compactNumber(batchSize)}`);

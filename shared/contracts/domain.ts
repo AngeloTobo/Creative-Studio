@@ -87,6 +87,11 @@ export type GenerationSettingsStamp = {
   };
   parameters: Record<string, string | number | boolean>;
   models: string[];
+  workloadEvidence?: {
+    source: "workflow-revision" | "provider-profile";
+    profileId: string;
+    label: string;
+  };
   inputAssetIds: string[];
   inputArtifactIds?: string[];
   inputSources?: Array<{

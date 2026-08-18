@@ -457,6 +457,16 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .job-performance-times b { overflow: hidden; color: var(--text-soft); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .job-performance-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .job-performance-facts span { padding: 4px 6px; border-radius: 6px; background: rgba(139,92,246,.09); color: #c4b5fd; font-family: var(--font-mono); font-size: 8px; }
+.job-performance-models { display: grid; gap: 5px; margin-top: 9px; }
+.job-performance-models > small { color: var(--text-faint); font-size: 8px; text-transform: uppercase; letter-spacing: .08em; }
+.job-performance-models > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.job-performance-models code { padding: 4px 6px; border-radius: 6px; background: rgba(34,211,238,.06); color: var(--cyan); font-size: 8px; }
+.direct-generation-profile { display: grid; gap: 6px; margin: 10px 0; padding: 9px; border: 1px solid var(--border-soft); border-radius: 9px; background: rgba(4,8,20,.32); }
+.direct-generation-profile > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.direct-generation-profile > div span { padding: 4px 6px; border-radius: 6px; background: rgba(139,92,246,.09); color: #c4b5fd; font-family: var(--font-mono); font-size: 8px; }
+.direct-generation-profile details summary { cursor: pointer; color: var(--text-soft); font-size: 9px; }
+.direct-generation-profile details code { display: block; margin-top: 4px; color: var(--cyan); font-size: 8px; overflow-wrap: anywhere; }
+.direct-generation-profile > small { color: var(--text-faint); font-size: 8px; }
 .job-performance-body p, .workflow-performance-body p { margin-top: 8px; color: var(--text-soft); font-size: 10px; line-height: 1.5; }
 .job-performance-body > small, .workflow-performance-body > small, .job-performance-body footer, .workflow-performance-body footer { display: block; margin-top: 7px; color: var(--text-muted); font-size: 9px; line-height: 1.5; }
 .job-performance-body footer, .workflow-performance-body footer { padding-top: 7px; border-top: 1px solid var(--border-soft); }

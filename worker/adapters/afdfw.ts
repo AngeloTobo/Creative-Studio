@@ -62,6 +62,10 @@ export async function afdfwSession(env: Env, request: Request): Promise<OwnerSes
 export type AfdfwGeneration = {
   id: string;
   prompt: string;
+  medium?: string;
+  size?: string;
+  width?: number;
+  height?: number;
   status: string;
   progress?: number;
   previewMediaId?: string | null;

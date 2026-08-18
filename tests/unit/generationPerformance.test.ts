@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   GENERATION_LONG_RUN_THRESHOLD_MS,
   analyzeGenerationWorkload,
+  generationProviderWorkloadProfile,
   generationTiming,
+  withGenerationProviderWorkload,
   workflowRuntimeHistory,
   type Job,
 } from "../../shared/contracts";
@@ -59,6 +61,31 @@ function job(id: string, startedAt: string, completedAt: string): Job {
 }
 
 describe("generation performance evidence", () => {
+  it("projects the versioned AFDFW image profile into complete direct-generation evidence", () => {
+    const profile = generationProviderWorkloadProfile("afdfw-z-image", "image");
+    expect(profile).toMatchObject({
+      profileId: "afdfw-z-image-bridge-v1",
+      parameters: { width: 768, height: 1216, steps: 32, frames: 1, batch_size: 1 },
+      models: ["z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors"],
+    });
+    const enriched = withGenerationProviderWorkload({
+      ...stamp,
+      workflow: null,
+      provider: "afdfw-z-image",
+      parameters: { prompt: stamp.prompt },
+      models: [],
+    });
+    expect(enriched.workloadEvidence).toMatchObject({ source: "provider-profile", profileId: "afdfw-z-image-bridge-v1" });
+    expect(analyzeGenerationWorkload(enriched)).toMatchObject({
+      width: 768,
+      height: 1216,
+      steps: 32,
+      frames: 1,
+      modelCount: 3,
+    });
+    expect(analyzeGenerationWorkload(enriched).facts).toEqual(expect.arrayContaining(["768×1216 · 0.93 MP", "32 steps", "1 frame", "3 models"]));
+  });
+
   it("extracts stamped workload factors without blaming an ordinary prompt", () => {
     const workload = analyzeGenerationWorkload(stamp);
     expect(workload).toMatchObject({ width: 1536, height: 1024, steps: 36, batchSize: 2, modelCount: 3, inputCount: 1 });
