@@ -3,6 +3,7 @@ import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
 import { jobIssuePresentation } from "./jobFailure";
+import { JobPerformance } from "./JobPerformance";
 
 function age(value: string) {
   const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
@@ -45,6 +46,7 @@ export function QueueView({ focusRunId }: { focusRunId?: string }) {
             <p>{job.prompt}</p>
             <div className="queue-meta"><span>{job.provider}</span><span>Updated {age(job.updatedAt)}</span><span>{job.id}</span></div>
             {job.retryOfJobId ? <div className="queue-lineage">Retry of {job.retryOfJobId}</div> : null}
+            <JobPerformance job={job} jobs={jobs} />
             {issue ? <section className={`job-issue ${job.status}`} aria-label={issue.title}><header><Icon name={job.status === "failed" ? "close" : "archive"} size={16} /><strong>{issue.title}</strong></header><p>{issue.summary}</p><small>Provider detail <code>{issue.raw}</code></small><footer>{issue.action}</footer></section> : null}
             <div className="job-progress"><i style={{ width: `${job.progress}%` }} /></div>
             <div className="queue-controls">

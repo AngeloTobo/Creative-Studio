@@ -90,7 +90,7 @@ export function CockpitView({ onOpen }: CockpitViewProps) {
       <header><div><span className="eyebrow">Owner inbox</span><h3 id="cockpit-inbox-title">Required attention</h3></div><span className="cockpit-count">{actions.length}</span></header>
       <div className="cockpit-actions">
         {actions.map((action) => <article className={`cockpit-action ${action.severity}`} key={action.id}>
-          <span className="cockpit-action-icon"><Icon name={action.kind.includes("review") ? "check" : action.kind.includes("runner") ? "runtime" : "rerun"} size={18} /></span>
+          <span className="cockpit-action-icon"><Icon name={action.kind.includes("review") ? "check" : action.kind.includes("runner") ? "runtime" : action.kind === "long-running-generation" ? "analytics" : "rerun"} size={18} /></span>
           <span><small>{action.projectName ?? "Production system"} · {relative(action.createdAt)}</small><strong>{action.title}</strong><p>{action.detail}</p></span>
           <button className="btn btn-ghost" disabled={busy} onClick={() => void act(action)}>{action.actionLabel} <Icon name="arrow" size={14} /></button>
         </article>)}

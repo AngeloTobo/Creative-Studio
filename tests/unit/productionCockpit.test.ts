@@ -68,6 +68,9 @@ function job(id: string, status: Job["status"], retryOfJobId: string | null = nu
     error: status === "failed" ? "ComfyUI model unavailable" : null,
     createdAt,
     updatedAt: createdAt,
+    startedAt: status === "queued" ? null : createdAt,
+    executionStage: status === "completed" ? "completed" : status === "failed" ? "failed" : status === "running" ? "rendering" : "queued",
+    stageUpdatedAt: createdAt,
     completedAt: status === "failed" || status === "completed" ? createdAt : null,
     settingsStamp: stamp,
   };
@@ -187,5 +190,23 @@ describe("production cockpit", () => {
     expect(cockpit.summary.failedRuns).toBe(1);
     expect(cockpit.runs.some((run) => run.id === "job_failed" && run.status === "failed")).toBe(true);
     expect(cockpit.actions.some((action) => action.kind === "retry-generation")).toBe(false);
+  });
+
+  it("raises a visible warning after a generation runs for twenty minutes without marking it failed", () => {
+    const running = {
+      ...job("job_long", "running"),
+      createdAt: "2026-08-16T19:39:00.000Z",
+      startedAt: "2026-08-16T19:40:00.000Z",
+      updatedAt: "2026-08-16T20:04:00.000Z",
+      stageUpdatedAt: "2026-08-16T20:04:00.000Z",
+      executionStage: "rendering" as const,
+    };
+    const cockpit = deriveProductionCockpit(input([running]));
+    expect(cockpit.actions).toContainEqual(expect.objectContaining({
+      kind: "long-running-generation",
+      entityId: running.id,
+      title: "image run passed 20 minutes",
+    }));
+    expect(cockpit.runs[0]).toMatchObject({ status: "running", durationMs: 25 * 60_000 });
   });
 });

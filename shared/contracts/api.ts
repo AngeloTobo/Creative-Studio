@@ -5,6 +5,7 @@ import type {
   Artifact,
   Capability,
   GenerationModality,
+  GenerationExecutionStage,
   Job,
   MediaAsset,
   Project,
@@ -224,7 +225,7 @@ export type RunnerWorkClaimResponse =
   | { kind: "generation"; bundle: RunnerJobBundle }
   | { kind: "training"; bundle: CreativeDnaTrainingBundleResponse }
   | { kind: null; bundle: null };
-export type RunnerJobHeartbeatRequest = { progress: number; upstreamId?: string | null };
+export type RunnerJobHeartbeatRequest = { progress: number; upstreamId?: string | null; stage?: GenerationExecutionStage };
 export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
 export type RunnerFailJobRequest = { error: string };
 export type RunnerTrainingClaimResponse = { bundle: CreativeDnaTrainingBundleResponse | null };

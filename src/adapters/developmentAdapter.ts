@@ -57,6 +57,17 @@ function emptyState(): DevelopmentState {
   return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} };
 }
 
+function normalizeJobTiming(job: Job): Job {
+  const terminal = job.status === "completed" || job.status === "failed" || job.status === "cancelled";
+  const stage = job.executionStage ?? (job.status === "completed" ? "completed" : job.status === "failed" ? "failed" : job.status === "cancelled" ? "cancelled" : job.status === "running" ? "rendering" : "queued");
+  return {
+    ...job,
+    startedAt: job.startedAt ?? (job.status === "running" || terminal ? job.createdAt : null),
+    executionStage: stage,
+    stageUpdatedAt: job.stageUpdatedAt ?? job.updatedAt,
+  };
+}
+
 function cleanText(value: unknown, limit: number) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
 }
@@ -156,7 +167,9 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     const raw = storage.getItem(STORAGE_KEY);
     if (raw) {
       try {
-        return { ...emptyState(), ...(JSON.parse(raw) as Partial<DevelopmentState>) };
+        const state = { ...emptyState(), ...(JSON.parse(raw) as Partial<DevelopmentState>) };
+        state.jobs = state.jobs.map(normalizeJobTiming);
+        return state;
       } catch {
         // A corrupt development snapshot is replaced with an empty state.
       }
@@ -179,12 +192,17 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       if (age >= 1_000 && job.status === "queued") {
         job.status = "running";
         job.progress = Math.max(job.progress, 42);
+        job.startedAt = current.toISOString();
+        job.executionStage = "rendering";
+        job.stageUpdatedAt = current.toISOString();
         job.updatedAt = current.toISOString();
         changed = true;
       }
       if (age >= 3_200) {
         job.status = "completed";
         job.progress = 100;
+        job.executionStage = "completed";
+        job.stageUpdatedAt = current.toISOString();
         job.completedAt = current.toISOString();
         job.updatedAt = current.toISOString();
         if (!job.artifactId) {
@@ -259,6 +277,9 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       error: null,
       createdAt,
       updatedAt: createdAt,
+      startedAt: null,
+      executionStage: "queued",
+      stageUpdatedAt: createdAt,
       completedAt: null,
       settingsStamp,
     };
@@ -392,6 +413,8 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         const cancelledAt = now().toISOString();
         job.status = "cancelled";
         job.error = "cancelled_by_user";
+        job.executionStage = "cancelled";
+        job.stageUpdatedAt = cancelledAt;
         job.updatedAt = cancelledAt;
         job.completedAt = cancelledAt;
         write(state);

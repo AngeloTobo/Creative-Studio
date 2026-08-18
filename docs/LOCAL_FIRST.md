@@ -14,7 +14,7 @@ npm run local
 
 3. Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default; it selects the next free port when needed).
 
-The command applies local D1 migrations, starts or reuses the Wrangler-local BFF on port 8787, enrolls a localhost-only runner credential, starts Local Runner 1.3, and starts the Vite UI. The credential is stored outside the repository at `%LOCALAPPDATA%\Creative Studio Runner\local-config.json` with a current-user/SYSTEM ACL.
+The command applies local D1 migrations, starts or reuses the Wrangler-local BFF on port 8787, enrolls a localhost-only runner credential, starts Local Runner 1.4, and starts the Vite UI. The credential is stored outside the repository at `%LOCALAPPDATA%\Creative Studio Runner\local-config.json` with a current-user/SYSTEM ACL.
 
 Press `Ctrl+C` in that terminal to stop the processes started by the command. A previously running local BFF is reused and is not stopped.
 

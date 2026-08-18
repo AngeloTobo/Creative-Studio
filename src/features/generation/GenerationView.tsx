@@ -2,7 +2,14 @@ import { useState } from "react";
 import { creativeDnaCanGenerate, creativeDnaReviewDecision, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
-import type { GenerationModality, WorkflowScalar } from "../../../shared/contracts";
+import {
+  GENERATION_LONG_RUN_THRESHOLD_MS,
+  analyzeGenerationWorkload,
+  formatGenerationDuration,
+  workflowRuntimeHistory,
+  type GenerationModality,
+  type WorkflowScalar,
+} from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
 
@@ -24,6 +31,19 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
   const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value));
   const runnerOnline = snapshot?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
+  const performanceParameters = Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, effectiveValues[parameter.id] ?? parameter.value]));
+  const stampedPrompt = scalarParameters
+    .filter((parameter) => parameter.kind === "text" && /prompt|caption|lyrics|text/i.test(`${parameter.label} ${parameter.id}`))
+    .map((parameter) => String(effectiveValues[parameter.id] ?? parameter.value).trim()).filter(Boolean).join("\n\n");
+  const workflowPrompt = stampedPrompt || (workflow?.modality === "music" || workflow?.modality === "audio" ? selected?.generationPrompts.music : selected?.generationPrompts.image) || "";
+  const workflowWorkload = workflow ? analyzeGenerationWorkload({
+    parameters: performanceParameters,
+    models: workflow.currentRevision.models,
+    inputAssetIds: Object.values(inputBindings),
+    inputArtifactIds: [],
+    prompt: workflowPrompt,
+  }) : null;
+  const workflowHistory = workflow && !settingsChanged ? workflowRuntimeHistory(snapshot?.jobs ?? [], workflow.currentRevision.id) : null;
 
   const submit = async (modality: GenerationModality) => {
     if (!selected) return;
@@ -95,6 +115,15 @@ export function GenerationView({ onQueued, onMedia, embedded = false }: { onQueu
                   }} />)}
                 </div>
                 <button type="button" className="btn btn-ghost workflow-run-reset" disabled={!settingsChanged || busy} onClick={() => { setValuesRevisionId(workflow!.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Reset to v{workflow!.currentRevision.version}</button>
+              </details> : null}
+              {workflowWorkload ? <details className="workflow-performance">
+                <summary><span><Icon name="analytics" size={15} /><strong>Performance profile</strong><small>{settingsChanged ? "New settings · timing starts with this run" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} exact ${workflowHistory.count === 1 ? "run" : "runs"}` : "No exact-revision history yet"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m long-run alert</em></summary>
+                <div className="workflow-performance-body">
+                  {workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No size, step, frame, duration, or model workload is exposed by this workflow.</p>}
+                  <p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No single high-cost setting stands out from the exposed values."}</p>
+                  <small>{workflowWorkload.promptAssessment}</small>
+                  <footer>{workflowHistory?.count ? `Fastest exact-revision run: ${formatGenerationDuration(workflowHistory.fastestMs)}. Change one stamped setting at a time, then use retained review decisions to compare speed with quality.` : "Creative Studio will retain execution time for this immutable revision after a successful run, creating a real speed baseline without estimating minutes."}</footer>
+                </div>
               </details> : null}
               <div className="workflow-generate-meta"><span>{workflow?.currentRevision.nodeCount} nodes</span><span>{workflow?.currentRevision.contentHash.slice(0, 12)}</span><span>{workflow?.currentRevision.models.length ?? 0} models</span></div>
               <button className="btn btn-primary" disabled={busy || !workflowReady || snapshot?.adapter.development} onClick={() => void submitWorkflow()}><Icon name="send" size={16} /> {settingsChanged ? `Save v${workflow!.currentRevision.version + 1} & queue` : `Queue ${workflow?.modality} workflow`}</button>

@@ -34,6 +34,17 @@ export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
 export type GenerationModality = "music" | "image" | "video";
 export type GenerationCapability = "MUSIC_GENERATE" | "IMAGE_GENERATE" | "VIDEO_GENERATE";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type GenerationExecutionStage =
+  | "queued"
+  | "provider-queued"
+  | "preparing-inputs"
+  | "submitting"
+  | "rendering"
+  | "downloading-output"
+  | "retaining"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export type Job = {
   id: string;
@@ -51,6 +62,9 @@ export type Job = {
   error: string | null;
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
+  startedAt: IsoDateString | null;
+  executionStage: GenerationExecutionStage | null;
+  stageUpdatedAt: IsoDateString | null;
   completedAt: IsoDateString | null;
   settingsStamp: GenerationSettingsStamp;
 };

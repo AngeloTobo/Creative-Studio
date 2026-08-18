@@ -1013,8 +1013,8 @@ describe("Creative Studio Worker API", () => {
           inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
         },
       }),
-    }), local)) as { job: { id: string; status: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string> } } };
-    expect(created.job).toMatchObject({ status: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
+    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string> } } };
+    expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
     expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
 
     await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
@@ -1022,18 +1022,20 @@ describe("Creative Studio Worker API", () => {
     }), local);
     const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
-    }), local)) as { bundle: { job: { id: string }; graph: Record<string, unknown>; inputs: Array<{ id: string }> } };
+    }), local)) as { bundle: { job: { id: string; startedAt: string; executionStage: string }; graph: Record<string, unknown>; inputs: Array<{ id: string }> } };
     expect(claimed.bundle.job.id).toBe(created.job.id);
+    expect(claimed.bundle.job).toMatchObject({ executionStage: "preparing-inputs" });
+    expect(claimed.bundle.job.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(claimed.bundle.inputs.map((asset) => asset.id)).toEqual([uploaded.asset.id]);
     expect(claimed.bundle.graph).toMatchObject({ "1": { class_type: "LoadImage" } });
     await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
-      method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 18, upstreamId: "comfy-prompt-h3-001" }),
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 18, upstreamId: "comfy-prompt-h3-001", stage: "rendering" }),
     }), local);
     await env.DB.prepare("update creative_jobs set runner_lease_until = ? where id = ?").bind("2020-01-01T00:00:00.000Z", created.job.id).run();
     const resumed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
-    }), local)) as { bundle: { job: { upstreamId: string } } };
-    expect(resumed.bundle.job.upstreamId).toBe("comfy-prompt-h3-001");
+    }), local)) as { bundle: { job: { upstreamId: string; executionStage: string } } };
+    expect(resumed.bundle.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", executionStage: "preparing-inputs" });
 
     await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/fail`, {
       method: "POST", headers: runnerHeaders, body: JSON.stringify({ error: "The operation was aborted due to timeout" }),
@@ -1059,7 +1061,7 @@ describe("Creative Studio Worker API", () => {
       body: outputBytes,
     }), local);
     expect(completed.status).toBe(200);
-    expect(await result(completed)).toMatchObject({ job: { status: "completed", modality: "video", provider: "local-comfyui" } });
+    expect(await result(completed)).toMatchObject({ job: { status: "completed", modality: "video", provider: "local-comfyui", executionStage: "completed" } });
     expect(values.size).toBe(2);
     const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; kind: string; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
     expect(history.artifacts[0]).toMatchObject({ kind: "video", retention: { state: "retained", size: outputBytes.byteLength } });

@@ -254,7 +254,8 @@ export async function createLocalDna(env: Env, ownerId: string, input: CreateCre
 type JobRow = {
   id: string; projectId: string; dnaArtifactId: string; capability: Job["capability"]; modality: Job["modality"];
   status: Job["status"]; progress: number; prompt: string; provider: string; upstreamId: string | null;
-  artifactId: string | null; retryOfJobId: string | null; error: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
+  artifactId: string | null; retryOfJobId: string | null; error: string | null; createdAt: string; updatedAt: string;
+  startedAt: string | null; executionStage: Job["executionStage"]; stageUpdatedAt: string | null; completedAt: string | null;
   settingsStampJson: string;
 };
 
@@ -278,7 +279,8 @@ export type BackgroundJob = JobRow & {
 
 const PUBLIC_JOB_COLUMNS = `id, project_id as projectId, dna_artifact_id as dnaArtifactId, capability, modality,
   status, progress, prompt, provider, upstream_id as upstreamId, artifact_id as artifactId,
-  retry_of_job_id as retryOfJobId, error, created_at as createdAt, updated_at as updatedAt, completed_at as completedAt,
+  retry_of_job_id as retryOfJobId, error, created_at as createdAt, updated_at as updatedAt,
+  started_at as startedAt, execution_stage as executionStage, stage_updated_at as stageUpdatedAt, completed_at as completedAt,
   settings_stamp_json as settingsStampJson`;
 
 const BACKGROUND_JOB_COLUMNS = `${PUBLIC_JOB_COLUMNS}, owner_id as ownerId, upstream_media_path as upstreamMediaPath,
@@ -388,18 +390,22 @@ export async function createQueuedJob(
     error: null,
     createdAt: now,
     updatedAt: now,
+    startedAt: null,
+    executionStage: "queued",
+    stageUpdatedAt: now,
     completedAt: null,
     settingsStamp,
   };
   try {
     await env.DB.prepare(`insert into creative_jobs (
       id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
-      upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, completed_at,
+      upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, started_at, execution_stage, stage_updated_at, completed_at,
       reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at, settings_stamp_json,
       execution_target, workflow_id, workflow_revision_id
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, null, ?, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
       .bind(job.id, ownerId, input.projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress,
-        job.prompt, job.provider, job.upstreamId, job.retryOfJobId, now, now, input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
+        job.prompt, job.provider, job.upstreamId, job.retryOfJobId, now, now, job.executionStage, now,
+        input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
         JSON.stringify(job.settingsStamp), input.executionTarget ?? "afdfw", input.workflowId ?? null, input.workflowRevisionId ?? null).run();
     return { job, created: true };
   } catch (error) {
@@ -438,20 +444,19 @@ function upstreamStatus(status: string): Job["status"] {
 async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: string, mediaPath: string | null) {
   const existing = await env.DB.prepare("select id, retained_key as retainedKey from creative_artifacts where job_id = ? and owner_id = ?")
     .bind(job.id, ownerId).first<{ id: string; retainedKey: string | null }>();
+  const now = new Date().toISOString();
   if (existing) {
     await ensureTrainingExample(env, ownerId, job, existing.id);
     if (mediaPath && !existing.retainedKey) {
-      await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95 where id = ? and owner_id = ? and status in ('queued', 'running')")
-        .bind(existing.id, job.id, ownerId).run();
+      await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95, execution_stage = 'retaining', stage_updated_at = ?, updated_at = ? where id = ? and owner_id = ? and status in ('queued', 'running')")
+        .bind(existing.id, now, now, job.id, ownerId).run();
     } else {
-      const now = new Date().toISOString();
-      await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), next_reconcile_at = null where id = ? and owner_id = ?")
-        .bind(existing.id, now, job.id, ownerId).run();
+      await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, execution_stage = 'completed', stage_updated_at = ?, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ?")
+        .bind(existing.id, now, now, now, job.id, ownerId).run();
     }
     return existing.id;
   }
   const artifactId = id("artifact");
-  const now = new Date().toISOString();
   const colors = job.modality === "music" ? ["#9d174d", "#7c3aed"] : ["#0e7490", "#a21caf"];
   const previewUrl = mediaPath ? `/api/creative-studio/artifacts/${artifactId}/media` : null;
   const artifactStatus: Artifact["status"] = mediaPath ? "retaining" : "ready";
@@ -462,11 +467,11 @@ async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: s
   if (!winner) throw new Error("artifact_create_failed");
   await ensureTrainingExample(env, ownerId, job, winner.id);
   if (mediaPath) {
-    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95, updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status in ('queued', 'running')")
-      .bind(winner.id, now, job.id, ownerId).run();
-  } else {
-    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ?")
+    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'running', progress = 95, execution_stage = 'retaining', stage_updated_at = ?, updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status in ('queued', 'running')")
       .bind(winner.id, now, now, job.id, ownerId).run();
+  } else {
+    await env.DB.prepare("update creative_jobs set artifact_id = ?, status = 'completed', progress = 100, execution_stage = 'completed', stage_updated_at = ?, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ?")
+      .bind(winner.id, now, now, now, job.id, ownerId).run();
   }
   return winner.id;
 }
@@ -487,14 +492,16 @@ export async function attachAfdfwGeneration(env: Env, jobId: string, generation:
   const upstream = upstreamStatus(generation.status);
   const status: Job["status"] = upstream === "completed" ? "running" : upstream;
   const now = generation.updatedAt || new Date().toISOString();
+  const executionStage: NonNullable<Job["executionStage"]> = upstream === "completed" ? "retaining" : upstream === "failed" ? "failed" : upstream === "queued" ? "provider-queued" : "rendering";
   const progress = upstream === "completed" ? 95 : Math.max(current.progress, Number(generation.progress || (status === "running" ? 10 : 2)));
   const mediaPath = generation.mediaUrl || (generation.previewMediaId ? `/api/profile-${current.modality === "music" ? "song" : "image"}/media/${generation.previewMediaId}` : null);
   const nextAt = upstream === "completed" ? null : status === "queued" || status === "running" ? new Date(Date.now() + 60_000).toISOString() : null;
   const retentionTimeout = upstream === "completed" ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : current.timeoutAt;
   const changed = await env.DB.prepare(`update creative_jobs set upstream_id = ?, upstream_media_path = coalesce(?, upstream_media_path), status = ?, progress = ?,
-      error = ?, last_reconcile_error = null, updated_at = ?, completed_at = case when ? = 'failed' then ? else completed_at end,
+      error = ?, last_reconcile_error = null, started_at = coalesce(started_at, ?), execution_stage = ?, stage_updated_at = ?,
+      updated_at = ?, completed_at = case when ? = 'failed' then ? else completed_at end,
       next_reconcile_at = ?, timeout_at = ? where id = ? and status in ('queued', 'running')`)
-    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, upstream, now, nextAt, retentionTimeout, jobId).run();
+    .bind(generation.id, mediaPath, status, progress, generation.error ?? null, now, executionStage, now, now, upstream, now, nextAt, retentionTimeout, jobId).run();
   if (!changed.meta.changes) {
     const unchanged = await jobById(env, current.ownerId, jobId);
     if (!unchanged) throw new Error("job_not_found");
@@ -513,11 +520,13 @@ export async function attachAfdfwGeneration(env: Env, jobId: string, generation:
 export async function claimBackgroundJob(env: Env, jobId: string, leaseMs = 12 * 60_000) {
   const now = new Date();
   const leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
-  const claimed = await env.DB.prepare(`update creative_jobs set reconcile_lease_until = ?, reconcile_attempts = reconcile_attempts + 1, updated_at = ?
+  const claimed = await env.DB.prepare(`update creative_jobs set reconcile_lease_until = ?, reconcile_attempts = reconcile_attempts + 1,
+    started_at = coalesce(started_at, ?), execution_stage = case when upstream_id is null then 'submitting' else 'rendering' end,
+    stage_updated_at = ?, updated_at = ?
     where id = ? and execution_target = 'afdfw' and status in ('queued', 'running')
       and (next_reconcile_at is null or next_reconcile_at <= ?)
       and (reconcile_lease_until is null or reconcile_lease_until <= ?)`)
-    .bind(leaseUntil, now.toISOString(), jobId, now.toISOString(), now.toISOString()).run();
+    .bind(leaseUntil, now.toISOString(), now.toISOString(), now.toISOString(), jobId, now.toISOString(), now.toISOString()).run();
   return claimed.meta.changes ? backgroundJobById(env, jobId) : null;
 }
 
@@ -531,9 +540,10 @@ export async function markBackgroundJobPending(env: Env, jobId: string, error: s
 
 export async function failBackgroundJob(env: Env, jobId: string, error: string) {
   const now = new Date().toISOString();
-  await env.DB.prepare(`update creative_jobs set status = 'failed', error = ?, last_reconcile_error = ?, completed_at = ?,
-    next_reconcile_at = null, reconcile_lease_until = null, updated_at = ? where id = ? and status in ('queued', 'running')`)
-    .bind(error.slice(0, 500), error.slice(0, 500), now, now, jobId).run();
+  await env.DB.prepare(`update creative_jobs set status = 'failed', error = ?, last_reconcile_error = ?, execution_stage = 'failed',
+    stage_updated_at = ?, completed_at = ?, next_reconcile_at = null, reconcile_lease_until = null, updated_at = ?
+    where id = ? and status in ('queued', 'running')`)
+    .bind(error.slice(0, 500), error.slice(0, 500), now, now, now, jobId).run();
 }
 
 export async function releaseBackgroundJob(env: Env, jobId: string) {
@@ -618,9 +628,9 @@ export async function completeLocalRunnerJob(
         `/api/creative-studio/artifacts/${artifactId}/media`, colors[0], colors[1], now, now, key, contentType,
         retained.size, background.settingsStampJson),
     env.DB.prepare(`update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null,
-      completed_at = coalesce(completed_at, ?), updated_at = ?, runner_lease_until = null, next_reconcile_at = null
+      execution_stage = 'completed', stage_updated_at = ?, completed_at = coalesce(completed_at, ?), updated_at = ?, runner_lease_until = null, next_reconcile_at = null
       where id = ? and owner_id = ? and execution_target = 'local-comfyui' and runner_id = ? and status = 'running'`)
-      .bind(artifactId, now, now, jobId, ownerId, runnerId),
+      .bind(artifactId, now, now, now, jobId, ownerId, runnerId),
     env.DB.prepare("update creative_runners set active_job_id = null, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
       .bind(now, runnerId, ownerId),
   ]);
@@ -637,9 +647,10 @@ export async function cancelOwnedJob(env: Env, ownerId: string, jobId: string) {
   if (current.artifactId) throw new Error("job_not_cancellable");
   if (current.status === "cancelled") return current;
   const now = new Date().toISOString();
-  await env.DB.prepare(`update creative_jobs set status = 'cancelled', error = 'cancelled_by_user', cancelled_at = ?, completed_at = ?,
-    next_reconcile_at = null, reconcile_lease_until = null, updated_at = ? where id = ? and owner_id = ? and status in ('queued', 'running')`)
-    .bind(now, now, now, jobId, ownerId).run();
+  await env.DB.prepare(`update creative_jobs set status = 'cancelled', error = 'cancelled_by_user', execution_stage = 'cancelled',
+    stage_updated_at = ?, cancelled_at = ?, completed_at = ?, next_reconcile_at = null, reconcile_lease_until = null, updated_at = ?
+    where id = ? and owner_id = ? and status in ('queued', 'running')`)
+    .bind(now, now, now, now, jobId, ownerId).run();
   const updated = await jobById(env, ownerId, jobId);
   if (!updated) throw new Error("job_not_found");
   return updated;
@@ -656,7 +667,8 @@ export async function reconcileDevelopmentJobs(env: Env, ownerId: string) {
       const dna = (await listLocalDna(env, ownerId)).find((item) => item.artifactId === job.dnaArtifactId);
       await ensureArtifactForJob(env, ownerId, job, dna?.name ?? `${job.modality} artifact`, null);
     } else if (age >= 1_000 && job.status === "queued") {
-      await env.DB.prepare("update creative_jobs set status = 'running', progress = 42, updated_at = ? where id = ? and owner_id = ?").bind(now.toISOString(), job.id, ownerId).run();
+      await env.DB.prepare("update creative_jobs set status = 'running', progress = 42, started_at = coalesce(started_at, ?), execution_stage = 'rendering', stage_updated_at = ?, updated_at = ? where id = ? and owner_id = ?")
+        .bind(now.toISOString(), now.toISOString(), now.toISOString(), job.id, ownerId).run();
     }
   }
 }
@@ -803,8 +815,8 @@ export async function finalizeRetainedArtifact(env: Env, ownerId: string, artifa
   await env.DB.batch([
     env.DB.prepare("update creative_artifacts set status = case when status = 'retaining' then 'ready' else status end, updated_at = ? where id = ? and owner_id = ?")
       .bind(now, artifactId, ownerId),
-    env.DB.prepare("update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null, last_reconcile_error = null, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status != 'cancelled'")
-      .bind(artifactId, now, now, artifact.jobId, ownerId),
+    env.DB.prepare("update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null, last_reconcile_error = null, execution_stage = 'completed', stage_updated_at = ?, completed_at = coalesce(completed_at, ?), updated_at = ?, next_reconcile_at = null where id = ? and owner_id = ? and status != 'cancelled'")
+      .bind(artifactId, now, now, now, artifact.jobId, ownerId),
   ]);
   const job = await jobById(env, ownerId, artifact.jobId);
   if (!job) throw new Error("job_not_found");

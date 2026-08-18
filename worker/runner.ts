@@ -9,6 +9,10 @@ import { completeLocalRunnerJob, jobById, runnerInputById } from "./repository";
 import type { Env } from "./types";
 import { workflowExecutionPlan } from "./workflows";
 
+const RUNNER_STAGES = new Set<NonNullable<Job["executionStage"]>>([
+  "preparing-inputs", "submitting", "rendering", "downloading-output", "retaining",
+]);
+
 type RunnerRow = {
   id: string;
   ownerId: string;
@@ -91,8 +95,9 @@ export async function revokeLocalRunner(env: Env, ownerId: string, runnerId: str
     env.DB.prepare("update creative_runners set revoked_at = ?, active_job_id = null where id = ? and owner_id = ? and revoked_at is null")
       .bind(now, runnerId, ownerId),
     env.DB.prepare(`update creative_jobs set status = 'queued', progress = 1, runner_id = null, runner_lease_until = null,
-      error = null, updated_at = ? where owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
-      .bind(now, ownerId, runnerId),
+      error = null, execution_stage = 'queued', stage_updated_at = ?, updated_at = ?
+      where owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
+      .bind(now, now, ownerId, runnerId),
     env.DB.prepare(`update creative_dna_training_jobs set status = 'waiting-for-runner', progress = 0,
       runner_id = null, runner_lease_until = null, error = null, updated_at = ?, started_at = null
       where owner_id = ? and runner_id = ? and status = 'running'`)
@@ -140,10 +145,11 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();
   const claimed = await env.DB.prepare(`update creative_jobs set status = 'running', progress = max(progress, 5),
-    runner_id = ?, runner_lease_until = ?, error = null, updated_at = ?
+    runner_id = ?, runner_lease_until = ?, error = null, started_at = coalesce(started_at, ?),
+    execution_stage = 'preparing-inputs', stage_updated_at = ?, updated_at = ?
     where id = ? and owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)`)
-    .bind(runner.id, leaseUntil, nowValue, candidate.id, runner.ownerId, nowValue, runner.id).run();
+    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, nowValue, runner.id).run();
   if (!claimed.meta.changes) return null;
   await env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
     .bind(candidate.id, nowValue, runner.id, runner.ownerId).run();
@@ -160,11 +166,14 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
 export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, jobId: string, input: RunnerJobHeartbeatRequest) {
   const progress = Math.max(5, Math.min(94, Math.round(Number(input.progress) || 5)));
   const upstreamId = boundedText(input.upstreamId, 120) || null;
+  const stage = RUNNER_STAGES.has(input.stage as NonNullable<Job["executionStage"]>) ? input.stage as NonNullable<Job["executionStage"]> : null;
   const now = new Date();
   const [changed] = await env.DB.batch([
-    env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?), runner_lease_until = ?, updated_at = ?
+    env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?),
+      execution_stage = coalesce(?, execution_stage), stage_updated_at = case when ? is null then stage_updated_at else ? end,
+      runner_lease_until = ?, updated_at = ?
       where id = ? and owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
-      .bind(progress, upstreamId, new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id),
+      .bind(progress, upstreamId, stage, stage, now.toISOString(), new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id),
     env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null")
       .bind(jobId, now.toISOString(), runner.id, runner.ownerId),
   ]);
@@ -177,9 +186,9 @@ export async function failLocalRunnerJob(env: Env, runner: RunnerIdentity, jobId
   const error = boundedText(errorValue, 500) || "local_runner_failed";
   const now = new Date().toISOString();
   const changed = await env.DB.prepare(`update creative_jobs set status = 'failed', error = ?, progress = max(progress, 5),
-    completed_at = ?, updated_at = ?, runner_lease_until = null where id = ? and owner_id = ? and runner_id = ?
+    execution_stage = 'failed', stage_updated_at = ?, completed_at = ?, updated_at = ?, runner_lease_until = null where id = ? and owner_id = ? and runner_id = ?
       and execution_target = 'local-comfyui' and status = 'running'`)
-    .bind(error, now, now, jobId, runner.ownerId, runner.id).run();
+    .bind(error, now, now, now, jobId, runner.ownerId, runner.id).run();
   if (!changed.meta.changes) throw new Error("runner_job_not_completable");
   await env.DB.prepare("update creative_runners set active_job_id = null, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ?")
     .bind(error, now, runner.id, runner.ownerId).run();

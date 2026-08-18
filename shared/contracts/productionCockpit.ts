@@ -10,6 +10,7 @@ import type {
   MediaAsset,
   Project,
 } from "./domain";
+import { formatGenerationDuration, generationTiming } from "./generationPerformance";
 
 export type ProductionCockpitSurface = "dna" | "gallery" | "queue" | "runtime";
 export type ProductionCockpitSeverity = "critical" | "warning" | "info";
@@ -19,6 +20,7 @@ export type ProductionCockpitActionKind =
   | "review-artifact"
   | "retry-generation"
   | "restart-training"
+  | "long-running-generation"
   | "runner-offline"
   | "runner-error";
 
@@ -157,7 +159,7 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       runnerName: runner?.name ?? null,
       runnerDevice: runner?.device ?? null,
       queuePosition: queuePosition.get(job.id) ?? null,
-      durationMs: elapsed(job.createdAt, job.completedAt, input.computedAt),
+      durationMs: elapsed(job.startedAt ?? job.createdAt, job.completedAt, input.computedAt),
       retainedBytes: artifact?.retention.size ?? 0,
       error: job.error,
       createdAt: job.createdAt,
@@ -230,6 +232,18 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       projectName: project?.name ?? "Unknown project", entityId: job.id, modality: job.modality,
       title: `${job.modality} production failed`, detail: job.error || "The durable job failed and can be retried without deleting its history.",
       actionLabel: "Retry as new job", surface: "queue", createdAt: job.completedAt ?? job.updatedAt,
+    });
+  }
+  for (const job of activeGeneration) {
+    const timing = generationTiming(job, input.computedAt);
+    if (!timing.isLongRunning) continue;
+    const project = projects.get(job.projectId);
+    actions.push({
+      id: `long-running-generation:${job.id}`, kind: "long-running-generation", severity: "warning", projectId: job.projectId,
+      projectName: project?.name ?? "Unknown project", entityId: job.id, modality: job.modality,
+      title: `${job.modality} run passed 20 minutes`,
+      detail: `${timing.stageLabel} for ${formatGenerationDuration(timing.executionMs ?? timing.totalMs)}. The run remains active; inspect its stamped workload and exact-revision history before changing settings.`,
+      actionLabel: "Inspect timing", surface: "queue", createdAt: job.stageUpdatedAt ?? job.updatedAt,
     });
   }
   const localWorkWaiting = [...input.jobs.filter((job) => (job.status === "queued" || job.status === "running") && job.provider === "local-comfyui"), ...activeTraining];

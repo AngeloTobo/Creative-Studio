@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.3.0";
+export const RUNNER_VERSION = "1.4.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -310,7 +310,7 @@ async function waitForOutput(config, bundle, promptId) {
       const progress = Math.min(90, 10 + Math.floor(elapsed / 30_000));
       const heartbeat = await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
         method: "POST",
-        body: JSON.stringify({ progress }),
+        body: JSON.stringify({ progress, stage: "rendering" }),
       });
       if (!heartbeat.continue) throw new Error("creative_studio_job_cancelled");
       lastHeartbeat = Date.now();
@@ -411,15 +411,25 @@ async function fetchOutput(config, output) {
 async function executeBundle(config, bundle) {
   try {
     const graph = await prepareGraph(config, bundle);
+    await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({ progress: 7, stage: "submitting" }),
+    });
     const promptId = bundle.job.upstreamId || await submitPrompt(config, graph, bundle.job.id);
-    if (!bundle.job.upstreamId) {
-      await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
-        method: "POST",
-        body: JSON.stringify({ progress: 8, upstreamId: promptId }),
-      });
-    }
+    await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({ progress: 8, upstreamId: promptId, stage: "rendering" }),
+    });
     const output = await waitForOutput(config, bundle, promptId);
+    await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({ progress: 92, stage: "downloading-output" }),
+    });
     const retained = await fetchOutput(config, output);
+    await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({ progress: 94, stage: "retaining" }),
+    });
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/complete`, {
       method: "POST",
       headers: {

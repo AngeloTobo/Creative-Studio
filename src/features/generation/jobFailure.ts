@@ -16,6 +16,8 @@ const FAILURE_SUMMARIES: Record<string, string> = {
   artifact_retention_not_configured: "Creative Studio artifact storage is not connected. Restore the R2 binding before retrying.",
   artifact_retention_verification_failed: "Creative Studio received media bytes that did not match the provider's declared size. Check the upstream output, then retry retention through a new job.",
   generation_in_progress: "The provider already has an active generation for this capability. Let it finish or cancel it upstream before retrying.",
+  generation_timed_out: "The remote AFDFW generation did not finish inside its 30-minute durable tracking window. Its timing and settings remain in history; inspect the stamped workload before retrying.",
+  comfyui_execution_timed_out: "Local ComfyUI did not return an output inside the 24-hour safety window. The prompt ID and settings remain recorded so the machine and workflow can be inspected before retrying.",
   runner_input_source_not_found: "A bound upload or generated artifact is no longer retained. Choose a current retained input and queue a new run.",
   runner_input_media_mismatch: "A bound workflow input has the wrong media type. Choose an image, audio file, or video that matches the workflow control.",
 };

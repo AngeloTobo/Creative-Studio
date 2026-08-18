@@ -1,0 +1,171 @@
+import type { GenerationExecutionStage, GenerationSettingsStamp, Job } from "./domain";
+
+export const GENERATION_LONG_RUN_THRESHOLD_MS = 20 * 60_000;
+
+export type GenerationWorkload = {
+  width: number | null;
+  height: number | null;
+  megapixels: number | null;
+  steps: number | null;
+  frames: number | null;
+  durationSeconds: number | null;
+  fps: number | null;
+  batchSize: number | null;
+  modelCount: number;
+  inputCount: number;
+  promptCharacters: number;
+  facts: string[];
+  likelyContributors: string[];
+  promptAssessment: string;
+};
+
+export type WorkflowRuntimeHistory = {
+  count: number;
+  medianMs: number | null;
+  fastestMs: number | null;
+};
+
+export type GenerationTiming = {
+  totalMs: number;
+  queueMs: number | null;
+  executionMs: number | null;
+  isLongRunning: boolean;
+  stage: GenerationExecutionStage;
+  stageLabel: string;
+};
+
+type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt">;
+
+const STAGE_LABELS: Record<GenerationExecutionStage, string> = {
+  queued: "Waiting in Creative Studio",
+  "provider-queued": "Waiting in provider queue",
+  "preparing-inputs": "Preparing retained inputs",
+  submitting: "Submitting workflow",
+  rendering: "Rendering in ComfyUI",
+  "downloading-output": "Downloading generated output",
+  retaining: "Verifying retained result",
+  completed: "Completed and retained",
+  failed: "Failed",
+  cancelled: "Tracking cancelled",
+};
+
+function finiteNumber(value: unknown) {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function parameterName(id: string) {
+  return (id.split("::").at(-1) ?? id).replaceAll("-", "_").toLowerCase();
+}
+
+function maximumParameter(parameters: GenerationSettingsStamp["parameters"], names: string[]) {
+  const values = Object.entries(parameters)
+    .filter(([id]) => names.includes(parameterName(id)))
+    .map(([, value]) => finiteNumber(value))
+    .filter((value): value is number => value !== null);
+  return values.length ? Math.max(...values) : null;
+}
+
+function compactNumber(value: number) {
+  return value >= 10 ? String(Math.round(value)) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function analyzeGenerationWorkload(source: WorkloadSource): GenerationWorkload {
+  const width = maximumParameter(source.parameters, ["width"]);
+  const height = maximumParameter(source.parameters, ["height"]);
+  const declaredMegapixels = maximumParameter(source.parameters, ["megapixels"]);
+  const megapixels = width && height ? width * height / 1_000_000 : declaredMegapixels;
+  const steps = maximumParameter(source.parameters, ["steps", "sampling_steps"]);
+  const frames = maximumParameter(source.parameters, ["frames", "frame_count", "num_frames"]);
+  const durationSeconds = maximumParameter(source.parameters, ["seconds", "duration", "max_duration"]);
+  const fps = maximumParameter(source.parameters, ["fps", "frame_rate"]);
+  const batchSize = maximumParameter(source.parameters, ["batch_size", "batch"]);
+  const modelCount = new Set(source.models.filter(Boolean)).size;
+  const inputCount = new Set([...(source.inputAssetIds ?? []), ...(source.inputArtifactIds ?? [])]).size;
+  const promptCharacters = source.prompt.trim().length;
+  const facts: string[] = [];
+  if (width && height) facts.push(`${Math.round(width)}×${Math.round(height)} · ${compactNumber(megapixels ?? 0)} MP`);
+  else if (megapixels) facts.push(`${compactNumber(megapixels)} MP target`);
+  if (steps) facts.push(`${compactNumber(steps)} steps`);
+  if (frames) facts.push(`${compactNumber(frames)} frames`);
+  if (durationSeconds) facts.push(`${compactNumber(durationSeconds)}s duration`);
+  if (fps) facts.push(`${compactNumber(fps)} fps`);
+  if (batchSize && batchSize > 1) facts.push(`batch ${compactNumber(batchSize)}`);
+  if (modelCount) facts.push(`${modelCount} ${modelCount === 1 ? "model" : "models"}`);
+  if (inputCount) facts.push(`${inputCount} retained ${inputCount === 1 ? "input" : "inputs"}`);
+
+  const likelyContributors: string[] = [];
+  if (megapixels && megapixels >= 1) likelyContributors.push(`${compactNumber(megapixels)} MP frame size`);
+  if (steps && steps >= 25) likelyContributors.push(`${compactNumber(steps)} sampling steps`);
+  if (frames && frames > 1) likelyContributors.push(`${compactNumber(frames)} generated frames`);
+  else if (durationSeconds && durationSeconds > 2) likelyContributors.push(`${compactNumber(durationSeconds)}s generated duration`);
+  if (batchSize && batchSize > 1) likelyContributors.push(`batch size ${compactNumber(batchSize)}`);
+  if (modelCount > 2) likelyContributors.push(`${modelCount} model files and possible first-run loading`);
+  if (inputCount) likelyContributors.push("input decoding or preprocessing");
+
+  const promptAssessment = promptCharacters > 8_000
+    ? `The prompt is unusually long (${promptCharacters.toLocaleString()} characters), so text encoding may add setup time; sampling is still usually the larger cost.`
+    : `The prompt is ${promptCharacters.toLocaleString()} characters; prompt wording is unlikely to be the main render-time cause.`;
+  return {
+    width, height, megapixels, steps, frames, durationSeconds, fps, batchSize,
+    modelCount, inputCount, promptCharacters, facts, likelyContributors, promptAssessment,
+  };
+}
+
+function inferredStage(job: Job): GenerationExecutionStage {
+  if (job.executionStage) return job.executionStage;
+  if (job.status === "completed") return "completed";
+  if (job.status === "failed") return "failed";
+  if (job.status === "cancelled") return "cancelled";
+  if (job.artifactId) return "retaining";
+  if (job.status === "running") return "rendering";
+  return "queued";
+}
+
+export function generationTiming(job: Job, now = new Date().toISOString()): GenerationTiming {
+  const created = new Date(job.createdAt).getTime();
+  const started = job.startedAt ? new Date(job.startedAt).getTime() : Number.NaN;
+  const ended = job.completedAt ? new Date(job.completedAt).getTime() : new Date(now).getTime();
+  const safeCreated = Number.isFinite(created) ? created : ended;
+  const totalMs = Math.max(0, ended - safeCreated);
+  const queueMs = Number.isFinite(started) ? Math.max(0, started - safeCreated) : null;
+  const executionMs = Number.isFinite(started) ? Math.max(0, ended - started) : null;
+  const active = job.status === "queued" || job.status === "running";
+  const longElapsed = executionMs ?? totalMs;
+  const stage = inferredStage(job);
+  return {
+    totalMs,
+    queueMs,
+    executionMs,
+    isLongRunning: active && longElapsed >= GENERATION_LONG_RUN_THRESHOLD_MS,
+    stage,
+    stageLabel: STAGE_LABELS[stage],
+  };
+}
+
+function completedExecutionMs(job: Job) {
+  if (job.status !== "completed" || !job.startedAt || !job.completedAt) return null;
+  const value = new Date(job.completedAt).getTime() - new Date(job.startedAt).getTime();
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function workflowRuntimeHistory(jobs: Job[], revisionId: string): WorkflowRuntimeHistory {
+  const durations = jobs
+    .filter((job) => job.settingsStamp.workflow?.revisionId === revisionId)
+    .map(completedExecutionMs)
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+  if (!durations.length) return { count: 0, medianMs: null, fastestMs: null };
+  const middle = Math.floor(durations.length / 2);
+  const medianMs = durations.length % 2 ? durations[middle] : (durations[middle - 1] + durations[middle]) / 2;
+  return { count: durations.length, medianMs, fastestMs: durations[0] };
+}
+
+export function formatGenerationDuration(milliseconds: number | null) {
+  if (milliseconds === null) return "not measured";
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}

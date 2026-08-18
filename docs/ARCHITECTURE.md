@@ -37,7 +37,7 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
-- Local Runner 1.3 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
+- Local Runner 1.4 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
 - In local-first mode the runner and browser call only the localhost BFF; two-second UI refresh and five-second runner claims therefore consume no Cloudflare allowance. The remote build fails closed to the one-minute polling floor.
 
 ## CreativeDNA vertical slice
@@ -69,7 +69,7 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 ## CreativeDNA evidence synthesis
 
 1. The owner starts an idempotent durable run from selected consented uploads, all explicitly training-ready accepted results in the project, and an optional base DNA version.
-2. An authenticated Local Runner 1.3 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
+2. An authenticated Local Runner 1.4 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
 3. The runner measures image pixels with Sharp, decodes bounded audio/video segments with the bundled local FFmpeg binary, and submits each selected upload to the bundled Gemma 4 multimodal ComfyUI graph. Image, audio, and video use explicit modality bindings; video supplies both decoded frames and its audio track.
 4. Gemma returns a detailed reusable media description while deterministic measurements, accepted-result prompt/settings context, and an optional base-DNA prior shape the eight CreativeDNA dimensions. The description keeps its model, prompt, workflow version, ComfyUI prompt ID, and inference settings as durable source provenance.
 5. Each source produces the detailed description, bounded observations, primitive metrics, eight dimension values, and confidence. The runner aggregates the dimensions deterministically rather than treating free-form model text as authority.
@@ -82,12 +82,14 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 - Queue delivery is guarded by a D1 lease, and artifact creation is unique per job.
 - Retention is idempotent at a deterministic R2 key. A failed or interrupted copy remains at 95% with a `retaining` artifact and is retried without regenerating upstream.
 - Generation has a 30-minute deadline and bounded exponential reconciliation delay. A confirmed result awaiting retention continues retrying instead of being discarded at that generation deadline.
+- Local workflow generation persists its actual start and stage transitions. Crossing 20 minutes creates an awareness warning but does not cancel ComfyUI; local history polling may continue through transient 15-second request timeouts up to the runner's 24-hour safety boundary.
 - Retry creates a new job with `retryOfJobId` lineage; it never rewrites the failed or cancelled record.
 - Cancel stops Creative Studio tracking only before a completed result enters retention. Once a result exists, retention cannot be cancelled.
 - Local workflow jobs use a separate `local-comfyui` execution target, never enter the AFDFW queue consumer, and remain queued while the runner is offline.
 - A paired runner claims one job with a two-minute renewable lease. A restart or lost heartbeat makes the job reclaimable; deterministic artifact IDs and R2 keys prevent duplicate retained results.
 - ComfyUI history polling treats a temporarily busy or timed-out localhost endpoint as transient while continuing Creative Studio heartbeats. A retry after an eligible runner, output-download, or retention failure carries the prior ComfyUI prompt ID into a new lineage-linked job, avoiding duplicate GPU work.
 - Exact workflow revision, SHA-256 hash, parameters, model names, media-parameter-to-asset bindings, DNA lineage, and retry lineage remain stamped on the job and artifact.
+- Queue diagnostics combine those stamped workload facts with measured queue/execution time and completed runs from the exact immutable revision. They identify likely contributors without claiming a provider or node bottleneck that was not observed.
 
 ## Workflow-backed generation
 
