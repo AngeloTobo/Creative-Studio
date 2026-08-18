@@ -4,23 +4,15 @@ import { ArtifactThumb, Orb, ProjectAvatar, SectionHead, StatusDot } from "../..
 import type { StudioView } from "../../app/views";
 
 const NODES: Array<{ id: StudioView; label: string; sub: string; icon: IconName; accent: string; angle: number }> = [
-  { id: "dna", label: "CreativeDNA", sub: "Build, train, and generate", icon: "dna", accent: "var(--pink)", angle: 220 },
-  { id: "gallery", label: "Artifacts", sub: "Review retained outputs", icon: "gallery", accent: "var(--amber)", angle: 140 },
-  { id: "projects", label: "Projects", sub: "Your creative workspaces", icon: "projects", accent: "var(--teal)", angle: 90 },
-  { id: "cockpit", label: "Production", sub: "Runs, decisions, and recovery", icon: "analytics", accent: "var(--violet)", angle: 40 },
+  { id: "gallery", label: "Artifacts", sub: "Review retained outputs", icon: "gallery", accent: "var(--amber)", angle: 150 },
+  { id: "projects", label: "Projects", sub: "Your creative workspaces", icon: "projects", accent: "var(--teal)", angle: 88 },
+  { id: "cockpit", label: "Production", sub: "Runs, decisions, and recovery", icon: "analytics", accent: "var(--violet)", angle: 30 },
   { id: "system", label: "System", sub: "Local runner and services", icon: "runtime", accent: "var(--cyan)", angle: 320 },
 ];
 
-const CREATE_CARDS: Array<{ id: StudioView; label: string; desc: string; icon: IconName; accent: string }> = [
-  { id: "dna", label: "CreativeDNA", desc: "Build or train from retained uploads.", icon: "dna", accent: "var(--pink)" },
-  { id: "dna", label: "Image", desc: "Translate saved DNA into a visual job.", icon: "image", accent: "var(--cyan)" },
-  { id: "dna", label: "Music", desc: "Translate the same DNA into a music job.", icon: "music", accent: "var(--violet)" },
-];
-
 export function PortalView({ navigate }: { navigate: (view: StudioView) => void }) {
-  const { snapshot, activeProjectId, selectDna } = useStudio();
+  const { snapshot, activeProjectId } = useStudio();
   const project = snapshot?.projects.find((item) => item.id === activeProjectId);
-  const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && (job.status === "queued" || job.status === "running")) ?? [];
   const recentArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId).slice(0, 4) ?? [];
 
@@ -34,19 +26,9 @@ export function PortalView({ navigate }: { navigate: (view: StudioView) => void 
             return <button key={node.id} className={`onode${leftSide ? " left" : ""}`} style={{ left: `${50 + Math.cos(radians) * 40}%`, top: `${47 + Math.sin(radians) * 40}%`, "--na": node.accent } as React.CSSProperties} onClick={() => navigate(node.id)}><span className="onode-ic"><Icon name={node.icon} size={24} /></span><span className="onode-tx"><strong className="ont-1">{node.label}</strong><span className="ont-2">{node.sub}</span></span></button>;
           })}
       </div>
-      <button className="portal-input portal-prompt glass-strong" onClick={() => navigate("dna")}><span>Start with an idea… shape it into CreativeDNA.</span><i><Icon name="arrow" size={19} /></i></button>
+      <button className="portal-input portal-prompt glass-strong" onClick={() => navigate("dna")}><span>Upload, choose a workflow, and create.</span><i><Icon name="arrow" size={19} /></i></button>
 
-      <div className="portal-bottom">
-        <section className="panel glass">
-          <SectionHead label="Create Something New" />
-          <div className="create-cards studio-create-cards">
-            {CREATE_CARDS.map((card, index) => <button key={`${card.label}-${index}`} className="ccard" style={{ "--ca": card.accent } as React.CSSProperties} onClick={() => {
-              if (card.label !== "CreativeDNA" && projectDna[0]) selectDna(projectDna[0]);
-              navigate(card.id);
-            }}><span className="ccard-top"><span className="ccard-ic"><Icon name={card.icon} size={20} /></span><strong className="ccard-name">{card.label}</strong><span className="ccard-desc">{card.desc}</span></span><span className="ccard-art"><span className="cca-g" /><span className="cca-wave">{Array.from({ length: 22 }, (_, bar) => <i key={bar} style={{ height: `${18 + Math.abs(Math.sin(bar * 0.9 + card.label.length)) * 80}%` }} />)}</span></span></button>)}
-          </div>
-        </section>
-
+      <div className="portal-bottom portal-bottom-single">
         <section className="panel glass">
           <SectionHead label="Recent Artifacts" action="View all" onAction={() => navigate("gallery")} />
           <div className="recent-grid studio-recent-grid">

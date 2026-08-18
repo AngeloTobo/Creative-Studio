@@ -7,7 +7,7 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
-  const dnaButton = page.getByRole("button", { name: /CreativeDNA/ }).first();
+  const dnaButton = page.locator(".sidebar").getByRole("button", { name: "Create", exact: true });
   await expect(dnaButton).toBeFocused();
   const focusStyle = await dnaButton.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -18,7 +18,7 @@ test("desktop navigation and focus treatment work from the keyboard", async ({ p
 
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/dna$/);
-  await expect(page.getByRole("heading", { name: "CreativeDNA Studio", exact: true }).first()).toBeVisible();
+  await expect(page.locator(".topbar").getByRole("heading", { name: "Create", exact: true })).toBeVisible();
 });
 
 test("the consolidated shell exposes six primary destinations without repeated desktop chrome", async ({ page }, testInfo) => {
@@ -27,7 +27,7 @@ test("the consolidated shell exposes six primary destinations without repeated d
 
   const navigation = page.locator(".sidebar .nav-item");
   await expect(navigation).toHaveCount(6);
-  await expect(navigation).toHaveText(["Home", "CreativeDNATRAIN", "Artifacts", "ProductionLIVE", "Projects", "System"]);
+  await expect(navigation).toHaveText(["Home", "Create", "Artifacts", "ProductionLIVE", "Projects", "System"]);
   await expect(page.locator(".rightpanel")).toHaveCount(0);
   await expect(page.locator(".player")).toHaveCount(0);
 

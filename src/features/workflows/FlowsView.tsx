@@ -16,6 +16,7 @@ export function FlowsView() {
   const [description, setDescription] = useState("");
   const [values, setValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
+  const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
 
   const effectiveValues = selected && valuesRevisionId === selected.currentRevision.id ? values : {};
   const changed = selected?.currentRevision.parameters.some((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value)) ?? false;
@@ -44,19 +45,19 @@ export function FlowsView() {
     <section className="workflow-import glass">
       <div className="workflow-import-copy"><span className="eyebrow">Workflow library</span><h2>Upload a ComfyUI JSON</h2><p>The original graph is preserved and content-hashed. Creative Studio detects editable prompts and safe generation controls, then saves every modification as a new immutable version.</p></div>
       <label className="workflow-drop">
-        <input ref={inputRef} type="file" accept="application/json,.json" disabled={busy || snapshot?.adapter.development} onChange={(event) => {
+        <input ref={inputRef} type="file" accept="application/json,.json" disabled={busy || uiOnlyDevelopment} onChange={(event) => {
           const next = event.target.files?.[0] ?? null;
           setFile(next);
           if (next && !name) setName(next.name.replace(/\.json$/i, "").replaceAll("_", " "));
         }} />
         <span className="media-drop-icon"><Icon name="flows" size={23} /></span>
         <strong>{file?.name ?? "Choose workflow JSON"}</strong>
-        <small>{snapshot?.adapter.development ? "Connect through the Creative Studio Worker to import real workflows." : "ComfyUI API and UI graph exports · maximum 1 MB"}</small>
+        <small>{uiOnlyDevelopment ? "Connect through the Creative Studio Worker to import real workflows." : "ComfyUI API and UI graph exports · maximum 1 MB"}</small>
       </label>
       <div className="workflow-import-fields">
-        <label className="field"><span>Workflow name</span><input value={name} disabled={busy || snapshot?.adapter.development} onChange={(event) => setName(event.target.value)} placeholder="Defaults to the JSON filename" /></label>
-        <label className="field"><span>Description</span><input value={description} disabled={busy || snapshot?.adapter.development} onChange={(event) => setDescription(event.target.value)} placeholder="What this workflow is for" /></label>
-        <button className="btn btn-primary" disabled={!file || busy || snapshot?.adapter.development} onClick={() => void importFile()}><Icon name="plus" size={16} /> Import workflow</button>
+        <label className="field"><span>Workflow name</span><input value={name} disabled={busy || uiOnlyDevelopment} onChange={(event) => setName(event.target.value)} placeholder="Defaults to the JSON filename" /></label>
+        <label className="field"><span>Description</span><input value={description} disabled={busy || uiOnlyDevelopment} onChange={(event) => setDescription(event.target.value)} placeholder="What this workflow is for" /></label>
+        <button className="btn btn-primary" disabled={!file || busy || uiOnlyDevelopment} onClick={() => void importFile()}><Icon name="plus" size={16} /> Import workflow</button>
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
     </section>

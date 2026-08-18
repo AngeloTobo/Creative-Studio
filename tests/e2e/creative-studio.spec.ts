@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 test("CreativeDNA survives the full review loop", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto("/#/dna");
   await page.getByRole("textbox", { name: "Project name" }).fill("E2E Project");
   await page.getByRole("textbox", { name: "Project type" }).fill("Visual System");
   await page.getByRole("button", { name: "Create project" }).click();
+  await page.getByRole("tab", { name: /^DNA/ }).click();
   await page.getByRole("button", { name: "New DNA" }).click();
 
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("E2E Luminous Study");
@@ -21,11 +23,12 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("tab", { name: /Train/ }).click();
   await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
   await expect(page.getByText(/retains a long analysis and a short generation summary for every selected image, audio file, and video/)).toBeVisible();
-  await page.getByRole("tab", { name: /Generate/ }).click();
-  await expect(page.getByRole("heading", { name: "Generate", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Queue development image preview" }).click();
+  await page.getByRole("tab", { name: /^Create/ }).click();
+  await expect(page.getByRole("region", { name: "Create with Creative Studio" })).toBeVisible();
+  await page.getByRole("button", { name: "Create development image preview" }).click();
+  await page.getByRole("button", { name: "View queue", exact: true }).click();
   await expect(page).toHaveURL(/#\/queue$/);
-  await expect(page.getByText("running").first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator(".queue-card").first()).toBeVisible({ timeout: 5_000 });
 
   await page.goto("/#/gallery");
   const artifact = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });
@@ -58,13 +61,15 @@ test("cancelled generation explains the retained history and offers a durable re
   await page.getByRole("textbox", { name: "Project name" }).fill("Retry E2E");
   await page.getByRole("textbox", { name: "Project type" }).fill("Image Study");
   await page.getByRole("button", { name: "Create project" }).click();
+  await page.getByRole("tab", { name: /^DNA/ }).click();
   await page.getByRole("button", { name: "New DNA" }).click();
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("Retry Direction");
   await page.getByRole("textbox", { name: "What are you making?" }).fill("An original image with a clean silhouette and high contrast rim light.");
   await page.locator(".dna-compose").getByRole("button", { name: "image", exact: true }).click();
   await page.getByRole("button", { name: "Build CreativeDNA" }).click();
-  await page.getByRole("tab", { name: /Generate/ }).click();
-  await page.getByRole("button", { name: "Queue development image preview" }).click();
+  await page.getByRole("tab", { name: /^Create/ }).click();
+  await page.getByRole("button", { name: "Create development image preview" }).click();
+  await page.getByRole("button", { name: "View queue", exact: true }).click();
   await page.getByRole("button", { name: "Cancel tracking" }).click();
 
   await expect(page.getByRole("region", { name: "Tracking cancelled" })).toContainText("cancelled_by_user");

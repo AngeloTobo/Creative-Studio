@@ -25,7 +25,7 @@ export function MediaView({ onGenerate }: { onGenerate: () => void }) {
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
   const assets = snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [];
-  const development = Boolean(snapshot?.adapter.development);
+  const development = snapshot?.adapter.id === "development-local-storage";
 
   const choose = (next: File | null) => {
     setLocalError("");
@@ -63,7 +63,7 @@ export function MediaView({ onGenerate }: { onGenerate: () => void }) {
       </label>
       <label className="training-consent">
         <input type="checkbox" checked={trainingEligible} disabled={development || busy} onChange={(event) => setTrainingEligible(event.target.checked)} />
-        <span><strong>Eligible for CreativeDNA training</strong><small>Records consent and asset lineage. Upload first, then explicitly start a training run from CreativeDNA Studio.</small></span>
+        <span><strong>Eligible for CreativeDNA training</strong><small>Records consent and asset lineage. Upload first, then explicitly start a training run from Create.</small></span>
       </label>
       <div className="media-upload-actions">
         <span>{assets.length} retained {assets.length === 1 ? "asset" : "assets"} in this project</span>
@@ -73,7 +73,7 @@ export function MediaView({ onGenerate }: { onGenerate: () => void }) {
     </section>
 
     <section className="media-library">
-      <div className="media-library-head"><div><span className="eyebrow">Retained library</span><h2>Your source assets</h2></div><button className="btn btn-ghost" onClick={onGenerate}><Icon name="dna" size={16} /> Open CreativeDNA Studio</button></div>
+      <div className="media-library-head"><div><span className="eyebrow">Retained library</span><h2>Your source assets</h2></div><button className="btn btn-ghost" onClick={onGenerate}><Icon name="wand" size={16} /> Back to Create</button></div>
       {assets.length ? <div className="media-grid">{assets.map((asset) => <article className="media-card glass" key={asset.id}>
         <div className={`media-preview ${asset.kind}`}><MediaPreview asset={asset} /></div>
         <div className="media-card-body">

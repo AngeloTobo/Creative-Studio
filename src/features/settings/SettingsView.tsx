@@ -14,6 +14,7 @@ export function SettingsView() {
   const [enrollment, setEnrollment] = useState<EnrollLocalRunnerResponse | null>(null);
   const [copied, setCopied] = useState<"token" | "command" | null>(null);
   const runners = snapshot?.runners ?? [];
+  const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
   const installCommand = "powershell -ExecutionPolicy Bypass -File .\\scripts\\install-local-runner.ps1";
 
   const enroll = async () => {
@@ -32,9 +33,9 @@ export function SettingsView() {
       <header><div><span className="eyebrow">Local execution</span><h2>Creative Studio Local Runner</h2><p>Pair this private Windows machine once. The agent then claims durable API-format ComfyUI jobs even when the browser is closed.</p></div><span className="runner-security"><Icon name="shield" size={17} /> Hashed credential · revocable</span></header>
       <div className="runner-enroll">
         <label className="field"><span>Machine name</span><input className="input" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} /></label>
-        <button className="btn btn-primary" disabled={busy || !name.trim() || snapshot?.adapter.development} onClick={() => void enroll()}><Icon name="plus" size={16} /> Create one-time token</button>
+        <button className="btn btn-primary" disabled={busy || !name.trim() || uiOnlyDevelopment} onClick={() => void enroll()}><Icon name="plus" size={16} /> Create one-time token</button>
       </div>
-      {snapshot?.adapter.development ? <p className="runner-boundary">Runner enrollment is available through the deployed Creative Studio Worker.</p> : null}
+      {uiOnlyDevelopment ? <p className="runner-boundary">Runner enrollment is available through the Creative Studio Worker or local BFF.</p> : null}
       {enrollment ? <section className="runner-token" role="status">
         <header><span><Icon name="check" size={18} /><strong>Token created for {enrollment.runner.name}</strong></span><em>Shown once</em></header>
         <p>Install from this repository on the ComfyUI machine. The installer prompts securely for the token, restricts its config file to your Windows account, creates an at-logon task, and starts it now.</p>

@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { CreativeDnaTarget } from "../../../shared/contracts";
 import { creativeDnaCanGenerate, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { TrainingReviewPanel } from "./TrainingReviewPanel";
+
+const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
+const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 function statusLabel(status: string) {
   if (status === "waiting-for-runner") return "Waiting for local trainer";
@@ -10,7 +13,8 @@ function statusLabel(status: string) {
 }
 
 export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: { onMedia: () => void; reviewJobId?: string; onReviewJobHandled?: () => void }) {
-  const { snapshot, activeProjectId, activeDna, startDnaTraining, cancelDnaTraining, reviewDnaTraining, busy, error } = useStudio();
+  const { snapshot, activeProjectId, activeDna, uploadMedia, startDnaTraining, cancelDnaTraining, reviewDnaTraining, busy, error } = useStudio();
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const eligibleAssets = useMemo(() => snapshot?.mediaAssets
     .filter((asset) => asset.projectId === activeProjectId && asset.trainingEligible) ?? [], [activeProjectId, snapshot?.mediaAssets]);
   const productionLoop = snapshot?.productionLoops.find((loop) => loop.projectId === activeProjectId) ?? null;
@@ -23,11 +27,36 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
   const [targetModality, setTargetModality] = useState<CreativeDnaTarget>(activeDna?.targetModality ?? "image");
   const [includeExamples, setIncludeExamples] = useState(true);
   const [reviewingJobId, setReviewingJobId] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState("");
   const selectedAssetIds = selected.filter((assetId) => eligibleAssets.some((asset) => asset.id === assetId));
+  const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
 
   const toggle = (assetId: string) => setSelected((current) => current.includes(assetId)
     ? current.filter((id) => id !== assetId)
     : [...current, assetId]);
+
+  const chooseUpload = (file: File | null) => {
+    setUploadError("");
+    if (file && file.size > MAX_MEDIA_BYTES) {
+      setUploadFile(null);
+      setUploadError("Choose a file no larger than 100 MB.");
+      return;
+    }
+    setUploadFile(file);
+  };
+
+  const uploadForTraining = async () => {
+    if (!uploadFile || uiOnlyDevelopment) return;
+    try {
+      const asset = await uploadMedia(uploadFile, true);
+      setSelected((current) => current.includes(asset.id) ? current : [...current, asset.id]);
+      setUploadFile(null);
+      if (uploadInputRef.current) uploadInputRef.current.value = "";
+    } catch {
+      // The provider exposes a normalized, visible error.
+    }
+  };
 
   const start = async () => {
     await startDnaTraining({
@@ -64,13 +93,20 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
 
     <div className="dna-training-layout">
       <div className="dna-training-inputs">
-        <div className="training-section-head"><span><strong>Training uploads</strong><small>{eligibleAssets.length} eligible</small></span><button className="link-btn" onClick={onMedia}>Manage uploads</button></div>
+        <div className="training-section-head"><span><strong>Training uploads</strong><small>{eligibleAssets.length} eligible</small></span><button className="link-btn" onClick={onMedia}>Full media library</button></div>
+        <div className={`training-inline-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
+          <input ref={uploadInputRef} type="file" accept={ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => chooseUpload(event.target.files?.[0] ?? null)} />
+          <button className="btn btn-ghost" disabled={busy || uiOnlyDevelopment} onClick={() => uploadInputRef.current?.click()}><Icon name="plus" size={15} /> Choose media</button>
+          <span><strong>{uploadFile?.name ?? "Image, audio, or video"}</strong><small>{uiOnlyDevelopment ? "Real uploads require the Creative Studio Worker." : uploadFile ? `${uploadFile.type || "media"} · training consent included` : "Upload here and it is selected for this run."}</small></span>
+          <button className="btn btn-primary" disabled={!uploadFile || busy || uiOnlyDevelopment} onClick={() => void uploadForTraining()}>{busy ? "Uploading…" : "Upload"}</button>
+        </div>
+        {uploadError ? <div className="inline-error" role="alert">{uploadError}</div> : null}
         {eligibleAssets.length ? <div className="training-asset-grid">{eligibleAssets.map((asset) => <label key={asset.id} className={`training-asset${selectedAssetIds.includes(asset.id) ? " selected" : ""}`}>
           <input type="checkbox" checked={selectedAssetIds.includes(asset.id)} disabled={busy} onChange={() => toggle(asset.id)} />
           <span className="training-asset-icon"><Icon name={asset.kind === "audio" ? "music" : asset.kind} size={18} /></span>
           <span><strong>{asset.name}</strong><small>{asset.kind} · {asset.mimeType}</small></span>
           <Icon name={selectedAssetIds.includes(asset.id) ? "check" : "plus"} size={16} />
-        </label>)}</div> : <div className="training-empty"><Icon name="image" size={25} /><span><strong>No consented uploads yet.</strong><small>Upload media with CreativeDNA training enabled, then select it here.</small></span><button className="btn btn-ghost" onClick={onMedia}>Upload media</button></div>}
+        </label>)}</div> : <div className="training-empty"><Icon name="image" size={25} /><span><strong>No consented uploads yet.</strong><small>Choose a real file above; it will be retained and selected for this training run.</small></span></div>}
         {eligibleAssets.length ? <button className="link-btn training-select-all" onClick={() => setSelected(selectedAssetIds.length === eligibleAssets.length ? [] : eligibleAssets.map((asset) => asset.id))}>{selectedAssetIds.length === eligibleAssets.length ? "Clear selection" : "Select all eligible uploads"}</button> : null}
       </div>
 
@@ -79,8 +115,8 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
         <div className="field"><span>Primary output</span><div className="seg">{(["image", "music"] as CreativeDnaTarget[]).map((target) => <button key={target} className={targetModality === target ? "on" : ""} onClick={() => setTargetModality(target)}><Icon name={target} size={15} /> {target}</button>)}</div></div>
         <label className="training-consent training-evidence-toggle"><input type="checkbox" checked={includeExamples} disabled={busy || !trainingExamples.length} onChange={(event) => setIncludeExamples(event.target.checked)} /><span><strong>Include fresh accepted evidence</strong><small>{trainingExamples.length} prompt + exact-settings {trainingExamples.length === 1 ? "example" : "examples"} ready{productionLoop?.counts.evidenceUsed ? ` · ${productionLoop.counts.evidenceUsed} already captured` : ""}</small></span></label>
         <div className="training-base"><span className="eyebrow">Lineage</span><strong>{activeDna ? `Evolve ${activeDna.name} v${activeDna.version}` : "Create a new DNA root"}</strong><small>The completed runner result becomes a new immutable CreativeDNA version.</small></div>
-        <button className="btn btn-primary training-start" disabled={busy || !hasInputs || snapshot?.adapter.development || !activeDnaReviewed} onClick={() => void start()}><Icon name="dna" size={17} /> Start training</button>
-        {snapshot?.adapter.development ? <p className="training-boundary">Real uploads and training runs require the Creative Studio Worker.</p> : !activeDnaReviewed ? <p className="training-boundary">Review the selected trained CreativeDNA before using it as another training baseline.</p> : <p className="training-boundary">The run is durable immediately. It remains visibly waiting until your authenticated local trainer claims it.</p>}
+        <button className="btn btn-primary training-start" disabled={busy || !hasInputs || uiOnlyDevelopment || !activeDnaReviewed} onClick={() => void start()}><Icon name="dna" size={17} /> Start training</button>
+        {uiOnlyDevelopment ? <p className="training-boundary">Real uploads and training runs require the Creative Studio Worker.</p> : !activeDnaReviewed ? <p className="training-boundary">Review the selected trained CreativeDNA before using it as another training baseline.</p> : <p className="training-boundary">The run is durable immediately. It remains visibly waiting until your authenticated local trainer claims it.</p>}
       </div>
     </div>
 
