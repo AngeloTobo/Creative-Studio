@@ -4,6 +4,8 @@ import {
   type CreateProjectRequest,
   type Project,
   type ProjectHue,
+  type ProductionLoopStage,
+  type ProductionLoopSurface,
   type UpdateProjectRequest,
 } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
@@ -11,9 +13,28 @@ import { Icon } from "../../components/Icon";
 import { ProjectAvatar } from "../../components/Visuals";
 
 type ProjectFormValue = CreateProjectRequest & { status: "active" | "paused" };
+type ProjectDestination = "dna" | "gallery" | "cockpit" | "queue";
 
-function ProjectForm({ project, busy, onSave, onCancel }: {
+const STAGE_LABELS: Record<ProductionLoopStage, string> = {
+  "needs-dna": "Direction needed",
+  "ready-to-generate": "Ready to create",
+  "generation-running": "Generation running",
+  "review-output": "Review needed",
+  "generation-failed": "Run needs attention",
+  "evidence-ready": "Training evidence ready",
+  "training-running": "Training running",
+  "review-training": "Training review needed",
+};
+
+function destinationFor(surface: ProductionLoopSurface): ProjectDestination {
+  if (surface === "artifacts") return "gallery";
+  if (surface === "queue") return "queue";
+  return "dna";
+}
+
+function ProjectForm({ project, firstProject = false, busy, onSave, onCancel }: {
   project?: Project;
+  firstProject?: boolean;
   busy: boolean;
   onSave: (input: ProjectFormValue) => Promise<void>;
   onCancel?: () => void;
@@ -34,10 +55,10 @@ function ProjectForm({ project, busy, onSave, onCancel }: {
   return (
     <form className="project-form glass" onSubmit={(event) => void submit(event)}>
       <div className="project-form-head">
-        <div><span className="eyebrow">{project ? "Project details" : "Start with real work"}</span><h2>{project ? `Edit ${project.name}` : "Create your first project"}</h2></div>
+        <div><span className="eyebrow">{project ? "Project details" : firstProject ? "Start with real work" : "New workspace"}</span><h2>{project ? `Edit ${project.name}` : firstProject ? "Create your first project" : "New project"}</h2></div>
         {onCancel ? <button type="button" className="btn-icon" aria-label="Close project form" onClick={onCancel}><Icon name="close" size={18} /></button> : null}
       </div>
-      {!project ? <p className="project-form-copy">Projects hold their own CreativeDNA, jobs, artifacts, and review history. Nothing is created until you name it.</p> : null}
+      {!project ? <p className="project-form-copy">A project keeps its direction, source media, workflows, jobs, results, and review history together.</p> : null}
       <div className="project-fields">
         <label className="field"><span>Name</span><input className="input" aria-label="Project name" value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} /></label>
         <label className="field"><span>Type</span><input className="input" aria-label="Project type" value={type} maxLength={80} required onChange={(event) => setType(event.target.value)} /></label>
@@ -54,15 +75,22 @@ function ProjectForm({ project, busy, onSave, onCancel }: {
   );
 }
 
-export function ProjectsView() {
+export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestination) => void }) {
   const { snapshot, activeProjectId, setActiveProjectId, createProject, updateProject, archiveProject, busy, error } = useStudio();
   const projects = snapshot?.projects ?? [];
   const availableProjects = projects.filter((project) => project.status !== "archived");
+  const archivedProjects = projects.filter((project) => project.status === "archived");
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
 
   const showCreateForm = creating || availableProjects.length === 0;
+  const editingProject = projects.find((project) => project.id === editingId) ?? null;
+
+  const open = (projectId: string, destination: ProjectDestination) => {
+    setActiveProjectId(projectId);
+    onOpen(destination);
+  };
 
   const create = async (input: ProjectFormValue) => {
     const request: CreateProjectRequest = {
@@ -93,25 +121,38 @@ export function ProjectsView() {
 
   return (
     <section className={`projects-view fade-up${availableProjects.length === 0 ? " project-onboarding" : ""}`}>
-      {availableProjects.length ? <div className="projects-toolbar"><div><span className="eyebrow">Product-owned workspaces</span><h2>Projects</h2></div><button className="btn btn-primary" onClick={() => { setEditingId(null); setCreating(true); }}><Icon name="plus" size={16} /> New project</button></div> : null}
-      {showCreateForm ? <ProjectForm busy={busy} onSave={create} onCancel={availableProjects.length ? () => setCreating(false) : undefined} /> : null}
+      {availableProjects.length ? <div className="projects-toolbar"><div><span className="eyebrow">Workspace manager</span><h2>Choose your workspace</h2><p>{availableProjects.length} available · switch context or go directly to the work.</p></div><button className="btn btn-primary" onClick={() => { setEditingId(null); setCreating(true); }}><Icon name="plus" size={16} /> New project</button></div> : null}
+      {showCreateForm ? <ProjectForm firstProject={!availableProjects.length} busy={busy} onSave={create} onCancel={availableProjects.length ? () => setCreating(false) : undefined} /> : null}
+      {editingProject ? <ProjectForm key={editingProject.updatedAt} project={editingProject} busy={busy} onSave={(input) => update(editingProject.id, input)} onCancel={() => setEditingId(null)} /> : null}
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="projects-grid">
-        {projects.map((project) => {
+        {availableProjects.map((project) => {
           const jobs = snapshot?.jobs.filter((job) => job.projectId === project.id).length ?? 0;
           const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === project.id).length ?? 0;
-          const archived = project.status === "archived";
-          return <article key={project.id} className={`project-card glass${activeProjectId === project.id ? " on" : ""}${archived ? " archived" : ""}`}>
-            <button className="project-select" disabled={archived} onClick={() => setActiveProjectId(project.id)}>
-              <ProjectAvatar project={project} size={58} />
-              <span className="project-card-main"><span><strong>{project.name}</strong><i className={`badge ${project.status === "active" ? "active" : "draft"}`}>{project.status}</i></span><small>{project.type}</small>{project.description ? <p>{project.description}</p> : null}{project.note ? <em>{project.note}</em> : null}</span>
-              <span className="project-counts"><b>{jobs}<small>jobs</small></b><b>{artifacts}<small>artifacts</small></b>{!archived ? <Icon name="chevron" size={18} /> : null}</span>
-            </button>
-            {!archived ? <div className="project-actions"><button className="btn btn-ghost" disabled={busy} onClick={() => { setCreating(false); setEditingId(project.id); setConfirmArchiveId(null); }}><Icon name="settings" size={15} /> Edit</button><button className="btn project-archive" disabled={busy} onClick={() => void archive(project.id)}><Icon name="archive" size={15} /> {confirmArchiveId === project.id ? "Confirm archive" : "Archive"}</button></div> : null}
-            {editingId === project.id ? <ProjectForm key={project.updatedAt} project={project} busy={busy} onSave={(input) => update(project.id, input)} onCancel={() => setEditingId(null)} /> : null}
+          const dna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === project.id).length ?? 0;
+          const sources = snapshot?.mediaAssets.filter((asset) => asset.projectId === project.id).length ?? 0;
+          const loop = snapshot?.productionLoops.find((item) => item.projectId === project.id) ?? null;
+          const current = activeProjectId === project.id;
+          return <article key={project.id} className={`project-card project-workspace-card glass${current ? " on" : ""}`}>
+            <header className="project-card-head">
+              <ProjectAvatar project={project} size={52} />
+              <span className="project-card-main"><span><strong>{project.name}</strong><i className={`badge ${project.status === "active" ? "active" : "draft"}`}>{project.status}</i>{current ? <i className="project-current">current</i> : null}</span><small>{project.type} · updated {new Date(project.updatedAt).toLocaleDateString()}</small>{project.description ? <p>{project.description}</p> : null}</span>
+            </header>
+            {project.note ? <p className="project-note"><Icon name="star" size={14} /> {project.note}</p> : null}
+            <div className="project-progress">
+              <span className={`production-loop-stage ${loop?.stage ?? "needs-dna"}`}>{loop ? STAGE_LABELS[loop.stage] : "Direction needed"}</span>
+              <span><small>Next</small><strong>{loop?.nextAction.label ?? "Build CreativeDNA"}</strong><p>{loop?.nextAction.detail ?? "Create the first reusable direction for this workspace."}</p></span>
+              <button className="btn btn-primary" onClick={() => open(project.id, loop ? destinationFor(loop.nextAction.surface) : "dna")}>{loop?.nextAction.label ?? "Open Create"} <Icon name="arrow" size={14} /></button>
+            </div>
+            <div className="project-metrics"><span><b>{dna}</b><small>DNA</small></span><span><b>{sources}</b><small>sources</small></span><span><b>{jobs}</b><small>jobs</small></span><span><b>{artifacts}</b><small>results</small></span></div>
+            <footer className="project-actions">
+              <div className="project-open-actions"><button className="btn btn-ghost" onClick={() => open(project.id, "dna")}><Icon name="wand" size={15} /> Create</button><button className="btn btn-ghost" onClick={() => open(project.id, "gallery")}><Icon name="gallery" size={15} /> Artifacts</button><button className="btn btn-ghost" onClick={() => open(project.id, "cockpit")}><Icon name="analytics" size={15} /> Production</button></div>
+              <div className="project-admin-actions"><button className="btn btn-ghost" aria-label={`Edit ${project.name}`} disabled={busy} onClick={() => { setCreating(false); setEditingId(project.id); setConfirmArchiveId(null); }}><Icon name="settings" size={14} /> Edit</button><button className="btn project-archive" aria-label={confirmArchiveId === project.id ? `Confirm archive ${project.name}` : `Archive ${project.name}`} disabled={busy} onClick={() => void archive(project.id)}><Icon name={confirmArchiveId === project.id ? "check" : "archive"} size={14} /> {confirmArchiveId === project.id ? "Confirm" : "Archive"}</button></div>
+            </footer>
           </article>;
         })}
       </div>
+      {archivedProjects.length ? <details className="archived-projects" open={!availableProjects.length}><summary>Archived projects · {archivedProjects.length}</summary><div>{archivedProjects.map((project) => <article className="project-archived-row glass" key={project.id}><ProjectAvatar project={project} size={38} /><span><strong>{project.name}</strong><small>{project.type} · archived</small></span></article>)}</div></details> : null}
     </section>
   );
 }

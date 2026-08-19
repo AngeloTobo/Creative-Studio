@@ -88,19 +88,30 @@ test("project onboarding starts empty and preserves explicit lifecycle changes",
   await page.getByRole("textbox", { name: "Project name" }).fill("Launch System");
   await page.getByRole("textbox", { name: "Project type" }).fill("Campaign");
   await page.getByRole("button", { name: "Create project" }).click();
-  const card = page.locator(".project-card", { hasText: "Launch System" });
+  let card = page.locator(".project-card", { hasText: "Launch System" });
   await expect(card).toBeVisible();
+  await expect(card.getByText("Direction needed")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Create", exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Artifacts", exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Production", exact: true })).toBeVisible();
 
-  await card.getByRole("button", { name: "Edit" }).click();
-  await card.getByRole("textbox", { name: "Project name" }).fill("Launch System Revised");
-  await card.getByRole("combobox", { name: "Project status" }).selectOption("paused");
-  await card.getByRole("button", { name: "Save changes" }).click();
+  await card.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(/#\/dna$/);
+  await page.goto("/#/projects");
+  card = page.locator(".project-card", { hasText: "Launch System" });
+
+  await card.getByRole("button", { name: "Edit Launch System" }).click();
+  await page.getByRole("textbox", { name: "Project name" }).fill("Launch System Revised");
+  await page.getByRole("combobox", { name: "Project status" }).selectOption("paused");
+  await page.getByRole("button", { name: "Save changes" }).click();
   await expect(card.getByText("Launch System Revised")).toBeVisible();
   await expect(card.getByText("paused", { exact: true })).toBeVisible();
 
-  await card.getByRole("button", { name: "Archive" }).click();
-  await card.getByRole("button", { name: "Confirm archive" }).click();
-  await expect(card.getByText("archived", { exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "Archive Launch System Revised" }).click();
+  await card.getByRole("button", { name: "Confirm archive Launch System Revised" }).click();
+  const archived = page.locator(".project-archived-row", { hasText: "Launch System Revised" });
+  await expect(archived).toBeVisible();
+  await expect(archived).toContainText("archived");
   await expect(page.getByRole("heading", { name: "Create your first project" })).toBeVisible();
 });
 

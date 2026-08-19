@@ -7,7 +7,7 @@ export const VIEW_TITLES: Record<StudioView, [string, string]> = {
   media: ["Media", "Upload, retain, and inspect real project source assets."],
   library: ["Library", "CreativeDNA versions, decisions, and retained memory."],
   gallery: ["Artifact History", "Review outputs, lineage, and explicit decisions."],
-  projects: ["Projects", "Your creative worlds and systems."],
+  projects: ["Projects", "Switch workspaces, continue the next task, or open project tools."],
   flows: ["Workflows", "Upload, customize, version, and reuse ComfyUI graphs."],
   queue: ["Creative Queue", "Durable job state that survives navigation and reloads."],
   runtime: ["Runtime", "Real capability state without leaking credentials."],

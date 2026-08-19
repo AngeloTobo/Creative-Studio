@@ -67,7 +67,7 @@ export function App() {
   };
 
   const content = (() => {
-    if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView />;
+    if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView onOpen={navigate} />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "cockpit": return <CockpitView onOpen={openCockpitAction} />;
@@ -76,7 +76,7 @@ export function App() {
       case "queue": return <QueueView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} />;
       case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;
       case "library": return <LibraryView />;
-      case "projects": return <ProjectsView />;
+      case "projects": return <ProjectsView onOpen={navigate} />;
       case "runtime": return <RuntimeView />;
       case "flows": return <FlowsView />;
       case "settings": return <SettingsView />;
