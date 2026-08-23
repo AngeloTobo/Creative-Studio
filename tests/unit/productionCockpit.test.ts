@@ -155,7 +155,13 @@ describe("production cockpit", () => {
     expect(cockpit.summary).toMatchObject({
       actionRequired: 4,
       activeRuns: 1,
+      queuedRuns: 1,
+      runningRuns: 0,
+      completedRuns: 2,
+      generationRuns: 3,
+      trainingRuns: 1,
       outputsAwaitingReview: 1,
+      trainingAwaitingReview: 1,
       retainedOutputs: 1,
       failedRuns: 1,
       storedBytes: 5120,
@@ -175,9 +181,20 @@ describe("production cockpit", () => {
       decision: "not-applicable",
     });
     expect(cockpit.runs.find((run) => run.id === "job_completed")).toMatchObject({
+      title: artifact.name,
+      artifactId: artifact.id,
       retainedBytes: 4096,
       decision: "unreviewed",
+      stageLabel: "Completed and retained",
     });
+  });
+
+  it("orders generation and training activity newest to oldest by creation time", () => {
+    const newestJob = { ...job("job_newest", "queued"), createdAt: "2026-08-16T20:04:00.000Z", updatedAt: "2026-08-16T20:04:00.000Z" };
+    const olderJobWithRecentUpdate = { ...job("job_older", "running"), createdAt: "2026-08-16T19:00:00.000Z", updatedAt: "2026-08-16T20:05:00.000Z" };
+    const cockpit = deriveProductionCockpit(input([olderJobWithRecentUpdate, newestJob]));
+
+    expect(cockpit.runs.map((run) => run.id)).toEqual(["job_newest", "training_cockpit", "job_older"]);
   });
 
   it("keeps failed runs in history but resolves their retry action after a durable replacement exists", () => {
@@ -207,6 +224,6 @@ describe("production cockpit", () => {
       entityId: running.id,
       title: "image run passed 20 minutes",
     }));
-    expect(cockpit.runs[0]).toMatchObject({ status: "running", durationMs: 25 * 60_000 });
+    expect(cockpit.runs.find((run) => run.id === running.id)).toMatchObject({ status: "running", durationMs: 25 * 60_000 });
   });
 });

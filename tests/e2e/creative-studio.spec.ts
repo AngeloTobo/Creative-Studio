@@ -134,7 +134,8 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("button", { name: "Create explicitly simulated development preview" }).click();
   await page.getByRole("button", { name: "View queue", exact: true }).click();
   await expect(page).toHaveURL(/#\/queue$/);
-  await expect(page.locator(".queue-card").first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole("heading", { name: "Production Dashboard", exact: true })).toBeVisible();
+  await expect(page.locator(".cockpit-run").first()).toBeVisible({ timeout: 5_000 });
 
   await page.goto("/#/gallery");
   const artifact = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });
@@ -155,10 +156,10 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(persisted.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
 
   await page.goto("/#/cockpit");
-  await expect(page.getByRole("heading", { name: "Production cockpit", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Production Dashboard", exact: true })).toBeVisible();
   await expect(page.getByText("All caught up.")).toBeVisible();
-  await expect(page.getByText("Direct CreativeDNA generation")).toBeVisible();
-  await expect(page.getByText("Verified storage")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
+  await expect(page.getByText("Retained", { exact: true }).first()).toBeVisible();
 });
 
 test("cancelled generation explains the retained history and offers a durable retry", async ({ page }, testInfo) => {
@@ -170,13 +171,12 @@ test("cancelled generation explains the retained history and offers a durable re
   await page.getByRole("textbox", { name: "Describe the image" }).fill("An original image with a clean silhouette and high contrast rim light.");
   await page.getByRole("button", { name: "Create explicitly simulated development preview" }).click();
   await page.getByRole("button", { name: "View queue", exact: true }).click();
-  await page.getByRole("button", { name: "Cancel tracking" }).click();
-
-  await expect(page.getByRole("region", { name: "Tracking cancelled" })).toContainText("cancelled_by_user");
-  await expect(page.getByRole("region", { name: "Tracking cancelled" })).toContainText("remains in history");
-  await page.getByRole("button", { name: "Retry as new job" }).click();
-  await expect(page.getByText(/Retry of job_/)).toBeVisible();
-  await expect(page.locator(".queue-card")).toHaveCount(2);
+  const firstRun = page.locator(".cockpit-run").first();
+  await firstRun.getByText("Details", { exact: true }).click();
+  await firstRun.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(firstRun.getByText("cancelled", { exact: true })).toBeVisible();
+  await firstRun.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.locator(".cockpit-run")).toHaveCount(2);
 });
 
 test("project onboarding starts empty and preserves explicit lifecycle changes", async ({ page }, testInfo) => {

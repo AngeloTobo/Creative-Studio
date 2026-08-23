@@ -10,7 +10,7 @@ import type {
   MediaAsset,
   Project,
 } from "./domain";
-import { formatGenerationDuration, generationTiming } from "./generationPerformance";
+import { analyzeGenerationWorkload, formatGenerationDuration, generationTiming } from "./generationPerformance";
 
 export type ProductionCockpitSurface = "dna" | "gallery" | "queue" | "runtime";
 export type ProductionCockpitSeverity = "critical" | "warning" | "info";
@@ -42,6 +42,8 @@ export type ProductionCockpitAction = {
 export type ProductionCockpitRun = {
   id: string;
   kind: "generation" | "training";
+  title: string;
+  detail: string;
   projectId: string;
   projectName: string;
   modality: GenerationModality | "training";
@@ -50,6 +52,7 @@ export type ProductionCockpitRun = {
   provider: string;
   workflowName: string | null;
   workflowRevision: number | null;
+  artifactId: string | null;
   dnaArtifactId: string | null;
   dnaName: string | null;
   dnaVersion: number | null;
@@ -59,6 +62,11 @@ export type ProductionCockpitRun = {
   runnerDevice: string | null;
   queuePosition: number | null;
   durationMs: number;
+  queueMs: number | null;
+  executionMs: number | null;
+  stageLabel: string;
+  workloadFacts: string[];
+  models: string[];
   retainedBytes: number;
   error: string | null;
   createdAt: string;
@@ -80,8 +88,16 @@ export type ProductionCockpit = {
   summary: {
     actionRequired: number;
     activeRuns: number;
+    queuedRuns: number;
+    runningRuns: number;
+    completedRuns: number;
+    generationRuns: number;
+    trainingRuns: number;
     outputsAwaitingReview: number;
+    trainingAwaitingReview: number;
     retainedOutputs: number;
+    acceptedOutputs: number;
+    rejectedOutputs: number;
     failedRuns: number;
     offlineRunners: number;
     storedBytes: number;
@@ -140,9 +156,13 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
     const blueprint = dna.get(job.dnaArtifactId) ?? null;
     const runnerId = input.jobRuntime?.[job.id]?.runnerId ?? input.runners.find((runner) => runner.activeJobId === job.id)?.id ?? null;
     const runner = runnerId ? runners.get(runnerId) ?? null : null;
+    const timing = generationTiming(job, input.computedAt);
+    const workload = analyzeGenerationWorkload(job.settingsStamp);
     return {
       id: job.id,
       kind: "generation",
+      title: artifact?.name ?? `${job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} generation`,
+      detail: job.prompt,
       projectId: job.projectId,
       projectName: projects.get(job.projectId)?.name ?? "Unknown project",
       modality: job.modality,
@@ -151,6 +171,7 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       provider: job.provider,
       workflowName: job.settingsStamp.workflow?.name ?? null,
       workflowRevision: job.settingsStamp.workflow?.version ?? null,
+      artifactId: artifact?.id ?? null,
       dnaArtifactId: job.dnaArtifactId,
       dnaName: blueprint?.name ?? null,
       dnaVersion: blueprint?.version ?? null,
@@ -160,6 +181,11 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       runnerDevice: runner?.device ?? null,
       queuePosition: queuePosition.get(job.id) ?? null,
       durationMs: elapsed(job.startedAt ?? job.createdAt, job.completedAt, input.computedAt),
+      queueMs: timing.queueMs,
+      executionMs: timing.executionMs,
+      stageLabel: timing.stageLabel,
+      workloadFacts: workload.facts,
+      models: job.settingsStamp.models,
       retainedBytes: artifact?.retention.size ?? 0,
       error: job.error,
       createdAt: job.createdAt,
@@ -174,6 +200,8 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
     return {
       id: job.id,
       kind: "training",
+      title: job.name,
+      detail: `${job.assetIds.length} upload${job.assetIds.length === 1 ? "" : "s"} · ${job.trainingExampleIds.length} accepted example${job.trainingExampleIds.length === 1 ? "" : "s"}`,
       projectId: job.projectId,
       projectName: projects.get(job.projectId)?.name ?? "Unknown project",
       modality: "training",
@@ -182,6 +210,7 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       provider: job.provider,
       workflowName: null,
       workflowRevision: null,
+      artifactId: null,
       dnaArtifactId: job.resultDnaArtifactId ?? job.baseDnaArtifactId,
       dnaName: blueprint?.name ?? job.name,
       dnaVersion: blueprint?.version ?? null,
@@ -191,6 +220,14 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       runnerDevice: runner?.device ?? null,
       queuePosition: queuePosition.get(job.id) ?? null,
       durationMs: elapsed(job.createdAt, job.completedAt, input.computedAt),
+      queueMs: null,
+      executionMs: null,
+      stageLabel: job.status === "waiting-for-runner" ? "Waiting for Local Runner" : job.status === "running" ? "Training locally" : job.status === "completed" ? "Training complete" : job.status === "failed" ? "Training failed" : "Training cancelled",
+      workloadFacts: [
+        `${job.assetIds.length} upload${job.assetIds.length === 1 ? "" : "s"}`,
+        `${job.trainingExampleIds.length} accepted example${job.trainingExampleIds.length === 1 ? "" : "s"}`,
+      ],
+      models: [],
       retainedBytes: 0,
       error: job.error,
       createdAt: job.createdAt,
@@ -260,14 +297,27 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
   });
 
   actions.sort((a, b) => PRIORITY[a.severity] - PRIORITY[b.severity] || b.createdAt.localeCompare(a.createdAt));
-  const runs = [...generationRuns, ...trainingRuns].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const runs = [...generationRuns, ...trainingRuns].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const retainedArtifacts = input.artifacts.filter((artifact) => artifact.retention.state === "retained");
+  const latestAcceptanceByArtifact = new Map<string, Acceptance["decision"]>();
+  for (const acceptance of acceptances) {
+    if (!latestAcceptanceByArtifact.has(acceptance.artifactId)) latestAcceptanceByArtifact.set(acceptance.artifactId, acceptance.decision);
+  }
+  const allRuns = [...input.jobs, ...input.trainingJobs];
   return {
     summary: {
       actionRequired: actions.length,
       activeRuns: activeGeneration.length + activeTraining.length,
+      queuedRuns: input.jobs.filter((job) => job.status === "queued").length + input.trainingJobs.filter((job) => job.status === "waiting-for-runner").length,
+      runningRuns: input.jobs.filter((job) => job.status === "running").length + input.trainingJobs.filter((job) => job.status === "running").length,
+      completedRuns: allRuns.filter((job) => job.status === "completed").length,
+      generationRuns: input.jobs.length,
+      trainingRuns: input.trainingJobs.length,
       outputsAwaitingReview: input.artifacts.filter((artifact) => artifact.status === "ready").length,
+      trainingAwaitingReview: input.trainingJobs.filter((job) => job.status === "completed" && job.resultDnaArtifactId && !reviews.some((review) => review.trainingJobId === job.id)).length,
       retainedOutputs: retainedArtifacts.length,
+      acceptedOutputs: input.artifacts.filter((artifact) => latestAcceptanceByArtifact.get(artifact.id) === "accepted").length,
+      rejectedOutputs: input.artifacts.filter((artifact) => latestAcceptanceByArtifact.get(artifact.id) === "rejected").length,
       failedRuns: input.jobs.filter((job) => job.status === "failed").length + input.trainingJobs.filter((job) => job.status === "failed").length,
       offlineRunners: input.runners.filter((runner) => runner.state === "offline").length,
       storedBytes: input.mediaAssets.reduce((total, asset) => total + asset.size, 0) + retainedArtifacts.reduce((total, artifact) => total + (artifact.retention.size ?? 0), 0),

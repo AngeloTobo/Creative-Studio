@@ -4,7 +4,6 @@ import { type StudioView } from "./views";
 import { DesktopShell, MobileShell } from "../components/Shell";
 import { Icon } from "../components/Icon";
 import { CreativeDnaWorkbench } from "../features/creative-dna/CreativeDnaWorkbench";
-import { QueueView } from "../features/generation/QueueView";
 import { ArtifactsView } from "../features/artifacts/ArtifactsView";
 import { PortalView } from "../features/portal/PortalView";
 import { LibraryView } from "../features/library/LibraryView";
@@ -80,10 +79,10 @@ export function App() {
     if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView onOpen={navigate} />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
-      case "cockpit": return <CockpitView onOpen={openCockpitAction} />;
+      case "cockpit": return <CockpitView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} onOpen={openCockpitAction} />;
       case "dna": return <CreativeDnaWorkbench key={activeProjectId} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "media": return <MediaView onGenerate={() => navigate("dna")} />;
-      case "queue": return <QueueView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} />;
+      case "queue": return <CockpitView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} onOpen={openCockpitAction} />;
       case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} onExtendVideo={openVideoExtension} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;
       case "library": return <LibraryView />;
       case "projects": return <ProjectsView onOpen={navigate} />;

@@ -70,6 +70,6 @@ const CONTENT_OWNS_MOBILE_HEADING = new Set<StudioView>(["cockpit", "dna", "proj
 
 export function MobileShell({ view, navigate, children }: { view: StudioView; navigate: (view: StudioView) => void; children: ReactNode }) {
   const activeView = primaryView(view);
-  const showHeading = view !== "portal" && !CONTENT_OWNS_MOBILE_HEADING.has(view);
+  const showHeading = view !== "portal" && !CONTENT_OWNS_MOBILE_HEADING.has(activeView);
   return <div className="mshell"><header className="mtop"><span className="mt-mark"><i className="bm-orb" /></span><strong className="mt-name">Creative <b>Studio</b></strong><span className="mt-sp" />{activeView !== "dna" ? <button className="btn-icon mobile-create-button" aria-label="Create" onClick={() => navigate("dna")}><Icon name="wand" size={19} /></button> : null}<NotificationButton navigate={navigate} size={19} /></header><main className={`mbody scroll mbody-${view}`}>{showHeading ? <div className="mview-head"><h1>{VIEW_TITLES[view][0]}</h1><p>{VIEW_TITLES[view][1]}</p></div> : null}{children}</main><nav className="mtabbar">{MOBILE_TABS.map((tab) => <button key={tab.id} className={`mtab${activeView === tab.id ? " on" : ""}`} onClick={() => navigate(tab.id)}><span className="mtab-ic"><Icon name={tab.icon} size={22} /></span>{tab.label}</button>)}</nav></div>;
 }

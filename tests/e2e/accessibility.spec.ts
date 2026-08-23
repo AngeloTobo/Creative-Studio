@@ -42,7 +42,7 @@ test("mobile primary pages render one route heading", async ({ page }, testInfo)
   test.skip(testInfo.project.name !== "mobile", "Mobile heading coverage needs one browser shape");
   await page.goto("/#/cockpit");
 
-  await expect(page.getByRole("heading", { name: "Production cockpit", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "Production Dashboard", exact: true })).toHaveCount(1);
   await expect(page.locator(".mtabbar .mtab")).toHaveCount(6);
 });
 
