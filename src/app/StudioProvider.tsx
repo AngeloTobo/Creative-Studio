@@ -20,6 +20,7 @@ import type {
   EnrollLocalRunnerResponse,
   LocalRunner,
   VideoGenerationOperation,
+  ImagePerformanceMode,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -38,7 +39,7 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode) => Promise<void>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -57,7 +58,11 @@ type StudioContextValue = {
 const StudioContext = createContext<StudioContextValue | null>(null);
 
 function message(error: unknown) {
-  return error instanceof Error ? error.message.replaceAll("_", " ") : "Creative Studio request failed";
+  if (!(error instanceof Error)) return "Creative Studio request failed";
+  if (error.message === "image_custom_mode_required") {
+    return "This image setup exceeds the fast limits. Open Create and choose Custom · can be slow only when you want that longer render.";
+  }
+  return error.message.replaceAll("_", " ");
 }
 
 function firstAvailableProject(snapshot: StudioSnapshot) {
@@ -204,7 +209,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation) => {
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -216,6 +221,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       modality,
       idempotencyKey: operationKey("workflow"),
       workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings },
+      performanceMode,
       videoOperation,
     }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);

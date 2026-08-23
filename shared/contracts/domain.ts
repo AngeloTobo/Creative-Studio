@@ -32,6 +32,7 @@ export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
 };
 
 export type GenerationModality = "music" | "image" | "video";
+export type ImagePerformanceMode = "fast-default" | "explicit-custom";
 export type GenerationCapability = "MUSIC_GENERATE" | "IMAGE_GENERATE" | "VIDEO_GENERATE";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type GenerationExecutionStage =
@@ -78,6 +79,7 @@ export type GenerationSettingsStamp = {
   prompt: string;
   provider: string;
   modality: string;
+  performanceMode?: ImagePerformanceMode;
   workflow: null | {
     workflowId: string;
     revisionId: string;

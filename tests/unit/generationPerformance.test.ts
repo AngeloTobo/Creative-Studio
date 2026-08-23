@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   GENERATION_LONG_RUN_THRESHOLD_MS,
+  assessImagePerformance,
   analyzeGenerationWorkload,
+  fastImageParameterOverrides,
   generationProviderWorkloadProfile,
   generationTiming,
   withGenerationProviderWorkload,
   workflowRuntimeHistory,
   type Job,
+  type WorkflowParameter,
 } from "../../shared/contracts";
 
 const stamp = {
@@ -61,6 +64,29 @@ function job(id: string, startedAt: string, completedAt: string): Job {
 }
 
 describe("generation performance evidence", () => {
+  it("reduces a costly image workflow to the proven fast local target without changing creative controls", () => {
+    const parameters: WorkflowParameter[] = [
+      { id: "13::width", label: "Width", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "width" } },
+      { id: "13::height", label: "Height", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "height" } },
+      { id: "3::steps", label: "Steps", kind: "number", value: 30, mediaKind: null, binding: { format: "comfyui-api", nodeId: "3", inputName: "steps" } },
+      { id: "13::batch_size", label: "Batch", kind: "number", value: 2, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "batch_size" } },
+      { id: "3::seed", label: "Seed", kind: "number", value: 42, mediaKind: null, binding: { format: "comfyui-api", nodeId: "3", inputName: "seed" } },
+      { id: "2::text", label: "Prompt", kind: "text", value: "Keep this exact scene", mediaKind: null, binding: { format: "comfyui-api", nodeId: "2", inputName: "text" } },
+    ];
+    const overrides = fastImageParameterOverrides(parameters);
+    expect(overrides).toEqual({ "13::width": 512, "13::height": 512, "3::steps": 8, "13::batch_size": 1 });
+    expect(overrides).not.toHaveProperty("3::seed");
+    expect(overrides).not.toHaveProperty("2::text");
+    expect(assessImagePerformance(Object.fromEntries(parameters.map((parameter) => [parameter.id, overrides[parameter.id] ?? parameter.value])))).toEqual({ requiresExplicitCustom: false, reasons: [] });
+  });
+
+  it("requires an explicit custom choice when resolution or steps cannot be verified", () => {
+    expect(assessImagePerformance({ "2::text": "A scene", "3::seed": 42 })).toMatchObject({
+      requiresExplicitCustom: true,
+      reasons: ["resolution is not exposed by this workflow", "sampling steps are not exposed by this workflow"],
+    });
+  });
+
   it("projects the versioned AFDFW image profile into complete direct-generation evidence", () => {
     const profile = generationProviderWorkloadProfile("afdfw-z-image", "image");
     expect(profile).toMatchObject({

@@ -4,14 +4,18 @@ import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
 import {
   GENERATION_LONG_RUN_THRESHOLD_MS,
+  FAST_IMAGE_MAX_STEPS,
+  assessImagePerformance,
   analyzeGenerationWorkload,
   creativeDnaGenerationPrompt,
+  fastImageParameterOverrides,
   formatGenerationDuration,
   generationProviderWorkloadProfile,
   primaryWorkflowPromptParameter,
   workflowRuntimeHistory,
   type Artifact,
   type MediaAsset,
+  type ImagePerformanceMode,
   type WorkflowDefinition,
   type WorkflowParameter,
   type WorkflowScalar,
@@ -123,6 +127,7 @@ export function GenerationView({
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
   const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
+  const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
   const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : "");
@@ -147,6 +152,7 @@ export function GenerationView({
       setInputBindings({});
       setWorkflowValues({});
       setValuesRevisionId("");
+      setImagePerformanceMode("fast-default");
       setNotice("");
       setVideoOperation(null);
     }
@@ -175,11 +181,17 @@ export function GenerationView({
     : null;
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
   const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
-  const parameterValue = (parameter: WorkflowParameter) => {
+  const rawParameterValue = (parameter: WorkflowParameter) => {
     if (Object.prototype.hasOwnProperty.call(effectiveValues, parameter.id)) return effectiveValues[parameter.id];
     if (parameter.id === workflowPromptParameter?.id && direction.trim()) return direction.trim();
     return parameter.value;
   };
+  const fastImageOverrides = generationIntent === "image" && imagePerformanceMode === "fast-default"
+    ? fastImageParameterOverrides(scalarParameters.map((parameter) => ({ ...parameter, value: rawParameterValue(parameter) })))
+    : {};
+  const parameterValue = (parameter: WorkflowParameter) => Object.prototype.hasOwnProperty.call(fastImageOverrides, parameter.id)
+    ? fastImageOverrides[parameter.id]
+    : rawParameterValue(parameter);
   const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)));
   const runnerOnline = snapshot?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
   const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
@@ -190,6 +202,8 @@ export function GenerationView({
   const directionReady = direction.trim().length >= 4;
   const trainingSource = quickSource?.source === "upload" && quickSource.trainingEligible ? quickSource : null;
   const performanceParameters = Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameterValue(parameter)]));
+  const imagePerformance = generationIntent === "image" && workflow ? assessImagePerformance(performanceParameters) : null;
+  const fastImageBlocked = imagePerformanceMode === "fast-default" && Boolean(imagePerformance?.requiresExplicitCustom);
   const workflowWorkload = workflow ? analyzeGenerationWorkload({
     parameters: performanceParameters,
     models: workflow.currentRevision.models,
@@ -217,6 +231,7 @@ export function GenerationView({
     setInputBindings({});
     setWorkflowValues({});
     setValuesRevisionId("");
+    setImagePerformanceMode("fast-default");
     setNotice("");
   };
 
@@ -231,6 +246,7 @@ export function GenerationView({
     setInputBindings({});
     setWorkflowValues({});
     setValuesRevisionId("");
+    setImagePerformanceMode("fast-default");
     setNotice("");
   };
 
@@ -305,7 +321,13 @@ export function GenerationView({
         setValuesRevisionId(runWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
       }
-      await submitWorkflowJob(runWorkflow, effectiveInputBindings, dna.artifactId, effectiveVideoOperation ?? undefined);
+      await submitWorkflowJob(
+        runWorkflow,
+        effectiveInputBindings,
+        dna.artifactId,
+        effectiveVideoOperation ?? undefined,
+        generationIntent === "image" ? imagePerformanceMode : undefined,
+      );
       setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
     } catch {
       // The provider exposes a normalized visible error.
@@ -341,7 +363,7 @@ export function GenerationView({
   };
 
   const sourceRequirement = missingMediaParameters[0]?.mediaKind;
-  const primaryLabel = !workflow
+  const basePrimaryLabel = !workflow
     ? "Choose a model"
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
@@ -350,6 +372,9 @@ export function GenerationView({
         : effectiveVideoOperation
           ? "Extend video"
           : `Generate ${generationIntent}`;
+  const primaryLabel = generationIntent === "image" && workflow
+    ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
+    : basePrimaryLabel;
 
   return (
     <section className={`generation-section create-surface quick-create${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-label="Create with Creative Studio">
@@ -371,6 +396,20 @@ export function GenerationView({
           {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
             {intentWorkflows.map((item) => <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}</small></span></button>)}
           </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
+        </div> : null}
+
+        {generationIntent === "image" && workflow ? <div className={`quick-image-speed${fastImageBlocked ? " blocked" : ""}`}>
+          <div className="quick-image-speed-options" role="group" aria-label="Image speed">
+            <button type="button" className={imagePerformanceMode === "fast-default" ? "on" : ""} aria-pressed={imagePerformanceMode === "fast-default"} disabled={busy} onClick={() => setImagePerformanceMode("fast-default")}><Icon name="generate" size={15} /><span><strong>Fast</strong><small>Up to 512×512 · {FAST_IMAGE_MAX_STEPS} steps · 1 image</small></span></button>
+            <button type="button" className={imagePerformanceMode === "explicit-custom" ? "on warning" : "warning"} aria-pressed={imagePerformanceMode === "explicit-custom"} disabled={busy} onClick={() => setImagePerformanceMode("explicit-custom")}><Icon name="settings" size={15} /><span><strong>Custom · can be slow</strong><small>Use the exact workflow settings</small></span></button>
+          </div>
+          <small>{fastImageBlocked
+            ? `Fast mode cannot safely run this model because ${imagePerformance?.reasons.join(" and ")}. Choose Custom only when you accept a longer render.`
+            : imagePerformanceMode === "fast-default"
+              ? "Uses the proven local image target; a first model load can still add setup time."
+              : imagePerformance?.requiresExplicitCustom
+                ? `Long-run factors: ${imagePerformance.reasons.join("; ")}.`
+                : "Custom mode is explicit, but these exact controls are still within the fast limits."}</small>
         </div> : null}
 
         <div className={`quick-source-row${videoOperation ? " video-extension-source" : ""}`}>
@@ -396,7 +435,7 @@ export function GenerationView({
           <button className="btn btn-primary quick-primary" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [])}><Icon name="dna" size={17} /> {trainingSource ? "Continue to training" : "Open training"}</button>
         </> : <>
           <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
-          <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
+          <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || fastImageBlocked} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>
@@ -422,11 +461,11 @@ export function GenerationView({
 
           {scalarParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Exact settings</strong><small>{settingsChanged ? `Will save workflow v${(workflow?.currentRevision.version ?? 0) + 1}` : `Workflow v${workflow?.currentRevision.version}`}</small></header><div className="workflow-run-parameters">{scalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} onChange={(value) => {
             if (!workflow) return;
-            if (valuesRevisionId !== workflow.currentRevision.id) {
-              setValuesRevisionId(workflow.currentRevision.id);
-              setWorkflowValues({ ...Object.fromEntries(scalarParameters.map((item) => [item.id, item.value])), [parameter.id]: value });
-            } else setWorkflowValues((current) => ({ ...current, [parameter.id]: value }));
-          }} />)}</div>{settingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Reset settings</button> : null}</section> : null}
+            const displayedValues = Object.fromEntries(scalarParameters.map((item) => [item.id, parameterValue(item)]));
+            setImagePerformanceMode("explicit-custom");
+            setValuesRevisionId(workflow.currentRevision.id);
+            setWorkflowValues({ ...displayedValues, [parameter.id]: value });
+          }} />)}</div>{settingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setImagePerformanceMode("fast-default"); setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Return to fast defaults</button> : null}</section> : null}
 
           {workflowWorkload ? <details className="workflow-performance create-performance quick-advanced-wide"><summary><span><Icon name="analytics" size={15} /><strong>Speed & quality evidence</strong><small>{settingsChanged ? "New settings" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} runs` : "No exact-revision history"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m alert</em></summary><div className="workflow-performance-body">{workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No workload controls are exposed by this workflow.</p>}{workflow.currentRevision.models.length ? <div className="job-performance-models"><small>Models</small><div>{workflow.currentRevision.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}<p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No high-cost setting stands out."}</p><small>{workflowWorkload.promptAssessment}</small></div></details> : null}
 

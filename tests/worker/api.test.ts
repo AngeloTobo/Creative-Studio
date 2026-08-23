@@ -662,6 +662,7 @@ describe("Creative Studio Worker API", () => {
       "2": { class_type: "PrimitiveStringMultiline", inputs: { value: "A glass object in quiet light" }, _meta: { title: "Prompt" } },
       "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] }, _meta: { title: "Sampler" } },
       "4": { class_type: "SaveImage", inputs: { filename_prefix: "result", images: ["3", 0] }, _meta: { title: "Save image" } },
+      "5": { class_type: "EmptySD3LatentImage", inputs: { width: 1024, height: 1024, batch_size: 1 }, _meta: { title: "Image size" } },
     };
     const raw = JSON.stringify(graph, null, 2);
     const imported = await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
@@ -712,6 +713,24 @@ describe("Creative Studio Worker API", () => {
       directive: "A precise silver object isolated against a dark studio background.",
       targetModality: "image",
     });
+    const blockedFastJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify({
+        projectId: secondProject.id,
+        dnaArtifactId: secondDna.artifactId,
+        modality: "image",
+        idempotencyKey: "shared_owner_fast_guard_001",
+        workflow: {
+          workflowId: importedPayload.workflow.id,
+          revisionId: revisedPayload.workflow.currentRevision.id,
+          inputBindings: {},
+        },
+      }),
+    }), local);
+    expect(blockedFastJob.status).toBe(409);
+    expect(await result(blockedFastJob)).toMatchObject({ error: "image_custom_mode_required" });
+
     const sharedModelJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
@@ -719,6 +738,7 @@ describe("Creative Studio Worker API", () => {
         projectId: secondProject.id,
         dnaArtifactId: secondDna.artifactId,
         modality: "image",
+        performanceMode: "explicit-custom",
         idempotencyKey: "shared_owner_model_001",
         workflow: {
           workflowId: importedPayload.workflow.id,
@@ -732,7 +752,7 @@ describe("Creative Studio Worker API", () => {
       job: {
         projectId: secondProject.id,
         provider: "local-comfyui",
-        settingsStamp: { workflow: { workflowId: importedPayload.workflow.id, revisionId: revisedPayload.workflow.currentRevision.id } },
+        settingsStamp: { performanceMode: "explicit-custom", workflow: { workflowId: importedPayload.workflow.id, revisionId: revisedPayload.workflow.currentRevision.id } },
       },
     });
   });

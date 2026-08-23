@@ -1,6 +1,10 @@
 import type { GenerationExecutionStage, GenerationSettingsStamp, Job } from "./domain";
+import type { WorkflowParameter, WorkflowScalar } from "./workflows";
 
 export const GENERATION_LONG_RUN_THRESHOLD_MS = 20 * 60_000;
+export const FAST_IMAGE_MAX_PIXELS = 512 * 512;
+export const FAST_IMAGE_MAX_STEPS = 8;
+export const FAST_IMAGE_MAX_BATCH = 1;
 
 export type GenerationWorkload = {
   width: number | null;
@@ -39,6 +43,11 @@ export type GenerationTiming = {
   isLongRunning: boolean;
   stage: GenerationExecutionStage;
   stageLabel: string;
+};
+
+export type ImagePerformanceAssessment = {
+  requiresExplicitCustom: boolean;
+  reasons: string[];
 };
 
 type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt">;
@@ -105,6 +114,11 @@ function parameterName(id: string) {
   return (id.split("::").at(-1) ?? id).replaceAll("-", "_").toLowerCase();
 }
 
+function parameterGroup(id: string) {
+  const parts = id.split("::");
+  return parts.length > 1 ? parts.slice(0, -1).join("::") : "root";
+}
+
 function maximumParameter(parameters: GenerationSettingsStamp["parameters"], names: string[]) {
   const values = Object.entries(parameters)
     .filter(([id]) => names.includes(parameterName(id)))
@@ -115,6 +129,70 @@ function maximumParameter(parameters: GenerationSettingsStamp["parameters"], nam
 
 function compactNumber(value: number) {
   return value >= 10 ? String(Math.round(value)) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function roundedDimension(value: number) {
+  return Math.max(64, Math.floor(value / 8) * 8);
+}
+
+/** Returns only safe workload overrides; creative controls such as prompt, seed, model, sampler, CFG, and denoise are unchanged. */
+export function fastImageParameterOverrides(parameters: WorkflowParameter[]) {
+  const overrides: Record<string, WorkflowScalar> = {};
+  const dimensions = new Map<string, { width?: WorkflowParameter; height?: WorkflowParameter }>();
+  for (const parameter of parameters) {
+    const name = parameterName(parameter.id);
+    const value = finiteNumber(parameter.value);
+    if (value === null) continue;
+    if (name === "width" || name === "height") {
+      const group = parameterGroup(parameter.id);
+      const pair = dimensions.get(group) ?? {};
+      pair[name] = parameter;
+      dimensions.set(group, pair);
+      continue;
+    }
+    if (name === "megapixels" && value > FAST_IMAGE_MAX_PIXELS / 1_000_000) {
+      overrides[parameter.id] = FAST_IMAGE_MAX_PIXELS / 1_000_000;
+    } else if (["steps", "sampling_steps"].includes(name) && value > FAST_IMAGE_MAX_STEPS) {
+      overrides[parameter.id] = FAST_IMAGE_MAX_STEPS;
+    } else if (["batch", "batch_size", "image_count", "num_images", "frames", "frame_count", "num_frames"].includes(name) && value > FAST_IMAGE_MAX_BATCH) {
+      overrides[parameter.id] = FAST_IMAGE_MAX_BATCH;
+    }
+  }
+
+  for (const pair of dimensions.values()) {
+    const width = pair.width ? finiteNumber(pair.width.value) : null;
+    const height = pair.height ? finiteNumber(pair.height.value) : null;
+    if (pair.width && pair.height && width && height && width * height > FAST_IMAGE_MAX_PIXELS) {
+      const scale = Math.sqrt(FAST_IMAGE_MAX_PIXELS / (width * height));
+      let nextWidth = roundedDimension(width * scale);
+      let nextHeight = roundedDimension(height * scale);
+      while (nextWidth * nextHeight > FAST_IMAGE_MAX_PIXELS && (nextWidth > 64 || nextHeight > 64)) {
+        if (nextWidth >= nextHeight && nextWidth > 64) nextWidth -= 8;
+        else if (nextHeight > 64) nextHeight -= 8;
+      }
+      overrides[pair.width.id] = nextWidth;
+      overrides[pair.height.id] = nextHeight;
+    } else {
+      if (pair.width && width && width > 512) overrides[pair.width.id] = 512;
+      if (pair.height && height && height > 512) overrides[pair.height.id] = 512;
+    }
+  }
+  return overrides;
+}
+
+export function assessImagePerformance(parameters: GenerationSettingsStamp["parameters"]): ImagePerformanceAssessment {
+  const workload = analyzeGenerationWorkload({ parameters, models: [], inputAssetIds: [], inputArtifactIds: [], prompt: "" });
+  const hasResolutionEvidence = (workload.width !== null && workload.height !== null) || workload.megapixels !== null;
+  const reasons: string[] = [];
+  if (!hasResolutionEvidence) reasons.push("resolution is not exposed by this workflow");
+  if (workload.steps === null) reasons.push("sampling steps are not exposed by this workflow");
+  if (workload.megapixels !== null && workload.megapixels > FAST_IMAGE_MAX_PIXELS / 1_000_000 + 0.000001) {
+    reasons.push(`${compactNumber(workload.megapixels)} MP exceeds the ${compactNumber(FAST_IMAGE_MAX_PIXELS / 1_000_000)} MP fast limit`);
+  }
+  if (workload.steps !== null && workload.steps > FAST_IMAGE_MAX_STEPS) reasons.push(`${compactNumber(workload.steps)} steps exceeds the ${FAST_IMAGE_MAX_STEPS}-step fast limit`);
+  if (workload.batchSize !== null && workload.batchSize > FAST_IMAGE_MAX_BATCH) reasons.push(`batch size ${compactNumber(workload.batchSize)} exceeds the one-image fast limit`);
+  if (workload.frames !== null && workload.frames > 1) reasons.push(`${compactNumber(workload.frames)} output frames exceeds the one-image fast limit`);
+  return { requiresExplicitCustom: reasons.length > 0, reasons };
 }
 
 export function analyzeGenerationWorkload(source: WorkloadSource): GenerationWorkload {

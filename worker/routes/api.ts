@@ -1,4 +1,5 @@
 import {
+  assessImagePerformance,
   creativeDnaGenerationPrompt,
   deriveProjectProductionLoop,
   deriveProductionCockpit,
@@ -113,7 +114,7 @@ function statusFor(error: string) {
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable"
     || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable"
     || error === "training_review_required" || error === "training_review_not_ready" || error === "training_evidence_already_reserved") return 409;
-  if (error === "runner_job_not_completable") return 409;
+  if (error === "runner_job_not_completable" || error === "image_custom_mode_required") return 409;
   return 400;
 }
 
@@ -410,6 +411,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const modality = input.modality as GenerationModality;
       const videoOperation = requestedVideoOperation(input.videoOperation, modality);
+      if (input.performanceMode !== undefined && input.performanceMode !== "fast-default" && input.performanceMode !== "explicit-custom") {
+        throw new Error("invalid_image_performance_mode");
+      }
+      if (input.performanceMode !== undefined && modality !== "image") throw new Error("invalid_image_performance_mode");
       if (input.provider !== undefined && input.provider !== "afdfw" && input.provider !== "development-preview") {
         throw new Error("invalid_generation_provider");
       }
@@ -458,6 +463,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           kind: resolvedInput!.kind,
         }));
         const parameterValues = Object.fromEntries(plan.workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
+        const performanceMode = modality === "image" ? input.performanceMode ?? "fast-default" : undefined;
+        if (modality === "image" && assessImagePerformance(parameterValues).requiresExplicitCustom && performanceMode !== "explicit-custom") {
+          throw new Error("image_custom_mode_required");
+        }
         const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);
         const workflowPrompt = workflowPromptParameter ? String(workflowPromptParameter.value).trim() : "";
         const prompt = boundedText(workflowPrompt, 4_000) || creativeDnaGenerationPrompt(dna, modality === "music" ? "music" : "image");
@@ -481,6 +490,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             prompt,
             provider: "local-comfyui",
             modality,
+            performanceMode,
             workflow: {
               workflowId: plan.workflow.id,
               revisionId: plan.workflow.currentRevision.id,
@@ -540,6 +550,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
       if (localHardwareMode(env) && !localWorkflow) throw new Error("local_comfyui_workflow_required");
+      if (localWorkflow && original.modality === "image" && assessImagePerformance(original.settingsStamp.parameters).requiresExplicitCustom
+        && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
         projectId: original.projectId,
@@ -579,6 +591,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
       if (localHardwareMode(env) && !localWorkflow) throw new Error("local_comfyui_workflow_required");
+      if (localWorkflow && original.modality === "image" && assessImagePerformance(original.settingsStamp.parameters).requiresExplicitCustom
+        && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
         && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
       const createdAt = new Date().toISOString();

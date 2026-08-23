@@ -1,5 +1,37 @@
 import { expect, test } from "@playwright/test";
 
+test("image creation is fast by default and makes a slow custom run explicit", async ({ page }) => {
+  const createdAt = "2026-08-23T14:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "project_fast", activeDnaArtifactId: null, name: "Fast Images", type: "Image", status: "active", description: "", note: "", hue: "#d946ef", initials: "FI", createdAt: time, updatedAt: time }],
+      dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
+      workflows: [{
+        id: "workflow_z_image", projectId: "project_fast", name: "Z-Image Turbo", description: "", sourceFileName: "z-image.json", modality: "image", executionState: "ready", createdAt: time, updatedAt: time,
+        currentRevision: {
+          id: "workflowrev_z_image", workflowId: "workflow_z_image", version: 1, parentRevisionId: null, format: "comfyui-api", contentHash: "abc123", nodeCount: 4, models: ["z_image_turbo_bf16.safetensors"], createdAt: time,
+          parameters: [
+            { id: "13::width", label: "Width", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "width" } },
+            { id: "13::height", label: "Height", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "height" } },
+            { id: "3::steps", label: "Steps", kind: "number", value: 8, mediaKind: null, binding: { format: "comfyui-api", nodeId: "3", inputName: "steps" } },
+            { id: "2::text", label: "Prompt", kind: "text", value: "A quiet portrait", mediaKind: null, binding: { format: "comfyui-api", nodeId: "2", inputName: "text" } },
+          ],
+        },
+      }],
+    }));
+  }, { createdAt });
+  await page.goto("/#/dna");
+  const speed = page.getByRole("group", { name: "Image speed" });
+  await expect(speed.getByRole("button", { name: /^Fast/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /Save & generate image · fast/ })).toBeVisible();
+  await page.locator(".quick-create-advanced > summary").click();
+  await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("512");
+  await expect(page.getByRole("spinbutton", { name: "Height" })).toHaveValue("512");
+  await speed.getByRole("button", { name: /Custom · can be slow/ }).click();
+  await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("1024");
+  await expect(page.getByRole("button", { name: /Generate image · can be slow/ })).toBeVisible();
+});
+
 test("CreativeDNA survives the full review loop", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/#/dna");

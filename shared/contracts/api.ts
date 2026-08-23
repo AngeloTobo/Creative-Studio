@@ -6,6 +6,7 @@ import type {
   Capability,
   GenerationModality,
   GenerationExecutionStage,
+  ImagePerformanceMode,
   Job,
   MediaAsset,
   Project,
@@ -145,6 +146,7 @@ export type SubmitJobRequest = {
     revisionId: string;
     inputBindings: Record<string, string>;
   };
+  performanceMode?: ImagePerformanceMode;
   videoOperation?: VideoGenerationOperation;
 };
 
