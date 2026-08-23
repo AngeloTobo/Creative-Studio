@@ -16,7 +16,7 @@ function artifact(kind: Artifact["kind"]): Artifact {
     status: "ready",
     provider: "afdfw",
     prompt: `Original ${kind} prompt`,
-    preview: { kind: "remote-media", url: `/api/creative-studio/artifacts/artifact-${kind}/media`, colors: ["#111827", "#7c3aed"] },
+    preview: { kind: "remote-media", url: `/api/creative-studio/artifacts/artifact-${kind}/media`, posterUrl: kind === "video" ? `/api/creative-studio/artifacts/artifact-${kind}/thumbnail` : null, colors: ["#111827", "#7c3aed"] },
     lineage: { sourceArtifactIds: [], parentArtifactId: null },
     retention: { state: "retained", size: 1024 },
     settingsStamp: {
@@ -53,8 +53,12 @@ describe("real artifact media review", () => {
     expect(imageMarkup).not.toContain("<audio");
 
     const video = artifact("video");
-    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} /><ArtifactMediaReview artifact={video} onInspect={() => undefined} /></>);
+    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} playable /><ArtifactMediaReview artifact={video} onInspect={() => undefined} /></>);
     expect(videoMarkup).toContain("<video");
+    expect(videoMarkup.match(/<video/g)).toHaveLength(1);
+    expect(videoMarkup).toContain("controls=\"\"");
+    expect(videoMarkup).toContain("poster=\"/api/creative-studio/artifacts/artifact-video/thumbnail\"");
+    expect(videoMarkup).toContain("#t=0.001");
     expect(videoMarkup).toContain("Download video");
     expect(videoMarkup).not.toContain("Inspect full-size image");
   });

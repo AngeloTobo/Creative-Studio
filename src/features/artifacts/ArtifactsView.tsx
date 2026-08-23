@@ -54,8 +54,7 @@ export function ArtifactMediaReview({ artifact, onInspect }: { artifact: Artifac
   }
   if (artifact.kind === "video") {
     return (
-      <section className="artifact-video-review" aria-label={`Video review for ${artifact.name}`}>
-        <video controls playsInline preload="metadata" src={mediaUrl}>Your browser does not support video playback.</video>
+      <section className="artifact-video-tools" aria-label={`Video actions for ${artifact.name}`}>
         <a className="btn btn-ghost artifact-download" href={mediaUrl} download={downloadName(artifact)}><Icon name="arrow" size={15} /> Download video</a>
       </section>
     );
@@ -127,7 +126,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
   };
   return (
     <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}`} id={`artifact-card-${artifact.id}`}>
-      <ArtifactThumb artifact={artifact} />
+      <ArtifactThumb artifact={artifact} playable />
       <div className="artifact-body">
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
         <p>{artifact.prompt}</p>
@@ -153,6 +152,9 @@ export function ArtifactsView({ onQueued, onContinueLoop, focusArtifactId }: { o
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
   const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
+  const artifactCounts = (["retaining", "ready", "accepted", "rejected", "archived"] as const)
+    .map((status) => ({ status, count: artifacts.filter((artifact) => artifact.status === status).length }))
+    .filter(({ count }) => count > 0);
   useEffect(() => {
     if (!focusArtifactId) return;
     window.requestAnimationFrame(() => document.getElementById(`artifact-card-${focusArtifactId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
@@ -160,7 +162,7 @@ export function ArtifactsView({ onQueued, onContinueLoop, focusArtifactId }: { o
   return (
     <section className="artifacts-view fade-up">
       <div className="artifact-summary">
-        {(["retaining", "ready", "accepted", "rejected", "archived"] as const).map((status) => <div className="glass" key={status}><strong>{artifacts.filter((artifact) => artifact.status === status).length}</strong><span>{status}</span></div>)}
+        {artifactCounts.map(({ status, count }) => <div className="glass" key={status}><strong>{count}</strong><span>{status}</span></div>)}
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid">

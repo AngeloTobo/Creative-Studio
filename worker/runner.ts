@@ -5,7 +5,7 @@ import type {
   RunnerJobHeartbeatRequest,
 } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
-import { completeLocalRunnerJob, jobById, runnerInputById } from "./repository";
+import { completeLocalRunnerJob, jobById, retainLocalRunnerVideoThumbnail, runnerInputById } from "./repository";
 import type { Env } from "./types";
 import { workflowExecutionPlan } from "./workflows";
 
@@ -208,6 +208,17 @@ export async function completeClaimedLocalRunnerJob(
   return completeLocalRunnerJob(env, runner.ownerId, runner.id, jobId, body, contentType, declaredSize);
 }
 
+export async function retainClaimedLocalRunnerVideoThumbnail(
+  env: Env,
+  runner: RunnerIdentity,
+  jobId: string,
+  body: ReadableStream,
+  contentType: string,
+  declaredSize: number,
+) {
+  return retainLocalRunnerVideoThumbnail(env, runner.ownerId, runner.id, jobId, body, contentType, declaredSize);
+}
+
 export async function localRunnerMedia(env: Env, runner: RunnerIdentity, mediaId: string) {
   if (!env.ARTIFACTS) throw new Error("artifact_storage_not_configured");
   const media = await runnerInputById(env, runner.ownerId, mediaId);
@@ -226,7 +237,7 @@ export async function localRunnerMedia(env: Env, runner: RunnerIdentity, mediaId
 
 export function isLocalRunnerRoute(route: string) {
   return route === "runner-work-claim" || route === "runner-heartbeat" || route === "runner-job-claim" || route === "runner-job-heartbeat"
-    || route === "runner-job-complete" || route === "runner-job-fail" || route === "runner-media-content"
+    || route === "runner-job-complete" || route === "runner-job-thumbnail" || route === "runner-job-fail" || route === "runner-media-content"
     || route === "runner-training-claim" || route === "runner-training-heartbeat"
     || route === "runner-training-complete" || route === "runner-training-fail";
 }

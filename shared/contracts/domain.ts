@@ -117,6 +117,7 @@ export type Artifact = {
   preview: {
     kind: "development-gradient" | "remote-media";
     url: string | null;
+    posterUrl?: string | null;
     colors: [string, string];
   };
   lineage: {

@@ -597,6 +597,7 @@ const RUNNER_OUTPUT_TYPES: Record<string, { kind: Job["modality"]; extension: st
 };
 
 export const MAX_RUNNER_OUTPUT_BYTES = 100 * 1024 * 1024;
+export const MAX_VIDEO_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 
 export async function completeLocalRunnerJob(
   env: Env,
@@ -664,6 +665,49 @@ export async function completeLocalRunnerJob(
   return completed;
 }
 
+export async function retainLocalRunnerVideoThumbnail(
+  env: Env,
+  ownerId: string,
+  runnerId: string,
+  jobId: string,
+  body: ReadableStream,
+  contentTypeValue: string,
+  declaredSize: number,
+) {
+  if (!env.ARTIFACTS) throw new Error("artifact_storage_not_configured");
+  const contentType = contentTypeValue.toLowerCase().split(";", 1)[0].trim();
+  if (contentType !== "image/jpeg") throw new Error("unsupported_video_thumbnail_type");
+  if (!Number.isInteger(declaredSize) || declaredSize <= 0) throw new Error("empty_video_thumbnail");
+  if (declaredSize > MAX_VIDEO_THUMBNAIL_BYTES) throw new Error("video_thumbnail_too_large");
+  const background = await backgroundJobById(env, jobId);
+  if (!background || background.ownerId !== ownerId) throw new Error("job_not_found");
+  if (background.executionTarget !== "local-comfyui" || background.runnerId !== runnerId || background.modality !== "video") {
+    throw new Error("runner_job_not_completable");
+  }
+  if (background.status !== "completed" || !background.artifactId) throw new Error("video_thumbnail_artifact_not_ready");
+
+  const safeOwner = ownerId.replace(/[^a-z0-9_-]/gi, "_").slice(0, 120);
+  const key = `owners/${safeOwner}/artifacts/${background.artifactId}/thumbnail.jpg`;
+  const created = await env.ARTIFACTS.put(key, body, {
+    onlyIf: { etagDoesNotMatch: "*" },
+    httpMetadata: { contentType },
+    customMetadata: { ownerId, artifactId: background.artifactId, jobId, runnerId, frame: "first", retainedAt: new Date().toISOString() },
+  });
+  const retained = await env.ARTIFACTS.head(key);
+  if (!retained || retained.size !== declaredSize) {
+    if (created) await env.ARTIFACTS.delete(key);
+    throw new Error("video_thumbnail_retention_verification_failed");
+  }
+  const updated = await env.DB.prepare(`update creative_artifacts set thumbnail_key = ?, thumbnail_content_type = ?, thumbnail_size = ?, updated_at = ?
+    where id = ? and owner_id = ? and kind = 'video'`)
+    .bind(key, contentType, retained.size, new Date().toISOString(), background.artifactId, ownerId).run();
+  if (!updated.meta.changes) {
+    if (created) await env.ARTIFACTS.delete(key);
+    throw new Error("artifact_not_found");
+  }
+  return { artifactId: background.artifactId, key, size: retained.size, contentType };
+}
+
 export async function cancelOwnedJob(env: Env, ownerId: string, jobId: string) {
   const current = await jobById(env, ownerId, jobId);
   if (!current) throw new Error("job_not_found");
@@ -701,11 +745,11 @@ type ArtifactRow = {
   id: string; projectId: string; jobId: string; dnaArtifactId: string; kind: Artifact["kind"]; name: string;
   status: Artifact["status"]; provider: string; prompt: string; previewKind: Artifact["preview"]["kind"];
   previewUrl: string | null; previewFrom: string; previewTo: string; parentArtifactId: string | null;
-  retainedKey: string | null; retainedSize: number | null; createdAt: string; updatedAt: string; settingsStampJson: string;
+  retainedKey: string | null; retainedSize: number | null; thumbnailKey: string | null; createdAt: string; updatedAt: string; settingsStampJson: string;
 };
 
 export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
-  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, created_at as createdAt, updated_at as updatedAt, settings_stamp_json as settingsStampJson from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
+  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, thumbnail_key as thumbnailKey, created_at as createdAt, updated_at as updatedAt, settings_stamp_json as settingsStampJson from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
   return (result.results ?? []).map((row) => {
     const settingsStamp = parseSettingsStamp(row.settingsStampJson, {
       source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
@@ -714,7 +758,7 @@ export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact
     return {
       id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
       name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
-      preview: { kind: row.previewKind, url: row.previewUrl, colors: [row.previewFrom, row.previewTo] },
+      preview: { kind: row.previewKind, url: row.previewUrl, posterUrl: row.thumbnailKey ? `/api/creative-studio/artifacts/${row.id}/thumbnail` : null, colors: [row.previewFrom, row.previewTo] },
       lineage: { sourceArtifactIds: settingsStamp.inputArtifactIds ?? [], parentArtifactId: row.parentArtifactId },
       retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
       settingsStamp,
@@ -778,6 +822,13 @@ export async function artifactMediaPath(env: Env, ownerId: string, artifactId: s
     from creative_artifacts where id = ? and owner_id = ?`)
     .bind(artifactId, ownerId)
     .first<{ mediaPath: string | null; retainedKey: string | null; retainedContentType: string | null; retainedSize: number | null }>();
+}
+
+export async function artifactThumbnailPath(env: Env, ownerId: string, artifactId: string) {
+  return env.DB.prepare(`select thumbnail_key as thumbnailKey, thumbnail_content_type as thumbnailContentType,
+    thumbnail_size as thumbnailSize from creative_artifacts where id = ? and owner_id = ? and kind = 'video'`)
+    .bind(artifactId, ownerId)
+    .first<{ thumbnailKey: string | null; thumbnailContentType: string | null; thumbnailSize: number | null }>();
 }
 
 export async function retainArtifactMedia(

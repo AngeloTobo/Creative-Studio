@@ -30,6 +30,7 @@ import { body, boundedText, json } from "../lib/http";
 import { mediaContent, requestedMediaRange, uploadMedia } from "../media";
 import {
   artifactMediaPath,
+  artifactThumbnailPath,
   archiveProject,
   cancelOwnedJob,
   createDevelopmentJob,
@@ -66,6 +67,7 @@ import {
   isLocalRunnerRoute,
   listLocalRunners,
   localRunnerMedia,
+  retainClaimedLocalRunnerVideoThumbnail,
   revokeLocalRunner,
   supportsCreativeDnaMediaDescriptions,
 } from "../runner";
@@ -292,6 +294,13 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const declaredSize = Number(request.headers.get("x-cs-file-size") ?? request.headers.get("content-length"));
     const job = await completeClaimedLocalRunnerJob(env, runner, match[1], request.body, request.headers.get("content-type") ?? "", declaredSize);
     return json({ ok: true, job });
+  }
+  if (route === "runner-job-thumbnail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/jobs\/([a-z0-9_]+)\/thumbnail$/i);
+    if (!match || !request.body) throw new Error("empty_video_thumbnail");
+    const declaredSize = Number(request.headers.get("x-cs-file-size") ?? request.headers.get("content-length"));
+    const thumbnail = await retainClaimedLocalRunnerVideoThumbnail(env, runner, match[1], request.body, request.headers.get("content-type") ?? "", declaredSize);
+    return json({ ok: true, thumbnail });
   }
   if (route === "runner-media-content") {
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/media\/([a-z0-9_]+)$/i);
@@ -712,6 +721,21 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       }
       if (!media?.mediaPath) return json({ ok: false, error: "artifact_media_not_found" }, { status: 404 });
       return afdfwMedia(env, request, media.mediaPath);
+    }
+    if (route === "artifact-thumbnail") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/thumbnail$/i);
+      const thumbnail = match ? await artifactThumbnailPath(env, session.userId, match[1]) : null;
+      if (!thumbnail?.thumbnailKey || !env.ARTIFACTS) return json({ ok: false, error: "artifact_thumbnail_not_found" }, { status: 404 });
+      const object = await env.ARTIFACTS.get(thumbnail.thumbnailKey);
+      if (!object) return json({ ok: false, error: "artifact_thumbnail_not_found" }, { status: 404 });
+      const headers = new Headers({
+        "cache-control": "private, max-age=3600",
+        "content-length": String(thumbnail.thumbnailSize ?? object.size),
+        "content-type": thumbnail.thumbnailContentType || "image/jpeg",
+        "x-content-type-options": "nosniff",
+      });
+      object.writeHttpMetadata(headers);
+      return new Response(object.body, { headers });
     }
     if (route === "capabilities") return json({ ok: true, capabilities: await capabilities(env, session) });
     return json({ ok: false, error: "creative_studio_route_not_found" }, { status: 404 });

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Artifact, Job, Project } from "../../shared/contracts";
 import { Icon } from "./Icon";
 
@@ -40,18 +41,62 @@ export function StatusDot({ status }: { status: Job["status"] }) {
   return <span className="dot" style={{ background: color, boxShadow: `0 0 8px ${color}` }} />;
 }
 
-export function ArtifactThumb({ artifact, compact = false }: { artifact: Artifact; compact?: boolean }) {
+function firstFrameSource(url: string) {
+  return url.includes("#") ? url : `${url}#t=0.001`;
+}
+
+function ArtifactVideo({ artifact, playable }: { artifact: Artifact; playable: boolean }) {
+  const mediaUrl = artifact.preview.url ?? "";
+  const retainedPoster = artifact.preview.posterUrl ?? null;
+  const [browserPoster, setBrowserPoster] = useState<string | null>(null);
+
+  const captureFirstFrame = (video: HTMLVideoElement) => {
+    if (retainedPoster || browserPoster || !video.videoWidth || !video.videoHeight || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    const scale = Math.min(1, 720 / video.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    try {
+      canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      setBrowserPoster(canvas.toDataURL("image/jpeg", 0.78));
+    } catch {
+      // The media-fragment source still asks the browser to display frame zero.
+    }
+  };
+
+  return (
+    <video
+      className={`artifact-media artifact-video${playable ? " artifact-video-player" : ""}`}
+      src={firstFrameSource(mediaUrl)}
+      poster={retainedPoster ?? browserPoster ?? undefined}
+      controls={playable}
+      playsInline
+      preload="metadata"
+      aria-label={`${artifact.name} video${playable ? " player" : " preview"}`}
+      onLoadedMetadata={(event) => {
+        const video = event.currentTarget;
+        if (!retainedPoster && video.duration > 0 && video.currentTime === 0) video.currentTime = Math.min(0.001, video.duration / 2);
+      }}
+      onLoadedData={(event) => captureFirstFrame(event.currentTarget)}
+      onSeeked={(event) => captureFirstFrame(event.currentTarget)}
+    >
+      Your browser does not support video playback.
+    </video>
+  );
+}
+
+export function ArtifactThumb({ artifact, compact = false, playable = false }: { artifact: Artifact; compact?: boolean; playable?: boolean }) {
   const [from, to] = artifact.preview.colors;
   const hasImage = artifact.kind === "image" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
   const hasAudio = artifact.kind === "music" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
   const hasVideo = artifact.kind === "video" && artifact.preview.kind === "remote-media" && Boolean(artifact.preview.url);
   return (
-    <div className={`thumb${compact ? " artifact-thumb-compact" : ""}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
+    <div className={`thumb${compact ? " artifact-thumb-compact" : ""}${hasImage || hasVideo ? " has-media" : ""}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
       <div className="thumb-tex" />
       <span className="thumb-type"><Icon name={artifact.kind} size={15} /></span>
       {hasImage ? <img className="artifact-media" src={artifact.preview.url ?? undefined} alt={`${artifact.name} preview`} /> : null}
       {hasAudio ? <span className="artifact-audio-visual" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} />)}</span> : null}
-      {hasVideo ? <video className="artifact-media" src={artifact.preview.url ?? undefined} muted playsInline preload="metadata" aria-label={`${artifact.name} video preview`} /> : null}
+      {hasVideo ? <ArtifactVideo artifact={artifact} playable={playable} /> : null}
       {!hasImage && !hasAudio && !hasVideo ? <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : artifact.kind === "video" ? "MOTION" : "FRAME"}</span> : null}
     </div>
   );

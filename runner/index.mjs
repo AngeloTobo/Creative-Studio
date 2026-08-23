@@ -1,11 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.4.1";
+export const RUNNER_VERSION = "1.4.2";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -422,6 +425,35 @@ async function fetchOutput(config, output) {
   return { bytes, contentType: contentType(output.filename, response.headers.get("content-type")) };
 }
 
+export async function createFirstFrameThumbnail(bytes, contentTypeValue) {
+  if (!ffmpegPath) throw new Error("video_thumbnail_ffmpeg_unavailable");
+  const extension = ({ "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" })[contentTypeValue] || "mp4";
+  const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-thumbnail-"));
+  const inputPath = join(directory, `source.${extension}`);
+  const outputPath = join(directory, "first-frame.jpg");
+  try {
+    await writeFile(inputPath, bytes);
+    await new Promise((resolve, reject) => {
+      const stderr = [];
+      const child = spawn(ffmpegPath, [
+        "-hide_banner", "-loglevel", "error", "-ss", "0", "-i", inputPath,
+        "-frames:v", "1", "-vf", "scale=960:-2:force_original_aspect_ratio=decrease", "-q:v", "3", "-y", outputPath,
+      ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+      child.stderr.on("data", (chunk) => stderr.push(chunk));
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
+        if (code === 0) resolve();
+        else reject(new Error(`video_thumbnail_ffmpeg_failed:${signal || code}:${Buffer.concat(stderr).toString("utf8").slice(0, 240)}`));
+      });
+    });
+    const thumbnail = await readFile(outputPath);
+    if (!thumbnail.byteLength) throw new Error("video_thumbnail_empty");
+    return thumbnail;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function executeBundle(config, bundle) {
   try {
     const graph = await prepareGraph(config, bundle);
@@ -440,6 +472,14 @@ async function executeBundle(config, bundle) {
       body: JSON.stringify({ progress: 92, stage: "downloading-output" }),
     });
     const retained = await fetchOutput(config, output);
+    let videoThumbnail = null;
+    if (bundle.job.modality === "video") {
+      try {
+        videoThumbnail = await createFirstFrameThumbnail(retained.bytes, retained.contentType);
+      } catch (thumbnailError) {
+        process.stderr.write(`[Creative Studio Runner] first-frame thumbnail unavailable for ${bundle.job.id}: ${thumbnailError.message}\n`);
+      }
+    }
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ progress: 94, stage: "retaining" }),
@@ -453,6 +493,17 @@ async function executeBundle(config, bundle) {
       },
       body: retained.bytes,
     });
+    if (videoThumbnail) {
+      try {
+        await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/thumbnail`, {
+          method: "POST",
+          headers: { "content-type": "image/jpeg", "x-cs-file-size": String(videoThumbnail.byteLength) },
+          body: videoThumbnail,
+        });
+      } catch (thumbnailError) {
+        process.stderr.write(`[Creative Studio Runner] could not retain first-frame thumbnail for ${bundle.job.id}: ${thumbnailError.message}\n`);
+      }
+    }
     process.stdout.write(`[Creative Studio Runner] completed ${bundle.job.id} (${output.filename})\n`);
   } catch (caught) {
     const error = (caught instanceof Error ? caught.message : "local_runner_failed").slice(0, 500);

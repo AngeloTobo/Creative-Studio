@@ -49,7 +49,7 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 5. The primary image/music actions select a compatible imported API-format workflow, save the DNA translation into its primary prompt as an immutable revision, and create a durable `local-comfyui` job tied to that exact DNA and workflow revision.
 6. The authenticated Local Runner claims the job and executes it through localhost ComfyUI without requiring the browser to remain open.
 7. AFDFW image/music generation is a distinct optional action. Its request must explicitly name the `afdfw` provider; the Worker never falls through to AFDFW when no workflow was supplied.
-8. Either completion path creates a `retaining` artifact and writes the result to a deterministic Creative Studio R2 key. Only after size verification does the job become `completed` and the artifact become `ready`; later review never changes AFDFW canonical state.
+8. Either completion path creates a `retaining` artifact and writes the result to a deterministic Creative Studio R2 key. Only after size verification does the job become `completed` and the artifact become `ready`; for video, the runner then stores an independently bounded first-frame JPEG under the same artifact. Later review never changes AFDFW canonical state.
 
 ## Adapters
 

@@ -1168,10 +1168,20 @@ describe("Creative Studio Worker API", () => {
     }), local);
     expect(completed.status).toBe(200);
     expect(await result(completed)).toMatchObject({ job: { status: "completed", modality: "video", provider: "local-comfyui", executionStage: "completed" } });
-    expect(values.size).toBe(2);
-    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; kind: string; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
-    expect(history.artifacts[0]).toMatchObject({ kind: "video", retention: { state: "retained", size: outputBytes.byteLength } });
+    const thumbnailBytes = new Uint8Array([255, 216, 255, 219, 0, 67, 0, 255, 217]);
+    const retainedThumbnail = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${retried.job.id}/thumbnail`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "image/jpeg", "x-cs-file-size": String(thumbnailBytes.byteLength) },
+      body: thumbnailBytes,
+    }), local);
+    expect(retainedThumbnail.status).toBe(200);
+    expect(values.size).toBe(3);
+    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; kind: string; preview: { posterUrl: string | null }; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
+    expect(history.artifacts[0]).toMatchObject({ kind: "video", preview: { posterUrl: `/api/creative-studio/artifacts/artifact_${retried.job.id}/thumbnail` }, retention: { state: "retained", size: outputBytes.byteLength } });
     expect(history.trainingExamples[0]).toMatchObject({ kind: "video", status: "candidate" });
+    const thumbnailResponse = await routeCreativeStudioApi(request(history.artifacts[0].preview.posterUrl!), local);
+    expect(thumbnailResponse.headers.get("content-type")).toBe("image/jpeg");
+    expect([...new Uint8Array(await thumbnailResponse.arrayBuffer())]).toEqual([...thumbnailBytes]);
 
     const remixGraph = JSON.stringify({
       "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },

@@ -43,12 +43,12 @@ export const CREATIVE_STUDIO_ROUTES = {
 export type CreativeStudioRoute =
   | "snapshot" | "session" | "projects" | "project-create" | "project-update" | "project-archive"
   | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
-  | "artifacts-list" | "artifact-review" | "artifact-media"
+  | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
   | "runners-list" | "runner-enroll" | "runner-revoke"
-  | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-fail" | "runner-media-content"
+  | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
@@ -67,6 +67,7 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/reuse$/i.test(pathname)) return "job-reuse";
   if (method === "GET" && pathname === "/api/creative-studio/artifacts") return "artifacts-list";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/media$/i.test(pathname)) return "artifact-media";
+  if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/thumbnail$/i.test(pathname)) return "artifact-thumbnail";
   if (method === "POST" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/(accepted|rejected|archived)$/i.test(pathname)) return "artifact-review";
   if (method === "GET" && pathname === "/api/creative-studio/media") return "media-list";
   if (method === "POST" && pathname === "/api/creative-studio/media") return "media-upload";
@@ -89,6 +90,7 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/runner/jobs/claim") return "runner-job-claim";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-job-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-job-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/thumbnail$/i.test(pathname)) return "runner-job-thumbnail";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-job-fail";
   if (method === "GET" && /^\/api\/creative-studio\/runner\/media\/[a-z0-9_]+$/i.test(pathname)) return "runner-media-content";
   if (method === "POST" && pathname === "/api/creative-studio/runner/training/claim") return "runner-training-claim";
