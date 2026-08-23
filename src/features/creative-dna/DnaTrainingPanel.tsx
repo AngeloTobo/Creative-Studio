@@ -12,7 +12,7 @@ function statusLabel(status: string) {
   return status.replaceAll("-", " ");
 }
 
-export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: { onMedia: () => void; reviewJobId?: string; onReviewJobHandled?: () => void }) {
+export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, onReviewJobHandled }: { onMedia: () => void; initialAssetIds?: string[]; reviewJobId?: string; onReviewJobHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, startDnaTraining, cancelDnaTraining, reviewDnaTraining, busy, error } = useStudio();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const eligibleAssets = useMemo(() => snapshot?.mediaAssets
@@ -22,7 +22,7 @@ export function DnaTrainingPanel({ onMedia, reviewJobId, onReviewJobHandled }: {
   const trainingExamples = snapshot?.trainingExamples
     .filter((example) => example.projectId === activeProjectId && example.status === "training-ready" && freshExampleIds.has(example.id)) ?? [];
   const jobs = snapshot?.trainingJobs.filter((job) => job.projectId === activeProjectId) ?? [];
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(initialAssetIds);
   const [name, setName] = useState("");
   const [targetModality, setTargetModality] = useState<CreativeDnaTarget>(activeDna?.targetModality ?? "image");
   const [includeExamples, setIncludeExamples] = useState(true);

@@ -15,8 +15,10 @@ export const CREATIVE_DNA_DIMENSION_KEYS = [
 
 export type CreativeDnaDimensionKey = (typeof CREATIVE_DNA_DIMENSION_KEYS)[number];
 export type CreativeDnaTarget = "music" | "image";
-export type CreativeDnaSourceKind = "original" | "commercial_reference";
+export type CreativeDnaSourceKind = "original" | "owner_uploads" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
+
+export const MAX_CREATIVE_DNA_REFERENCE_ASSETS = 12;
 
 type CreativeDnaMediaDescriptionProvenance = {
   provider: "local-comfyui";
@@ -70,6 +72,7 @@ export type CreativeDnaInput = {
   targetModality: CreativeDnaTarget;
   sourceKind?: CreativeDnaSourceKind;
   referenceLabel?: string;
+  referenceAssetIds?: string[];
   dimensions?: Partial<CreativeDnaDimensions>;
   influence?: Partial<CreativeDnaInfluence>;
 };
@@ -97,6 +100,7 @@ export type CreativeDnaArtifact = {
     kind: CreativeDnaSourceKind;
     directive: string;
     referenceLabel: string | null;
+    referenceAssetIds: string[];
   };
   shared: CreativeDnaDimensions;
   native: Record<string, unknown>;
@@ -153,10 +157,19 @@ export const DEFAULT_CREATIVE_DNA_INFLUENCE: CreativeDnaInfluence = {
 };
 
 const TARGETS = new Set<CreativeDnaTarget>(["music", "image"]);
-const SOURCE_KINDS = new Set<CreativeDnaSourceKind>(["original", "commercial_reference"]);
+const SOURCE_KINDS = new Set<CreativeDnaSourceKind>(["original", "owner_uploads", "commercial_reference"]);
 
 function boundedText(value: unknown, maxLength: number) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+export function creativeDnaReferenceAssetIds(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("invalid_reference_assets");
+  const ids = [...new Set(value.map((item) => boundedText(item, 100)))];
+  if (ids.length > MAX_CREATIVE_DNA_REFERENCE_ASSETS) throw new Error("too_many_reference_assets");
+  if (ids.some((assetId) => !/^media_[a-z0-9_]+$/i.test(assetId))) throw new Error("invalid_reference_assets");
+  return ids;
 }
 
 function boundedNumber(value: unknown, fallback: number) {
@@ -248,12 +261,17 @@ function compileGenerationPrompt(
 }
 
 export function resolveCreativeDnaGenerationArtifact(artifact: CreativeDnaArtifact): CreativeDnaArtifact {
+  const referenceAssetIds = creativeDnaReferenceAssetIds(artifact.source.referenceAssetIds);
+  const referencesAreCurrent = Array.isArray(artifact.source.referenceAssetIds)
+    && artifact.source.referenceAssetIds.length === referenceAssetIds.length
+    && artifact.source.referenceAssetIds.every((assetId, index) => assetId === referenceAssetIds[index]);
   const trainedDescription = creativeDnaTrainingDescription(artifact.training?.analysis, "image");
   const imageDirective = trainedDescription ?? artifact.source.directive;
   const imagePrompt = compileGenerationPrompt("image", imageDirective, artifact.source.kind, artifact.shared);
+  const normalizedSource = referencesAreCurrent ? artifact.source : { ...artifact.source, referenceAssetIds };
   const source = trainedDescription && artifact.targetModality === "image"
-    ? { ...artifact.source, directive: trainedDescription }
-    : artifact.source;
+    ? { ...normalizedSource, directive: trainedDescription }
+    : normalizedSource;
   if (source === artifact.source && imagePrompt === artifact.generationPrompts.image) return artifact;
   return { ...artifact, source, generationPrompts: { ...artifact.generationPrompts, image: imagePrompt } };
 }
@@ -295,7 +313,9 @@ export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCom
   const requestedSourceKind = input.sourceKind ?? "original";
   const sourceKind = SOURCE_KINDS.has(requestedSourceKind) ? requestedSourceKind : "original";
   const referenceLabel = boundedText(input.referenceLabel, 160) || null;
+  const referenceAssetIds = sourceKind === "owner_uploads" ? creativeDnaReferenceAssetIds(input.referenceAssetIds) : [];
   if (sourceKind === "commercial_reference" && !referenceLabel) throw new Error("reference_label_required");
+  if (sourceKind === "owner_uploads" && !referenceAssetIds.length) throw new Error("reference_assets_required");
 
   const dimensions = CREATIVE_DNA_DIMENSION_KEYS.reduce((result, key) => {
     result[key] = boundedNumber(input.dimensions?.[key], DEFAULT_CREATIVE_DNA_DIMENSIONS[key]);
@@ -321,7 +341,7 @@ export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCom
     createdAt: meta.createdAt,
     targetModality,
     capability: targetModality === "music" ? "MUSIC_GENERATE" : "IMAGE_GENERATE",
-    source: { kind: sourceKind, directive, referenceLabel },
+    source: { kind: sourceKind, directive, referenceLabel: sourceKind === "commercial_reference" ? referenceLabel : null, referenceAssetIds },
     shared: dimensions,
     native: nativeDna(targetModality, dimensions),
     influence,
@@ -329,6 +349,7 @@ export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCom
       { path: "source.directive", class: "user-directed", confidence: 1, downstream: true },
       { path: "shared", class: "user-directed", confidence: 1, downstream: true },
       { path: "source.referenceLabel", class: "metadata/database", confidence: 1, downstream: false },
+      { path: "source.referenceAssetIds", class: "metadata/database", confidence: 1, downstream: false },
       { path: "generationPrompts", class: "derived/translated", confidence: 0.84, downstream: true },
     ],
     rights: {
@@ -336,7 +357,9 @@ export function compileCreativeDna(input: CreativeDnaInput, meta: CreativeDnaCom
       referenceStoredAsProvenanceOnly: isReference,
       allowedDownstream: isReference
         ? ["abstract structure", "energy", "instrumentation concepts", "production character", "tempo", "density", "contrast"]
-        : ["user directive", "shared CreativeDNA", "translated CreativeDNA"],
+        : sourceKind === "owner_uploads"
+          ? ["user directive", "shared CreativeDNA", "translated CreativeDNA", "owner-upload lineage"]
+          : ["user directive", "shared CreativeDNA", "translated CreativeDNA"],
       blockedDownstream: isReference
         ? ["lyrics", "identifiable melody", "copied passages", "vocal likeness", "raw reference audio"]
         : [],

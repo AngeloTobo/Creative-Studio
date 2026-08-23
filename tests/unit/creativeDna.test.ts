@@ -52,6 +52,30 @@ describe("CreativeDNA v1", () => {
     expect(artifact.generationPrompts.image).not.toContain(referenceLabel);
   });
 
+  it("retains selected owner uploads as provenance without leaking asset identity into prompts", () => {
+    const artifact = compileCreativeDna({
+      name: "Embryo study",
+      directive: "A translucent organic form suspended in a quiet dark field with fine internal detail.",
+      targetModality: "image",
+      sourceKind: "owner_uploads",
+      referenceAssetIds: ["media_owner_image", "media_owner_image", "media_owner_audio"],
+    }, fixedMeta);
+    expect(artifact.source).toMatchObject({
+      kind: "owner_uploads",
+      referenceLabel: null,
+      referenceAssetIds: ["media_owner_image", "media_owner_audio"],
+    });
+    expect(artifact.evidence).toContainEqual(expect.objectContaining({ path: "source.referenceAssetIds", downstream: false }));
+    expect(artifact.rights).toMatchObject({ policy: "original-input", referenceStoredAsProvenanceOnly: false });
+    expect(artifact.generationPrompts.image).toBe(artifact.source.directive);
+    expect(artifact.generationPrompts.image).not.toMatch(/media_owner|owner-upload/i);
+    expect(() => compileCreativeDna({
+      directive: "Reference my retained works.",
+      targetModality: "image",
+      sourceKind: "owner_uploads",
+    }, fixedMeta)).toThrow("reference_assets_required");
+  });
+
   it("bounds dimensions and rejects incomplete reference provenance", () => {
     const artifact = compileCreativeDna({ directive: "A compact graphic composition.", targetModality: "image", dimensions: { energy: 140, tension: -20 } }, fixedMeta);
     expect(artifact.shared.energy).toBe(100);

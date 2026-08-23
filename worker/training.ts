@@ -513,6 +513,7 @@ export async function completeCreativeDnaTrainingJob(
     targetModality: job.targetModality,
     sourceKind: baseDna?.source.kind ?? "original",
     referenceLabel: baseDna?.source.referenceLabel ?? undefined,
+    referenceAssetIds: baseDna?.source.referenceAssetIds ?? undefined,
   });
   const overallConfidence = CREATIVE_DNA_DIMENSION_KEYS.reduce((total, key) => total + analysis.dimensions[key].confidence, 0)
     / CREATIVE_DNA_DIMENSION_KEYS.length;

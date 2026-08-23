@@ -1,6 +1,7 @@
 import {
   compileCreativeDna,
   creativeDnaGenerationPrompt,
+  creativeDnaReferenceAssetIds,
   deriveProductionCockpit,
   deriveProjectProductionLoop,
   PROJECT_HUES,
@@ -363,6 +364,13 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       const project = state.projects.find((item) => item.id === input.projectId);
       if (!project) throw new Error("project_not_found");
       if (project.status === "archived") throw new Error("project_archived");
+      if (input.sourceKind === "owner_uploads") {
+        const referenceAssetIds = creativeDnaReferenceAssetIds(input.referenceAssetIds);
+        if (!referenceAssetIds.length) throw new Error("reference_assets_required");
+        const assets = referenceAssetIds.map((assetId) => state.mediaAssets.find((asset) => asset.id === assetId));
+        if (assets.some((asset) => !asset || asset.status !== "retained")) throw new Error("reference_asset_not_found");
+        if (assets.some((asset) => asset?.projectId !== input.projectId)) throw new Error("reference_asset_project_mismatch");
+      }
       const artifactId = makeId("dna");
       const artifact = compileCreativeDna(input, {
         artifactId,

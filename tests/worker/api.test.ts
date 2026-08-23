@@ -361,6 +361,38 @@ describe("Creative Studio Worker API", () => {
     const wrongOwner = await routeCreativeStudioApi(request(payload.asset.contentUrl), workerEnv("afdfw", afdfwFor("owner-other"), bucket));
     expect(wrongOwner.status).toBe(404);
     expect(await result(wrongOwner)).toMatchObject({ error: "media_not_found" });
+
+    const referencedDna = await routeCreativeStudioApi(request("/api/creative-studio/dna", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        name: "Owner upload direction",
+        directive: "A precise organic form suspended against a quiet field.",
+        targetModality: "image",
+        sourceKind: "owner_uploads",
+        referenceAssetIds: [payload.asset.id],
+      }),
+    }), production);
+    expect(referencedDna.status).toBe(201);
+    expect(await result(referencedDna)).toMatchObject({
+      artifact: { source: { kind: "owner_uploads", referenceLabel: null, referenceAssetIds: [payload.asset.id] } },
+    });
+
+    const otherProject = await testProject(ownerId, "Other Media Study");
+    const crossProject = await routeCreativeStudioApi(request("/api/creative-studio/dna", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: otherProject.id,
+        directive: "This must not cross a project boundary.",
+        targetModality: "image",
+        sourceKind: "owner_uploads",
+        referenceAssetIds: [payload.asset.id],
+      }),
+    }), production);
+    expect(crossProject.status).toBe(400);
+    expect(await result(crossProject)).toMatchObject({ error: "reference_asset_project_mismatch" });
   });
 
   it("starts an upload-based CreativeDNA training run and preserves runner lineage", async () => {

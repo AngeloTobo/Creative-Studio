@@ -1,5 +1,6 @@
 import {
   compileCreativeDna,
+  creativeDnaReferenceAssetIds,
   creativeDnaGenerationPrompt,
   PROJECT_HUES,
   resolveCreativeDnaGenerationArtifact,
@@ -228,6 +229,17 @@ export async function createLocalDna(env: Env, ownerId: string, input: CreateCre
   const project = await env.DB.prepare("select id, status from creative_projects where id = ? and owner_id = ?").bind(input.projectId, ownerId).first<{ id: string; status: Project["status"] }>();
   if (!project) throw new Error("project_not_found");
   if (project.status === "archived") throw new Error("project_archived");
+  if (input.sourceKind === "owner_uploads") {
+    const referenceAssetIds = creativeDnaReferenceAssetIds(input.referenceAssetIds);
+    if (!referenceAssetIds.length) throw new Error("reference_assets_required");
+    const placeholders = referenceAssetIds.map(() => "?").join(", ");
+    const result = await env.DB.prepare(`select id, project_id as projectId from creative_media_assets
+      where owner_id = ? and status = 'retained' and id in (${placeholders})`)
+      .bind(ownerId, ...referenceAssetIds).all<{ id: string; projectId: string }>();
+    const assets = result.results ?? [];
+    if (assets.length !== referenceAssetIds.length) throw new Error("reference_asset_not_found");
+    if (assets.some((asset) => asset.projectId !== input.projectId)) throw new Error("reference_asset_project_mismatch");
+  }
   let parent: DnaRow | null = null;
   if (input.parentArtifactId) {
     parent = await env.DB.prepare(`select id, root_artifact_id as rootArtifactId, parent_artifact_id as parentArtifactId, version, dna_json as dnaJson from creative_dna_artifacts where id = ? and owner_id = ?`).bind(input.parentArtifactId, ownerId).first<DnaRow>();

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CREATIVE_DNA_DIMENSION_KEYS,
   DEFAULT_CREATIVE_DNA_DIMENSIONS,
   DEFAULT_CREATIVE_DNA_INFLUENCE,
+  MAX_CREATIVE_DNA_REFERENCE_ASSETS,
   creativeDnaDescriptionSummaries,
   creativeDnaGenerationPrompt,
   type CreativeDnaArtifact,
@@ -12,6 +13,7 @@ import {
   type CreativeDnaMediaDescription,
   type CreativeDnaSourceKind,
   type CreativeDnaTarget,
+  type MediaAsset,
 } from "../../../shared/contracts";
 import { creativeDnaCanGenerate, creativeDnaReviewDecision, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
@@ -42,23 +44,36 @@ function savedLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "Saved" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function ReferenceAssetPreview({ asset }: { asset: MediaAsset }) {
+  if (asset.kind === "image") return <img src={asset.contentUrl} alt="" loading="lazy" />;
+  return <Icon name={asset.kind === "audio" ? "music" : "video"} size={20} />;
+}
+
 export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflows, initialReviewJobId, onCockpitTargetHandled }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void; onWorkflows: () => void; initialReviewJobId?: string; onCockpitTargetHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, selectDna, saveDna, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
+  const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
   const [name, setName] = useState(activeDna?.name ?? "");
   const [directive, setDirective] = useState(activeDna?.source.directive ?? "");
   const [targetModality, setTargetModality] = useState<CreativeDnaTarget>(activeDna?.targetModality ?? "music");
   const [sourceKind, setSourceKind] = useState<CreativeDnaSourceKind>(activeDna?.source.kind ?? "original");
   const [referenceLabel, setReferenceLabel] = useState(activeDna?.source.referenceLabel ?? "");
+  const [referenceAssetIds, setReferenceAssetIds] = useState<string[]>(activeDna?.source.referenceAssetIds ?? []);
   const [dimensions, setDimensions] = useState<CreativeDnaDimensions>({ ...(activeDna?.shared ?? DEFAULT_CREATIVE_DNA_DIMENSIONS) });
   const [influence, setInfluence] = useState<CreativeDnaInfluence>({ ...(activeDna?.influence ?? DEFAULT_CREATIVE_DNA_INFLUENCE) });
   const [copied, setCopied] = useState(false);
   const [requestedReviewJobId, setRequestedReviewJobId] = useState("");
+  const [trainingSeedAssetIds, setTrainingSeedAssetIds] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<CreativeDnaWorkspace>(initialReviewJobId ? "train" : "create");
   const activeReview = snapshot && activeDna ? creativeDnaReviewDecision(snapshot, activeDna) : null;
   const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
   const projectActiveDnaId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
   const productionLoop = snapshot?.productionLoops.find((loop) => loop.projectId === activeProjectId) ?? null;
+  const selectedReferenceAssets = referenceAssetIds.flatMap((assetId) => {
+    const asset = projectMedia.find((item) => item.id === assetId);
+    return asset ? [asset] : [];
+  });
+  const trainableReferenceAssetIds = selectedReferenceAssets.filter((asset) => asset.trainingEligible).map((asset) => asset.id);
 
   const productionAction = (surface: "author" | "generation" | "queue" | "artifacts" | "training") => {
     if (surface === "queue") return onQueued();
@@ -76,6 +91,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
     setTargetModality(artifact.targetModality);
     setSourceKind(artifact.source.kind);
     setReferenceLabel(artifact.source.referenceLabel ?? "");
+    setReferenceAssetIds(artifact.source.referenceAssetIds ?? []);
     setDimensions({ ...artifact.shared });
     setInfluence({ ...artifact.influence });
   };
@@ -88,6 +104,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
     setTargetModality("music");
     setSourceKind("original");
     setReferenceLabel("");
+    setReferenceAssetIds([]);
     setDimensions({ ...DEFAULT_CREATIVE_DNA_DIMENSIONS });
     setInfluence({ ...DEFAULT_CREATIVE_DNA_INFLUENCE });
   };
@@ -99,6 +116,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
       targetModality,
       sourceKind,
       referenceLabel,
+      referenceAssetIds,
       dimensions,
       influence,
       parentArtifactId: activeDna?.artifactId ?? null,
@@ -112,7 +130,18 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
     window.setTimeout(() => setCopied(false), 1_500);
   };
 
-  const invalid = directive.trim().length < 4 || (sourceKind === "commercial_reference" && !referenceLabel.trim());
+  const invalid = directive.trim().length < 4
+    || (sourceKind === "commercial_reference" && !referenceLabel.trim())
+    || (sourceKind === "owner_uploads" && !referenceAssetIds.length);
+
+  const toggleReferenceAsset = (assetId: string) => setReferenceAssetIds((current) => current.includes(assetId)
+    ? current.filter((id) => id !== assetId)
+    : current.length < MAX_CREATIVE_DNA_REFERENCE_ASSETS ? [...current, assetId] : current);
+
+  const analyzeReferences = () => {
+    setTrainingSeedAssetIds(trainableReferenceAssetIds);
+    setWorkspace("train");
+  };
 
   return (
     <section className="dna-workbench fade-up" aria-label="Creative Studio Create workspace">
@@ -154,9 +183,28 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
             <span>Source</span>
             <div className="seg">
               <button className={sourceKind === "original" ? "on" : ""} style={{ "--ta": "var(--teal)" } as React.CSSProperties} onClick={() => setSourceKind("original")}>Original idea</button>
-              <button className={sourceKind === "commercial_reference" ? "on" : ""} style={{ "--ta": "var(--amber)" } as React.CSSProperties} onClick={() => setSourceKind("commercial_reference")}>Reference work</button>
+              <button className={sourceKind === "owner_uploads" ? "on" : ""} style={{ "--ta": "var(--cyan)" } as React.CSSProperties} onClick={() => setSourceKind("owner_uploads")}>Uploaded works</button>
+              <button className={sourceKind === "commercial_reference" ? "on" : ""} style={{ "--ta": "var(--amber)" } as React.CSSProperties} onClick={() => setSourceKind("commercial_reference")}>Outside reference</button>
             </div>
           </div>
+
+          {sourceKind === "owner_uploads" ? <div className="dna-reference-field">
+            <div className="dna-reference-head"><span>Reference uploaded works</span><small>{referenceAssetIds.length}/{MAX_CREATIVE_DNA_REFERENCE_ASSETS} selected</small></div>
+            {projectMedia.length ? <div className="dna-reference-grid">{projectMedia.map((asset) => {
+              const selected = referenceAssetIds.includes(asset.id);
+              return <label key={asset.id} className={`dna-reference-item${selected ? " selected" : ""}${!selected && referenceAssetIds.length >= MAX_CREATIVE_DNA_REFERENCE_ASSETS ? " limit" : ""}`}>
+                <input type="checkbox" checked={selected} disabled={busy || (!selected && referenceAssetIds.length >= MAX_CREATIVE_DNA_REFERENCE_ASSETS)} onChange={() => toggleReferenceAsset(asset.id)} />
+                <span className={`dna-reference-preview ${asset.kind}`}><ReferenceAssetPreview asset={asset} /></span>
+                <span><strong>{asset.name}</strong><small>{asset.kind} · {asset.trainingEligible ? "training consent" : "lineage only"}</small></span>
+                <Icon name={selected ? "check" : "plus"} size={15} />
+              </label>;
+            })}</div> : <div className="dna-reference-empty"><Icon name="image" size={21} /><span><strong>No uploaded works in this project.</strong><small>Upload a real image, audio file, or video, then select it here.</small></span></div>}
+            <div className="dna-reference-actions">
+              <button className="link-btn" onClick={onMedia}>{projectMedia.length ? "Upload more" : "Upload works"}</button>
+              <button className="link-btn" disabled={!trainableReferenceAssetIds.length} onClick={analyzeReferences}>Analyze {trainableReferenceAssetIds.length || "selected"} in Train</button>
+            </div>
+            <small className="rights-note"><Icon name="shield" size={14} /> Selection records owner-upload lineage. Your direction controls generation until Gemma analyzes consented works in Train.</small>
+          </div> : null}
 
           {sourceKind === "commercial_reference" ? <label className="field"><span>Reference identity · lineage only</span><input className="input" value={referenceLabel} maxLength={160} onChange={(event) => setReferenceLabel(event.target.value)} placeholder="Title / artist" /><small className="rights-note"><Icon name="shield" size={14} /> Identity is stored as provenance and excluded from generation prompts.</small></label> : null}
 
@@ -178,6 +226,10 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
           {activeDna ? <div className="dna-result" role="status">
             <div className="dna-result-title"><div><span className="badge active">Saved · v{activeDna.version}</span>{activeReview ? <span className={`state-pill ${activeReview === "pending" ? "waiting-for-runner" : activeReview}`}>training {activeReview}</span> : null}{projectActiveDnaId === activeDna.artifactId ? <span className="badge active">Project active</span> : null}{activeDna.rights.referenceStoredAsProvenanceOnly ? <span className="badge rights">Rights-safe</span> : null}<h3>{activeDna.name}</h3></div><button className="lc-act" aria-label="Copy active prompt" onClick={() => void copyPrompt()}><Icon name={copied ? "check" : "copy"} size={17} /></button></div>
             <p>{activeDna.source.directive}</p>
+            {activeDna.source.referenceAssetIds?.length ? <div className="dna-result-references"><span>Referenced uploads</span><div>{activeDna.source.referenceAssetIds.map((assetId) => {
+              const asset = projectMedia.find((item) => item.id === assetId);
+              return <span key={assetId}><Icon name={asset?.kind === "audio" ? "music" : asset?.kind ?? "image"} size={13} /> {asset?.name ?? "Retained work"}</span>;
+            })}</div></div> : null}
             {activeDna.training?.analysis.sources.some((source) => source.detailedDescription) ? <details className="dna-source-descriptions">
               <summary>Detailed source descriptions · {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).length}</summary>
               {activeDna.training.analysis.sources.filter((source) => source.detailedDescription).map((source) => <article key={source.sourceId}><strong>{source.label}</strong><small>{source.kind} · Gemma 4</small><SourceDescriptionSummaries description={source.detailedDescription!} /></article>)}
@@ -192,13 +244,13 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
         <div className="dna-history-strip">
           {projectDna.map((artifact) => {
             const review = snapshot ? creativeDnaReviewDecision(snapshot, artifact) : null;
-            return <button key={artifact.artifactId} className={`dna-history-item${activeDna?.artifactId === artifact.artifactId ? " on" : ""}`} onClick={() => load(artifact)}><span>{artifact.targetModality}</span><strong>{artifact.name}</strong><small>v{artifact.version} · {savedLabel(artifact.createdAt)}</small><em>{review ? `Training ${review}` : artifact.lineage.parentArtifactId ? "Evolved" : "Root"}</em></button>;
+            return <button key={artifact.artifactId} className={`dna-history-item${activeDna?.artifactId === artifact.artifactId ? " on" : ""}`} onClick={() => load(artifact)}><span>{artifact.targetModality}</span><strong>{artifact.name}</strong><small>v{artifact.version} · {savedLabel(artifact.createdAt)}{artifact.source.referenceAssetIds?.length ? ` · ${artifact.source.referenceAssetIds.length} works` : ""}</small><em>{review ? `Training ${review}` : artifact.lineage.parentArtifactId ? "Evolved" : "Root"}</em></button>;
           })}
           {!projectDna.length ? <span className="empty-copy">No saved DNA yet.</span> : null}
         </div>
       </div></> : null}
 
-      {workspace === "train" ? <DnaTrainingPanel onMedia={onMedia} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /> : null}
+      {workspace === "train" ? <DnaTrainingPanel onMedia={onMedia} initialAssetIds={trainingSeedAssetIds} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /> : null}
       {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} embedded /> : null}
     </section>
   );
