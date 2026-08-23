@@ -49,6 +49,57 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(exactVideoPrompt).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
 });
 
+test("song creation recommends MiniMax Music captions from analyzed art and DNA without imported lyrics", async ({ page }) => {
+  const createdAt = "2026-08-23T20:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    const dimensions = { energy: 72, tension: 68, contrast: 81, warmth: 35, spaciousness: 76, rhythmicity: 63, organicity: 42, polish: 57 };
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "project_song", activeDnaArtifactId: "dna_song", name: "Song Study", type: "Music", status: "active", description: "", note: "", hue: "#d946ef", initials: "SS", createdAt: time, updatedAt: time }],
+      dnaArtifacts: [{
+        schemaVersion: "creative-dna/1.0", artifactId: "dna_song", projectId: "project_song", version: 1, rootArtifactId: "dna_song", name: "Embryo Atmosphere", createdAt: time,
+        targetModality: "image", capability: "IMAGE_GENERATE", source: { kind: "owner_uploads", directive: "Patient tension, electric violet color, open space, and a deliberately human edge.", referenceLabel: null, referenceAssetIds: ["media_embryo"] },
+        shared: dimensions, native: {}, influence: { angeloCore: 75, currentProject: 15, reference: 50 }, evidence: [],
+        rights: { policy: "original-input", referenceStoredAsProvenanceOnly: false, allowedDownstream: ["owner-upload lineage"], blockedDownstream: [] },
+        translations: [], lineage: { rootArtifactId: "dna_song", parentArtifactId: null },
+        generationPrompts: { image: "Patient tension, electric violet color, open space, and a deliberately human edge.", music: "Patient tension translated into sound." },
+        training: { jobId: "training_song", runnerId: "runner_song", assetIds: ["media_embryo"], trainingExampleIds: [], analysis: {
+          schemaVersion: "creative-dna-training-analysis/1.1", createdAt: time, summary: "One analyzed artwork.",
+          sources: [{ sourceId: "media_embryo", mediaId: "media_embryo", sourceType: "upload", kind: "image", label: "Embryo artwork", observations: [], metrics: {}, dimensions, confidence: .9,
+            detailedDescription: { schemaVersion: "creative-dna-media-description/1.1", longSummary: "A detailed analysis of the source artwork.", shortSummary: "A translucent embryo-like form floats in a violet chamber, crossed by fine branching vessels and lit from within against a deep black field.", provider: "local-comfyui", workflowId: "gemma4-multimodal-description", workflowVersion: 1, model: "gemma4_e4b_it_fp8_scaled.safetensors", prompt: "Describe the image.", comfyPromptId: "prompt_song_art", settings: {} } }],
+          dimensions: Object.fromEntries(Object.entries(dimensions).map(([key, value]) => [key, { value, confidence: .9, sourceIds: ["media_embryo"] }])),
+        } },
+      }],
+      mediaAssets: [{ id: "media_embryo", projectId: "project_song", kind: "image", name: "Embryo artwork", originalFileName: "embryo.png", mimeType: "image/png", size: 4, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgo=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: time, parentAssetIds: [] }, createdAt: time, updatedAt: time }],
+      workflows: [{
+        id: "workflow_music3", projectId: "project_song", name: "MiniMax Music 3", description: "", sourceFileName: "minimax-music3-api.json", modality: "music", executionState: "ready", createdAt: time, updatedAt: time,
+        currentRevision: { id: "workflowrev_music3", workflowId: "workflow_music3", version: 1, parentRevisionId: null, format: "comfyui-api", contentHash: "music3hash", nodeCount: 3, models: ["minimax_music3_dit_fp16.safetensors"], createdAt: time,
+          parameters: [
+            { id: "37:13::caption", label: "MiniMax Music3 Text Encode: Caption", kind: "text", value: "Imported demo caption", mediaKind: null, binding: { format: "comfyui-api", nodeId: "37:13", inputName: "caption" } },
+            { id: "37:13::lyrics", label: "MiniMax Music3 Text Encode: Lyrics", kind: "text", value: "Imported demo lyrics that must not be reused", mediaKind: null, binding: { format: "comfyui-api", nodeId: "37:13", inputName: "lyrics" } },
+            { id: "37:38::seed", label: "Seed: Seed", kind: "number", value: 222, mediaKind: null, binding: { format: "comfyui-api", nodeId: "37:38", inputName: "seed" } },
+          ] },
+      }],
+      jobs: [], artifacts: [], acceptances: [], trainingExamples: [], trainingJobs: [],
+      trainingReviews: [{ id: "review_song", projectId: "project_song", trainingJobId: "training_song", dnaArtifactId: "dna_song", decision: "approved", note: "Approved source analysis.", actor: "development-user", activeDnaArtifactId: "dna_song", createdAt: time }],
+      idempotencyKeys: {},
+    }));
+  }, { createdAt });
+
+  await page.goto("/#/dna");
+  await page.getByRole("button", { name: "Song", exact: true }).click();
+  await page.getByLabel("Artwork inspiration").selectOption("media_embryo");
+  await expect(page.getByRole("region", { name: "Recommended song prompts" })).toContainText("Uploaded art + CreativeDNA");
+  await page.getByRole("button", { name: "Use Art + DNA song prompt" }).click();
+  const direction = page.getByRole("textbox", { name: "Describe the song" });
+  await expect(direction).toHaveValue(/A translucent embryo-like form floats in a violet chamber/);
+  await expect(direction).toHaveValue(/123 BPM/);
+  await expect(direction).toHaveValue(/wide depth, long decays, and deliberate negative space/);
+  await page.locator(".quick-song-lyrics > summary").click();
+  await expect(page.getByRole("textbox", { name: "Song lyrics" })).toHaveValue("");
+  await page.locator(".quick-create-advanced > summary").click();
+  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax Music3 Text Encode: Lyrics" })).toHaveValue("");
+});
+
 test("CreativeDNA survives the full review loop", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/#/dna");

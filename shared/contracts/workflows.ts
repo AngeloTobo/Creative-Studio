@@ -70,6 +70,15 @@ export function primaryWorkflowPromptParameter(parameters: WorkflowParameter[], 
     ?? null;
 }
 
+export function musicWorkflowLyricsParameter(parameters: WorkflowParameter[], modality?: WorkflowModality | "image" | "music" | "video") {
+  if (modality !== "music" && modality !== "audio") return null;
+  return parameters.find((parameter) => {
+    if (parameter.kind !== "text") return false;
+    const inputName = parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : "";
+    return /(?:^|\b|::)lyrics?(?:\b|$)/i.test(`${parameter.id} ${parameter.label} ${inputName}`);
+  }) ?? null;
+}
+
 type RecordValue = Record<string, unknown>;
 
 const MODEL_PATTERN = /[\w.-]+\.(?:safetensors|ckpt|pt|pth|gguf|onnx)/gi;

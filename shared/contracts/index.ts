@@ -4,4 +4,5 @@ export * from "./domain";
 export * from "./generationPerformance";
 export * from "./productionLoop";
 export * from "./productionCockpit";
+export * from "./songPrompts";
 export * from "./workflows";

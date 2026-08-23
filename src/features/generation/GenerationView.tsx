@@ -8,10 +8,13 @@ import {
   assessImagePerformance,
   analyzeGenerationWorkload,
   createVideoGenerationVersions,
+  createSongPromptRecommendations,
+  creativeDnaDescriptionSummaries,
   creativeDnaGenerationPrompt,
   fastImageParameterOverrides,
   formatGenerationDuration,
   generationProviderWorkloadProfile,
+  musicWorkflowLyricsParameter,
   primaryWorkflowPromptParameter,
   workflowRuntimeHistory,
   type Artifact,
@@ -34,6 +37,7 @@ import {
 } from "./quickCreate";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
+const ACCEPTED_ART = "image/jpeg,image/png,image/webp,image/gif";
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 type QuickSource = {
@@ -130,6 +134,7 @@ export function GenerationView({
   const directionProjectId = useRef<string | null>(activeProjectId);
   const [intent, setIntent] = useState<CreateIntent>(initialVideoSource ? "video" : "image");
   const [direction, setDirection] = useState("");
+  const [lyrics, setLyrics] = useState("");
   const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? "");
   const [workflowId, setWorkflowId] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
@@ -154,6 +159,7 @@ export function GenerationView({
       directionProjectId.current = activeProjectId;
       directionInitialized.current = false;
       setDirection("");
+      setLyrics("");
       setIntent("image");
       setQuickSourceId("");
       setWorkflowId("");
@@ -174,8 +180,22 @@ export function GenerationView({
     ? [...projectArtifacts.filter((artifact) => artifact.kind === "video").map(sourceFromArtifact), ...projectMedia.filter((asset) => asset.kind === "video").map(sourceFromAsset)]
     : intent === "train"
     ? projectMedia.map(sourceFromAsset)
+    : intent === "music"
+      ? projectMedia.filter((asset) => asset.kind === "image").map(sourceFromAsset)
     : [...projectArtifacts.map(sourceFromArtifact), ...projectMedia.map(sourceFromAsset)];
   const quickSource = sourceChoices.find((source) => source.id === quickSourceId) ?? null;
+  const songArtAnalysis = intent === "music" && quickSource?.source === "upload"
+    ? [...projectDna]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .flatMap((artifact) => artifact.training?.analysis.sources ?? [])
+      .find((source) => source.kind === "image" && (source.mediaId === quickSource.id || source.sourceId === quickSource.id) && source.detailedDescription)
+    : null;
+  const songArtDescription = songArtAnalysis?.detailedDescription
+    ? creativeDnaDescriptionSummaries(songArtAnalysis.detailedDescription).shortSummary
+    : null;
+  const songPromptRecommendations = intent === "music"
+    ? createSongPromptRecommendations({ artDescription: songArtDescription, dna: selected })
+    : [];
   const generationIntent = intent === "train" ? "image" : intent;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
   const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null);
@@ -189,15 +209,13 @@ export function GenerationView({
     : null;
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
   const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
+  const workflowLyricsParameter = musicWorkflowLyricsParameter(scalarParameters, workflow?.modality);
   const workflowSeedParameter = generationIntent === "video"
     ? scalarParameters.find((parameter) => parameter.kind === "number" && /(?:^|\b|::)(?:noise_)?seed(?:\b|$)/i.test(`${parameter.id} ${parameter.label} ${parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : ""}`)) ?? null
     : null;
-  const rawParameterValue = (parameter: WorkflowParameter) => quickParameterValue(
-    parameter,
-    workflowPromptParameter?.id ?? null,
-    direction,
-    effectiveValues,
-  );
+  const rawParameterValue = (parameter: WorkflowParameter) => parameter.id === workflowLyricsParameter?.id
+    ? lyrics
+    : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues);
   const fastImageOverrides = generationIntent === "image" && imagePerformanceMode === "fast-default"
     ? fastImageParameterOverrides(scalarParameters.map((parameter) => ({ ...parameter, value: rawParameterValue(parameter) })))
     : {};
@@ -244,6 +262,7 @@ export function GenerationView({
     setWorkflowValues({});
     setValuesRevisionId("");
     setImagePerformanceMode("fast-default");
+    setLyrics("");
     setNotice("");
   };
 
@@ -260,6 +279,7 @@ export function GenerationView({
     setWorkflowValues({});
     setValuesRevisionId("");
     setImagePerformanceMode("fast-default");
+    setLyrics("");
     setNotice("");
   };
 
@@ -273,6 +293,10 @@ export function GenerationView({
     }
     try {
       const asset = await uploadMedia(file, intent === "train" ? true : trainingEligible);
+      if (intent === "music" && asset.kind !== "image") {
+        setLocalError("Choose an image artwork to inspire the song prompt.");
+        return;
+      }
       if (videoOperation && asset.kind !== "video") {
         setLocalError("Choose a video to extend.");
         return;
@@ -419,15 +443,16 @@ export function GenerationView({
   };
 
   const sourceRequirement = missingMediaParameters[0]?.mediaKind;
+  const generationLabel = generationIntent === "music" ? "song" : generationIntent;
   const basePrimaryLabel = !workflow
     ? "Choose a model"
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
       : settingsChanged
-        ? effectiveVideoOperation ? "Save & extend 2 versions" : generationIntent === "video" ? "Save & generate 2 videos" : `Save & generate ${generationIntent}`
+        ? effectiveVideoOperation ? "Save & extend 2 versions" : generationIntent === "video" ? "Save & generate 2 videos" : `Save & generate ${generationLabel}`
         : effectiveVideoOperation
           ? "Extend into 2 versions"
-          : generationIntent === "video" ? "Generate 2 videos" : `Generate ${generationIntent}`;
+          : generationIntent === "video" ? "Generate 2 videos" : `Generate ${generationLabel}`;
   const primaryLabel = generationIntent === "image" && workflow
     ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
     : basePrimaryLabel;
@@ -475,12 +500,22 @@ export function GenerationView({
 
         <div className={`quick-source-row${videoOperation ? " video-extension-source" : ""}`}>
           <label className={`quick-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
-            <input ref={mediaInputRef} type="file" accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
+            <input ref={mediaInputRef} type="file" accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : intent === "music" ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
             <Icon name="plus" size={16} />
-            <span><strong>{busy ? "Working…" : intent === "train" ? "Upload training media" : videoOperation ? "Upload video to extend" : "Upload a source"}</strong><small>{videoOperation ? "MP4, WebM, or MOV" : "Image, audio, or video"}</small></span>
+            <span><strong>{busy ? "Working…" : intent === "train" ? "Upload training media" : videoOperation ? "Upload video to extend" : intent === "music" ? "Upload art for the song" : "Upload a source"}</strong><small>{videoOperation ? "MP4, WebM, or MOV" : intent === "music" ? "JPG, PNG, WebP, or GIF" : "Image, audio, or video"}</small></span>
           </label>
-          {sourceChoices.length ? <label className="quick-source-select"><span>{videoOperation ? "video to extend" : "or use retained work"}</span><select aria-label={videoOperation ? "Video to extend" : "Retained source"} value={quickSource?.id ?? ""} disabled={busy} onChange={(event) => { setQuickSourceId(event.target.value); setInputBindings({}); }}><option value="">No source</option>{sourceChoices.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.source === "upload" ? "upload" : "generated"}</option>)}</select></label> : null}
+          {sourceChoices.length ? <label className="quick-source-select"><span>{videoOperation ? "video to extend" : intent === "music" ? "artwork inspiration" : "or use retained work"}</span><select aria-label={videoOperation ? "Video to extend" : intent === "music" ? "Artwork inspiration" : "Retained source"} value={quickSource?.id ?? ""} disabled={busy} onChange={(event) => { setQuickSourceId(event.target.value); setInputBindings({}); }}><option value="">No source</option>{sourceChoices.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.source === "upload" ? "upload" : "generated"}</option>)}</select></label> : null}
         </div>
+
+        {intent === "music" && songPromptRecommendations.length ? <section className="quick-song-prompts" aria-label="Recommended song prompts">
+          <header><span><Icon name="star" size={15} /><strong>Prompt ideas</strong></span><small>{songArtDescription ? "Uploaded art + CreativeDNA" : "CreativeDNA"}</small></header>
+          <div>{songPromptRecommendations.map((recommendation) => <button type="button" key={recommendation.id} disabled={busy} aria-label={`Use ${recommendation.label} song prompt`} onClick={() => { setDirection(recommendation.prompt); setNotice(`${recommendation.label} prompt is ready to edit.`); }}><span><strong>{recommendation.label}</strong><small>{recommendation.focus}</small></span><p>{recommendation.prompt}</p><em>Use</em></button>)}</div>
+        </section> : null}
+
+        {intent === "music" && quickSource?.source === "upload" && !songArtDescription ? <div className="quick-song-analysis">
+          <span><strong>Analyze this art to include what is actually in it</strong><small>Until then, recommendations use CreativeDNA only.</small></span>
+          <button type="button" className="btn btn-ghost" onClick={() => quickSource.trainingEligible ? onTrain([quickSource.id]) : onMedia()}>{quickSource.trainingEligible ? "Analyze art" : "Review consent"}</button>
+        </div> : null}
 
         {videoOperation ? <section className="quick-video-tools" aria-label="Video extension settings">
           <header><span><Icon name="video" size={16} /><strong>Final-frame continuation</strong></span><small>Local FFmpeg + ComfyUI</small></header>
@@ -496,6 +531,7 @@ export function GenerationView({
           <button className="btn btn-primary quick-primary" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [])}><Icon name="dna" size={17} /> {trainingSource ? "Continue to training" : "Open training"}</button>
         </> : <>
           <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
+          {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
           <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || fastImageBlocked || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
@@ -509,7 +545,7 @@ export function GenerationView({
             {availableDna.length ? <select aria-label="CreativeDNA direction" value={selected?.artifactId ?? ""} disabled={busy} onChange={(event) => {
               const dna = availableDna.find((artifact) => artifact.artifactId === event.target.value) ?? null;
               selectDna(dna);
-              if (dna) setDirection(dna.source.directive || creativeDnaGenerationPrompt(dna, dna.targetModality));
+              if (dna) setDirection(creativeDnaGenerationPrompt(dna, generationIntent === "music" ? "music" : dna.targetModality));
             }}>{availableDna.map((artifact) => <option key={artifact.artifactId} value={artifact.artifactId}>{artifact.name} · v{artifact.version}</option>)}</select> : <button className="btn btn-ghost" onClick={onDesign}>Build detailed CreativeDNA</button>}
             <label className="create-consent"><input type="checkbox" checked={trainingEligible} disabled={busy || uiOnlyDevelopment} onChange={(event) => setTrainingEligible(event.target.checked)} /> New uploads can be used for training</label>
           </section>
@@ -526,11 +562,15 @@ export function GenerationView({
               setDirection(String(value));
               return;
             }
+            if (parameter.id === workflowLyricsParameter?.id) {
+              setLyrics(String(value));
+              return;
+            }
             const displayedValues = Object.fromEntries(scalarParameters.map((item) => [item.id, parameterValue(item)]));
             setImagePerformanceMode("explicit-custom");
             setValuesRevisionId(workflow.currentRevision.id);
             setWorkflowValues({ ...displayedValues, [parameter.id]: value });
-          }} />)}</div>{settingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setImagePerformanceMode("fast-default"); setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Return to fast defaults</button> : null}</section> : null}
+          }} />)}</div>{settingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setImagePerformanceMode("fast-default"); setLyrics(""); setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Return to fast defaults</button> : null}</section> : null}
 
           {workflowWorkload ? <details className="workflow-performance create-performance quick-advanced-wide"><summary><span><Icon name="analytics" size={15} /><strong>Speed & quality evidence</strong><small>{settingsChanged ? "New settings" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} runs` : "No exact-revision history"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m alert</em></summary><div className="workflow-performance-body">{workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No workload controls are exposed by this workflow.</p>}{workflow.currentRevision.models.length ? <div className="job-performance-models"><small>Models</small><div>{workflow.currentRevision.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}<p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No high-cost setting stands out."}</p><small>{workflowWorkload.promptAssessment}</small></div></details> : null}
 

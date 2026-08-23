@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkflowDefinition, WorkflowParameter } from "../../shared/contracts";
+import { musicWorkflowLyricsParameter, type WorkflowDefinition, type WorkflowParameter } from "../../shared/contracts";
 import { preferredQuickWorkflow, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
 
 function workflow(id: string, modality: WorkflowDefinition["modality"], mediaKind: WorkflowParameter["mediaKind"] = null): WorkflowDefinition {
@@ -45,5 +45,18 @@ describe("quick Create routing", () => {
     };
     expect(quickParameterValue(prompt, prompt.id, "New motion for this source", { [prompt.id]: "Previously saved prompt" })).toBe("New motion for this source");
     expect(quickParameterValue(prompt, prompt.id, "", { [prompt.id]: "Previously saved prompt" })).toBe("");
+  });
+
+  it("identifies the separate MiniMax Music caption and lyrics controls", () => {
+    const caption: WorkflowParameter = {
+      id: "37:13::caption", label: "MiniMax Music3 Text Encode: Caption", kind: "text", value: "Imported caption", mediaKind: null,
+      binding: { format: "comfyui-api", nodeId: "37:13", inputName: "caption" },
+    };
+    const lyrics: WorkflowParameter = {
+      id: "37:13::lyrics", label: "MiniMax Music3 Text Encode: Lyrics", kind: "text", value: "Imported demo lyrics", mediaKind: null,
+      binding: { format: "comfyui-api", nodeId: "37:13", inputName: "lyrics" },
+    };
+    expect(musicWorkflowLyricsParameter([caption, lyrics], "music")).toBe(lyrics);
+    expect(musicWorkflowLyricsParameter([caption, lyrics], "image")).toBeNull();
   });
 });
