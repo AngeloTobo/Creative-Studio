@@ -151,16 +151,10 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
           <h2 id="dna-workbench-title">CreativeDNA direction</h2>
           <p>Shape the reusable visual or musical intent behind your work.</p>
         </div>
-        <button className="btn btn-ghost" onClick={startNew}><Icon name="plus" size={16} /> New DNA</button>
+        <div className="workspace-head-actions"><button className="btn btn-ghost" onClick={() => setWorkspace("create")}><Icon name="chevron" size={16} /> Back to Create</button><button className="btn btn-ghost" onClick={startNew}><Icon name="plus" size={16} /> New DNA</button></div>
       </div> : null}
 
-      {productionLoop ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} compact /> : null}
-
-      <nav className="dna-workspace-tabs glass" role="tablist" aria-label="CreativeDNA workspace">
-        <button role="tab" aria-selected={workspace === "create"} className={workspace === "create" ? "on" : ""} onClick={() => setWorkspace("create")}><Icon name="wand" size={16} /><span><strong>Create</strong><small>Upload + generate</small></span></button>
-        <button role="tab" aria-selected={workspace === "design"} className={workspace === "design" ? "on" : ""} onClick={() => setWorkspace("design")}><Icon name="dna" size={16} /><span><strong>DNA</strong><small>Direction + shape</small></span></button>
-        <button role="tab" aria-selected={workspace === "train"} className={workspace === "train" ? "on" : ""} onClick={() => setWorkspace("train")}><Icon name="history" size={16} /><span><strong>Train</strong><small>Uploads + descriptions</small></span></button>
-      </nav>
+      {productionLoop && workspace !== "create" ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} compact /> : null}
 
       {workspace === "design" ? <><div className="dna-layout">
         <div className="form-card glass dna-compose" id="creative-dna-authoring">
@@ -250,8 +244,8 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
         </div>
       </div></> : null}
 
-      {workspace === "train" ? <DnaTrainingPanel onMedia={onMedia} initialAssetIds={trainingSeedAssetIds} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /> : null}
-      {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} embedded /> : null}
+      {workspace === "train" ? <><button className="workspace-return" onClick={() => setWorkspace("create")}><Icon name="chevron" size={15} /> Back to Create</button><DnaTrainingPanel onMedia={onMedia} initialAssetIds={trainingSeedAssetIds} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /></> : null}
+      {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} onTrain={(assetIds = []) => { setTrainingSeedAssetIds(assetIds); setWorkspace("train"); }} embedded /> : null}
     </section>
   );
 }
