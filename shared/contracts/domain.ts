@@ -103,6 +103,7 @@ export type GenerationSettingsStamp = {
     kind: MediaKind;
   }>;
   inputBindings?: Record<string, string>;
+  videoVariant?: import("./creativeDna").VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
 };
 

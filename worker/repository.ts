@@ -4,6 +4,7 @@ import {
   creativeDnaGenerationPrompt,
   PROJECT_HUES,
   resolveCreativeDnaGenerationArtifact,
+  videoGenerationVariantLabel,
   withGenerationProviderWorkload,
   type Acceptance,
   type AcceptanceDecision,
@@ -32,6 +33,10 @@ function projectInitials(name: string) {
   const words = name.split(/\s+/).filter(Boolean);
   const value = words.length > 1 ? `${words[0][0]}${words[1][0]}` : words[0]?.slice(0, 2);
   return (value || "CS").toUpperCase();
+}
+
+function generationArtifactName(name: string, settingsStamp: GenerationSettingsStamp) {
+  return settingsStamp.videoVariant ? `${name} · ${videoGenerationVariantLabel(settingsStamp.videoVariant.role)}` : name;
 }
 
 function projectInput(input: CreateProjectRequest) {
@@ -476,7 +481,7 @@ async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: s
   const previewUrl = mediaPath ? `/api/creative-studio/artifacts/${artifactId}/media` : null;
   const artifactStatus: Artifact["status"] = mediaPath ? "retaining" : "ready";
   await env.DB.prepare(`insert or ignore into creative_artifacts (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt, preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id, created_at, updated_at, settings_stamp_json) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?, ?)`)
-    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, name, artifactStatus, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now, JSON.stringify(job.settingsStamp)).run();
+    .bind(artifactId, ownerId, job.projectId, job.id, job.dnaArtifactId, job.modality, generationArtifactName(name, job.settingsStamp), artifactStatus, job.provider, job.prompt, mediaPath ? "remote-media" : "development-gradient", previewUrl, colors[0], colors[1], mediaPath, now, now, JSON.stringify(job.settingsStamp)).run();
   const winner = await env.DB.prepare("select id from creative_artifacts where job_id = ? and owner_id = ?")
     .bind(job.id, ownerId).first<{ id: string }>();
   if (!winner) throw new Error("artifact_create_failed");
@@ -640,6 +645,7 @@ export async function completeLocalRunnerJob(
   }
 
   const dna = (await listLocalDna(env, ownerId)).find((item) => item.artifactId === background.dnaArtifactId);
+  const completedSettings = mapJob(background).settingsStamp;
   const now = new Date().toISOString();
   const colors = background.modality === "music" ? ["#9d174d", "#7c3aed"] : background.modality === "video" ? ["#312e81", "#db2777"] : ["#0e7490", "#a21caf"];
   await env.DB.batch([
@@ -649,7 +655,7 @@ export async function completeLocalRunnerJob(
       created_at, updated_at, retained_key, retained_content_type, retained_size, settings_stamp_json
     ) values (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 'remote-media', ?, ?, ?, null, null, ?, ?, ?, ?, ?, ?)`)
       .bind(artifactId, ownerId, background.projectId, jobId, background.dnaArtifactId, background.modality,
-        dna?.name ?? `${background.modality} artifact`, background.provider, background.prompt,
+        generationArtifactName(dna?.name ?? `${background.modality} artifact`, completedSettings), background.provider, background.prompt,
         `/api/creative-studio/artifacts/${artifactId}/media`, colors[0], colors[1], now, now, key, contentType,
         retained.size, background.settingsStampJson),
     env.DB.prepare(`update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null,

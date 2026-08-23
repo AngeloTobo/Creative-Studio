@@ -18,7 +18,7 @@ import type {
   LocalRunner,
   VideoGenerationOperation,
 } from "./domain";
-import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis } from "./creativeDna";
+import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis, VideoGenerationVariant } from "./creativeDna";
 import type { ProjectProductionLoop } from "./productionLoop";
 import type { ProductionCockpit } from "./productionCockpit";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
@@ -147,6 +147,7 @@ export type SubmitJobRequest = {
     inputBindings: Record<string, string>;
   };
   performanceMode?: ImagePerformanceMode;
+  videoVariant?: VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
 };
 

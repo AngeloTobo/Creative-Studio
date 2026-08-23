@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   CREATIVE_DNA_SCHEMA_VERSION,
   compileCreativeDna,
+  createVideoGenerationVersions,
   creativeDnaDescriptionSummaries,
   creativeDnaGenerationPrompt,
+  normalizeVideoGenerationVariant,
   resolveCreativeDnaGenerationArtifact,
   type CreativeDnaTrainingAnalysis,
 } from "../../shared/contracts";
@@ -18,6 +20,46 @@ const fixedMeta = {
 };
 
 describe("CreativeDNA v1", () => {
+  it("creates a faithful and a random-DNA-led video version from one direction", () => {
+    const dimensions = { energy: 64, tension: 48, contrast: 62, warmth: 55, spaciousness: 58, rhythmicity: 60, organicity: 50, polish: 58 };
+    const versions = createVideoGenerationVersions({
+      direction: "A glass figure turns toward an approaching storm while the camera moves across the rooftop.",
+      dimensions,
+      pairId: "video_pair_test-12345678",
+      discoverySeed: 4_294_967_294,
+      hasSource: true,
+    });
+    expect(versions).toHaveLength(2);
+    expect(versions[0]).toMatchObject({
+      prompt: "A glass figure turns toward an approaching storm while the camera moves across the rooftop.",
+      variant: { pairId: "video_pair_test-12345678", role: "aligned", seed: null, personalStyleWeight: 100, randomDnaWeight: 0, randomDimensions: null },
+    });
+    expect(versions[1].variant).toMatchObject({
+      pairId: "video_pair_test-12345678",
+      role: "discovery",
+      seed: 4_294_967_294,
+      personalStyleWeight: 30,
+      randomDnaWeight: 70,
+    });
+    expect(versions[1].prompt).toContain(versions[0].prompt);
+    expect(versions[1].prompt).not.toBe(versions[0].prompt);
+    expect(versions[1].variant.effectiveDimensions).not.toEqual(dimensions);
+    expect(createVideoGenerationVersions({ direction: versions[0].prompt, dimensions, pairId: "video_pair_test-12345678", discoverySeed: 4_294_967_294, hasSource: true })[1]).toEqual(versions[1]);
+    expect(normalizeVideoGenerationVariant(versions[0].variant)).toEqual(versions[0].variant);
+    expect(normalizeVideoGenerationVariant(versions[1].variant)).toEqual(versions[1].variant);
+  });
+
+  it("rejects a Discovery stamp unless random DNA outweighs personal style", () => {
+    const [, discovery] = createVideoGenerationVersions({
+      direction: "A suspended object rotates once in a quiet blue chamber.",
+      dimensions: { energy: 50, tension: 50, contrast: 50, warmth: 50, spaciousness: 50, rhythmicity: 50, organicity: 50, polish: 50 },
+      pairId: "video_pair_test-87654321",
+      discoverySeed: 42,
+      hasSource: false,
+    });
+    expect(() => normalizeVideoGenerationVariant({ ...discovery.variant, personalStyleWeight: 70, randomDnaWeight: 30 })).toThrow("invalid_video_generation_variant");
+  });
+
   it("preserves lineage and typed cross-modal translations", () => {
     const artifact = compileCreativeDna({
       name: "Night Glass",

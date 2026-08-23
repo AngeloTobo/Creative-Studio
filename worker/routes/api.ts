@@ -3,6 +3,7 @@ import {
   creativeDnaGenerationPrompt,
   deriveProjectProductionLoop,
   deriveProductionCockpit,
+  normalizeVideoGenerationVariant,
   type AcceptanceDecision,
   type Capability,
   type CreateProjectRequest,
@@ -411,6 +412,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const modality = input.modality as GenerationModality;
       const videoOperation = requestedVideoOperation(input.videoOperation, modality);
+      const videoVariant = input.videoVariant === undefined ? undefined : normalizeVideoGenerationVariant(input.videoVariant);
+      if (videoVariant && modality !== "video") throw new Error("invalid_video_generation_variant");
       if (input.performanceMode !== undefined && input.performanceMode !== "fast-default" && input.performanceMode !== "explicit-custom") {
         throw new Error("invalid_image_performance_mode");
       }
@@ -510,6 +513,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             inputArtifactIds: inputSources.filter((inputSource) => inputSource.source === "artifact").map((inputSource) => inputSource.id),
             inputSources,
             inputBindings,
+            videoVariant,
             videoOperation,
           },
         });

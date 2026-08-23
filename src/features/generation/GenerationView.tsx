@@ -7,6 +7,7 @@ import {
   FAST_IMAGE_MAX_STEPS,
   assessImagePerformance,
   analyzeGenerationWorkload,
+  createVideoGenerationVersions,
   creativeDnaGenerationPrompt,
   fastImageParameterOverrides,
   formatGenerationDuration,
@@ -76,6 +77,12 @@ function modelSummary(workflow: WorkflowDefinition) {
   const input = inputKinds.length ? `${inputKinds.join(" + ")} source` : "No source required";
   const models = workflow.currentRevision.models.length;
   return `${input} · ${models || "No detected"} model ${models === 1 ? "file" : "files"}`;
+}
+
+function randomUint32() {
+  const value = new Uint32Array(1);
+  crypto.getRandomValues(value);
+  return value[0];
 }
 
 export function GenerationView({
@@ -182,6 +189,9 @@ export function GenerationView({
     : null;
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
   const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
+  const workflowSeedParameter = generationIntent === "video"
+    ? scalarParameters.find((parameter) => parameter.kind === "number" && /(?:^|\b|::)(?:noise_)?seed(?:\b|$)/i.test(`${parameter.id} ${parameter.label} ${parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : ""}`)) ?? null
+    : null;
   const rawParameterValue = (parameter: WorkflowParameter) => quickParameterValue(
     parameter,
     workflowPromptParameter?.id ?? null,
@@ -311,19 +321,62 @@ export function GenerationView({
       setLocalError("Choose a retained video to extend.");
       return;
     }
+    if (generationIntent === "video" && !workflowPromptParameter) {
+      setLocalError("This video model does not expose a prompt, so Creative Studio cannot make two distinct versions. Map its prompt input in Models first.");
+      return;
+    }
     try {
       const dna = await ensureDna();
       if (!dna) return;
       selectDna(dna);
+      const videoVersions = generationIntent === "video"
+        ? createVideoGenerationVersions({
+          direction: direction.trim(),
+          dimensions: dna.shared,
+          pairId: `video_pair_${crypto.randomUUID()}`,
+          discoverySeed: randomUint32(),
+          hasSource: Boolean(quickSource),
+        })
+        : null;
       const modified = Object.fromEntries(scalarParameters
         .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
         .map((parameter) => [parameter.id, parameterValue(parameter)]));
       let runWorkflow = workflow;
       if (Object.keys(modified).length) {
         runWorkflow = await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified);
-        setValuesRevisionId(runWorkflow.currentRevision.id);
-        setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
       }
+      if (videoVersions && workflowPromptParameter) {
+        const [aligned, discovery] = videoVersions;
+        const discoveryValues: Record<string, WorkflowScalar> = { [workflowPromptParameter.id]: discovery.prompt };
+        if (workflowSeedParameter && discovery.variant.seed !== null) discoveryValues[workflowSeedParameter.id] = discovery.variant.seed;
+        const discoveryWorkflow = await saveWorkflowRevision(
+          runWorkflow.id,
+          runWorkflow.currentRevision.id,
+          discoveryValues,
+        );
+        setValuesRevisionId(discoveryWorkflow.currentRevision.id);
+        setWorkflowValues(Object.fromEntries(discoveryWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+        await submitWorkflowJob(
+          runWorkflow,
+          effectiveInputBindings,
+          dna.artifactId,
+          effectiveVideoOperation ?? undefined,
+          undefined,
+          aligned.variant,
+        );
+        await submitWorkflowJob(
+          discoveryWorkflow,
+          effectiveInputBindings,
+          dna.artifactId,
+          effectiveVideoOperation ?? undefined,
+          undefined,
+          discovery.variant,
+        );
+        setNotice("Aligned and Discovery queued as 2 durable video jobs. They will render one after the other on the Local Runner.");
+        return;
+      }
+      setValuesRevisionId(runWorkflow.currentRevision.id);
+      setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
       await submitWorkflowJob(
         runWorkflow,
         effectiveInputBindings,
@@ -371,10 +424,10 @@ export function GenerationView({
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
       : settingsChanged
-        ? effectiveVideoOperation ? "Save & extend video" : `Save & generate ${generationIntent}`
+        ? effectiveVideoOperation ? "Save & extend 2 versions" : generationIntent === "video" ? "Save & generate 2 videos" : `Save & generate ${generationIntent}`
         : effectiveVideoOperation
-          ? "Extend video"
-          : `Generate ${generationIntent}`;
+          ? "Extend into 2 versions"
+          : generationIntent === "video" ? "Generate 2 videos" : `Generate ${generationIntent}`;
   const primaryLabel = generationIntent === "image" && workflow
     ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
     : basePrimaryLabel;
@@ -415,6 +468,11 @@ export function GenerationView({
                 : "Custom mode is explicit, but these exact controls are still within the fast limits."}</small>
         </div> : null}
 
+        {generationIntent === "video" && workflow ? <div className="quick-video-pair" aria-label="Two video versions per request">
+          <Icon name="video" size={16} />
+          <span><strong>2 versions per run</strong><small>Aligned: your exact direction · Discovery: 70% random DNA</small></span>
+        </div> : null}
+
         <div className={`quick-source-row${videoOperation ? " video-extension-source" : ""}`}>
           <label className={`quick-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
             <input ref={mediaInputRef} type="file" accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
@@ -438,7 +496,7 @@ export function GenerationView({
           <button className="btn btn-primary quick-primary" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [])}><Icon name="dna" size={17} /> {trainingSource ? "Continue to training" : "Open training"}</button>
         </> : <>
           <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
-          <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || fastImageBlocked} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
+          <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || fastImageBlocked || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>

@@ -1114,6 +1114,17 @@ describe("Creative Studio Worker API", () => {
     }), local)) as { workflow: { id: string; currentRevision: { id: string; contentHash: string; parameters: Array<{ id: string; kind: string }> } } };
     const mediaParameter = imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "media");
     expect(mediaParameter).toBeTruthy();
+    const alignedVideoVariant = {
+      schemaVersion: "creative-studio-video-variant/1.0",
+      pairId: "video_pair_runner-test-001",
+      role: "aligned",
+      seed: null,
+      personalStyleWeight: 100,
+      randomDnaWeight: 0,
+      baseDimensions: dna.shared,
+      randomDimensions: null,
+      effectiveDimensions: dna.shared,
+    };
 
     const enrollmentResponse = await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "3090 test runner" }),
@@ -1137,11 +1148,13 @@ describe("Creative Studio Worker API", () => {
           revisionId: imported.workflow.currentRevision.id,
           inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
         },
+        videoVariant: alignedVideoVariant,
       }),
-    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string } } } };
+    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant } } };
     expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
     expect(created.job.settingsStamp.workloadEvidence).toEqual({ source: "workflow-revision", profileId: imported.workflow.currentRevision.id, label: "MiniMax H3 I2V v1" });
     expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
+    expect(created.job.settingsStamp.videoVariant).toEqual(alignedVideoVariant);
 
     await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
       method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.0.0", comfyUrl: "http://127.0.0.1:8188", comfyVersion: "0.33.0", device: "RTX 3090" }),
@@ -1168,8 +1181,8 @@ describe("Creative Studio Worker API", () => {
     }), local);
     const retried = await result(await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${created.job.id}/retry`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "runner_video_retry_001" }),
-    }), local)) as { job: { id: string; upstreamId: string; retryOfJobId: string } };
-    expect(retried.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", retryOfJobId: created.job.id });
+    }), local)) as { job: { id: string; upstreamId: string; retryOfJobId: string; settingsStamp: { videoVariant: typeof alignedVideoVariant } } };
+    expect(retried.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", retryOfJobId: created.job.id, settingsStamp: { videoVariant: alignedVideoVariant } });
     const retriedClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
     }), local)) as { bundle: { job: { id: string; upstreamId: string } } };
@@ -1196,8 +1209,8 @@ describe("Creative Studio Worker API", () => {
     }), local);
     expect(retainedThumbnail.status).toBe(200);
     expect(values.size).toBe(3);
-    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; kind: string; preview: { posterUrl: string | null }; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
-    expect(history.artifacts[0]).toMatchObject({ kind: "video", preview: { posterUrl: `/api/creative-studio/artifacts/artifact_${retried.job.id}/thumbnail` }, retention: { state: "retained", size: outputBytes.byteLength } });
+    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; name: string; kind: string; preview: { posterUrl: string | null }; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
+    expect(history.artifacts[0]).toMatchObject({ name: "H3 Motion Study · Aligned", kind: "video", preview: { posterUrl: `/api/creative-studio/artifacts/artifact_${retried.job.id}/thumbnail` }, retention: { state: "retained", size: outputBytes.byteLength } });
     expect(history.trainingExamples[0]).toMatchObject({ kind: "video", status: "candidate" });
     const thumbnailResponse = await routeCreativeStudioApi(request(history.artifacts[0].preview.posterUrl!), local);
     expect(thumbnailResponse.headers.get("content-type")).toBe("image/jpeg");

@@ -4,6 +4,7 @@ import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
 import { jobIssuePresentation } from "./jobFailure";
 import { JobPerformance } from "./JobPerformance";
+import { videoGenerationVariantLabel } from "../../../shared/contracts";
 
 function age(value: string) {
   const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
@@ -39,12 +40,13 @@ export function QueueView({ focusRunId }: { focusRunId?: string }) {
         </article>)}
         {jobs.map((job) => {
           const issue = jobIssuePresentation(job.status, job.error, job.modality);
+          const videoVariant = job.settingsStamp.videoVariant;
           return <article className={`queue-card glass${focusRunId === job.id ? " cockpit-focus" : ""}`} id={`queue-run-${job.id}`} key={job.id}>
           <div className="queue-icon" style={{ "--job-accent": job.modality === "music" ? "var(--pink)" : job.modality === "video" ? "var(--violet)" : "var(--cyan)" } as React.CSSProperties}><Icon name={job.modality} size={23} /></div>
           <div className="queue-main">
-            <div className="queue-title"><StatusDot status={job.status} /><strong>{job.artifactId && job.status === "running" ? "Retaining completed result" : `${job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} from CreativeDNA`}</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
+            <div className="queue-title"><StatusDot status={job.status} /><strong>{job.artifactId && job.status === "running" ? "Retaining completed result" : videoVariant ? `Video · ${videoGenerationVariantLabel(videoVariant.role)}` : `${job.modality === "music" ? "Music" : job.modality === "video" ? "Video" : "Image"} from CreativeDNA`}</strong><span className={`state-pill ${job.status}`}>{job.status}</span></div>
             <p>{job.prompt}</p>
-            <div className="queue-meta"><span>{job.provider}</span><span>Updated {age(job.updatedAt)}</span><span>{job.id}</span></div>
+            <div className="queue-meta"><span>{job.provider}</span>{videoVariant ? <span>DNA {videoVariant.personalStyleWeight}% personal · {videoVariant.randomDnaWeight}% random</span> : null}<span>Updated {age(job.updatedAt)}</span><span>{job.id}</span></div>
             {job.retryOfJobId ? <div className="queue-lineage">Retry of {job.retryOfJobId}</div> : null}
             <JobPerformance job={job} jobs={jobs} />
             {issue ? <section className={`job-issue ${job.status}`} aria-label={issue.title}><header><Icon name={job.status === "failed" ? "close" : "archive"} size={16} /><strong>{issue.title}</strong></header><p>{issue.summary}</p><small>Provider detail <code>{issue.raw}</code></small><footer>{issue.action}</footer></section> : null}

@@ -40,6 +40,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("1024");
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
+  await expect(page.getByLabel("Two video versions per request")).toContainText("Aligned: your exact direction · Discovery: 70% random DNA");
   const videoDirection = page.getByRole("textbox", { name: "Describe the video" });
   const exactVideoPrompt = page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax H3 Image to Video: Prompt" });
   await expect(videoDirection).toHaveValue("");

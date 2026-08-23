@@ -18,6 +18,24 @@ export type CreativeDnaTarget = "music" | "image";
 export type CreativeDnaSourceKind = "original" | "owner_uploads" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
 
+export type VideoGenerationVariantRole = "aligned" | "discovery";
+export type VideoGenerationVariant = {
+  schemaVersion: "creative-studio-video-variant/1.0";
+  pairId: string;
+  role: VideoGenerationVariantRole;
+  seed: number | null;
+  personalStyleWeight: number;
+  randomDnaWeight: number;
+  baseDimensions: CreativeDnaDimensions;
+  randomDimensions: CreativeDnaDimensions | null;
+  effectiveDimensions: CreativeDnaDimensions;
+};
+
+export type VideoGenerationVersion = {
+  prompt: string;
+  variant: VideoGenerationVariant;
+};
+
 export const MAX_CREATIVE_DNA_REFERENCE_ASSETS = 12;
 
 type CreativeDnaMediaDescriptionProvenance = {
@@ -176,6 +194,141 @@ function boundedNumber(value: unknown, fallback: number) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function videoVariantDimensions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_video_generation_variant");
+  const input = value as Record<string, unknown>;
+  return CREATIVE_DNA_DIMENSION_KEYS.reduce((result, key) => {
+    const numeric = Number(input[key]);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 100) throw new Error("invalid_video_generation_variant");
+    result[key] = numeric;
+    return result;
+  }, {} as CreativeDnaDimensions);
+}
+
+export function normalizeVideoGenerationVariant(value: unknown): VideoGenerationVariant {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_video_generation_variant");
+  const input = value as Record<string, unknown>;
+  const pairId = boundedText(input.pairId, 100);
+  const role = input.role;
+  const seed = input.seed === null ? null : Number(input.seed);
+  const personalStyleWeight = Number(input.personalStyleWeight);
+  const randomDnaWeight = Number(input.randomDnaWeight);
+  if (input.schemaVersion !== "creative-studio-video-variant/1.0"
+    || !/^video_pair_[a-z0-9-]{8,80}$/i.test(pairId)
+    || (role !== "aligned" && role !== "discovery")
+    || (seed !== null && (!Number.isInteger(seed) || seed < 0 || seed > 0xffff_ffff))
+    || !Number.isInteger(personalStyleWeight) || !Number.isInteger(randomDnaWeight)
+    || personalStyleWeight < 0 || randomDnaWeight < 0 || personalStyleWeight + randomDnaWeight !== 100
+    || (role === "aligned" && (seed !== null || personalStyleWeight <= randomDnaWeight || input.randomDimensions !== null))
+    || (role === "discovery" && (seed === null || randomDnaWeight <= personalStyleWeight))) {
+    throw new Error("invalid_video_generation_variant");
+  }
+  const baseDimensions = videoVariantDimensions(input.baseDimensions);
+  const randomDimensions = role === "discovery" ? videoVariantDimensions(input.randomDimensions) : null;
+  const effectiveDimensions = videoVariantDimensions(input.effectiveDimensions);
+  const validEffectiveDimensions = CREATIVE_DNA_DIMENSION_KEYS.every((key) => (
+    role === "aligned"
+      ? effectiveDimensions[key] === baseDimensions[key]
+      : effectiveDimensions[key] === Math.round((baseDimensions[key] * personalStyleWeight + randomDimensions![key] * randomDnaWeight) / 100)
+  ));
+  if (!validEffectiveDimensions) throw new Error("invalid_video_generation_variant");
+  return {
+    schemaVersion: "creative-studio-video-variant/1.0",
+    pairId,
+    role,
+    seed,
+    personalStyleWeight,
+    randomDnaWeight,
+    baseDimensions,
+    randomDimensions,
+    effectiveDimensions,
+  };
+}
+
+function seededRandom(seed: number) {
+  let state = seed >>> 0 || 0x9e37_79b9;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+}
+
+function divergentRandomDimension(base: number, random: () => number) {
+  let value = Math.round(random() * 100);
+  if (Math.abs(value - base) < 28) value = base < 50 ? Math.min(100, base + 35) : Math.max(0, base - 35);
+  return value;
+}
+
+function videoDiscoveryPrompt(direction: string, dimensions: CreativeDnaDimensions, hasSource: boolean) {
+  const motion = dimensions.energy >= 67 ? "Motion arrives in decisive bursts" : dimensions.energy <= 33 ? "Motion unfolds with suspended restraint" : "Motion evolves through measured acceleration";
+  const cadence = dimensions.rhythmicity >= 67 ? "with sharply patterned visual beats" : dimensions.rhythmicity <= 33 ? "with irregular pauses and asymmetrical timing" : "with a shifting, syncopated cadence";
+  const tension = dimensions.tension >= 67 ? "and an unstable edge that never fully resolves." : dimensions.tension <= 33 ? "and a calm trajectory that resists obvious drama." : "and a controlled tension that changes direction once.";
+  const camera = dimensions.spaciousness >= 67 ? "The camera reveals unexpected negative space and a wider spatial relationship." : dimensions.spaciousness <= 33 ? "The camera stays unusually close, cropping information and discovering detail through proximity." : "The camera changes scale midway, reframing the subject from an unfamiliar angle.";
+  const light = `${dimensions.contrast >= 60 ? "Hard separation and graphic shadow" : "Low-contrast, layered light"} meet ${dimensions.warmth >= 60 ? "an unexpectedly warm color drift" : "a cool, estranged color drift"}.`;
+  const surface = `${dimensions.organicity >= 60 ? "Movement feels tactile and imperfect" : "Movement feels precise and synthetic"}, while the finish remains ${dimensions.polish >= 60 ? "controlled but not conventional" : "raw enough to expose surprising transitions"}.`;
+  const continuity = hasSource
+    ? "Keep the source identity and opening frame recognizable, but let the staging and motion take the less expected path."
+    : "Keep the central subject continuous, but let the staging and motion take the less expected path.";
+  return boundedNarrative(`${direction.trim()} ${motion} ${cadence} ${tension} ${camera} ${light} ${surface} ${continuity}`, 2_400);
+}
+
+export function createVideoGenerationVersions(input: {
+  direction: string;
+  dimensions: CreativeDnaDimensions;
+  pairId: string;
+  discoverySeed: number;
+  hasSource: boolean;
+}): [VideoGenerationVersion, VideoGenerationVersion] {
+  const direction = boundedNarrative(input.direction, 2_400);
+  if (direction.length < 4) throw new Error("directive_required");
+  const baseDimensions = videoVariantDimensions(input.dimensions);
+  const seed = input.discoverySeed >>> 0;
+  const random = seededRandom(seed);
+  const randomDimensions = CREATIVE_DNA_DIMENSION_KEYS.reduce((result, key) => {
+    result[key] = divergentRandomDimension(baseDimensions[key], random);
+    return result;
+  }, {} as CreativeDnaDimensions);
+  const effectiveDimensions = CREATIVE_DNA_DIMENSION_KEYS.reduce((result, key) => {
+    result[key] = Math.round(baseDimensions[key] * 0.3 + randomDimensions[key] * 0.7);
+    return result;
+  }, {} as CreativeDnaDimensions);
+  const aligned: VideoGenerationVersion = {
+    prompt: direction,
+    variant: {
+      schemaVersion: "creative-studio-video-variant/1.0",
+      pairId: input.pairId,
+      role: "aligned",
+      seed: null,
+      personalStyleWeight: 100,
+      randomDnaWeight: 0,
+      baseDimensions,
+      randomDimensions: null,
+      effectiveDimensions: baseDimensions,
+    },
+  };
+  const discovery: VideoGenerationVersion = {
+    prompt: videoDiscoveryPrompt(direction, effectiveDimensions, input.hasSource),
+    variant: {
+      schemaVersion: "creative-studio-video-variant/1.0",
+      pairId: input.pairId,
+      role: "discovery",
+      seed,
+      personalStyleWeight: 30,
+      randomDnaWeight: 70,
+      baseDimensions,
+      randomDimensions,
+      effectiveDimensions,
+    },
+  };
+  return [aligned, discovery];
+}
+
+export function videoGenerationVariantLabel(role: VideoGenerationVariantRole) {
+  return role === "aligned" ? "Aligned" : "Discovery";
 }
 
 function dimensionBand(value: number) {
