@@ -19,6 +19,7 @@ import type {
   CreativeDnaTrainingReviewDecision,
   EnrollLocalRunnerResponse,
   LocalRunner,
+  VideoGenerationOperation,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -37,7 +38,7 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation) => Promise<void>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -203,7 +204,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string) => {
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -215,6 +216,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       modality,
       idempotencyKey: operationKey("workflow"),
       workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings },
+      videoOperation,
     }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
 

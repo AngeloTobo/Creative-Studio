@@ -10,7 +10,7 @@ import type { Env } from "./types";
 import { workflowExecutionPlan } from "./workflows";
 
 const RUNNER_STAGES = new Set<NonNullable<Job["executionStage"]>>([
-  "preparing-inputs", "submitting", "rendering", "downloading-output", "retaining",
+  "preparing-inputs", "submitting", "rendering", "downloading-output", "post-processing", "retaining",
 ]);
 
 type RunnerRow = {

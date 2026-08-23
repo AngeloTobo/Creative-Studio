@@ -8,7 +8,7 @@ import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.4.2";
+export const RUNNER_VERSION = "1.5.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -101,6 +101,7 @@ async function machineHeartbeat(config, activeJobId = null, error = null) {
 async function downloadInput(config, asset) {
   const response = await fetch(`${config.apiBase}/api/creative-studio/runner/media/${encodeURIComponent(asset.id)}`, {
     headers: { authorization: `Bearer ${config.token}` },
+    signal: AbortSignal.timeout(5 * 60_000),
   });
   if (!response.ok) throw new Error(`runner_input_download_${response.status}`);
   return new Blob([await response.arrayBuffer()], { type: asset.mimeType });
@@ -183,10 +184,10 @@ export function buildGemmaDescriptionGraph(kind, filename, label = "Untitled med
   return graph;
 }
 
-async function uploadComfyInput(config, asset) {
-  const fileName = `cs_${asset.id}_${basename(asset.originalFileName).replace(/[^a-z0-9._-]/gi, "_")}`;
+async function uploadComfyInput(config, asset, media = null, fileNameOverride = "") {
+  const fileName = fileNameOverride || `cs_${asset.id}_${basename(asset.originalFileName).replace(/[^a-z0-9._-]/gi, "_")}`;
   const form = new FormData();
-  form.set("image", await downloadInput(config, asset), fileName);
+  form.set("image", media || await downloadInput(config, asset), fileName);
   form.set("type", "input");
   form.set("overwrite", "true");
   const response = await fetch(`${config.comfyUrl}/upload/image`, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
@@ -211,13 +212,27 @@ export function applyInputFilenames(graphValue, parameters, filenames) {
 
 async function prepareGraph(config, bundle) {
   const assets = new Map(bundle.inputs.map((asset) => [asset.id, asset]));
+  const downloadedInputs = new Map();
   const filenames = {};
   for (const [parameterId, assetId] of Object.entries(bundle.job.settingsStamp.inputBindings || {})) {
     const asset = assets.get(assetId);
     if (!asset) throw new Error(`runner_input_asset_missing:${assetId}`);
-    filenames[parameterId] = await uploadComfyInput(config, asset);
+    let media = downloadedInputs.get(assetId);
+    if (!media) {
+      media = await downloadInput(config, asset);
+      downloadedInputs.set(assetId, media);
+    }
+    const extension = bundle.job.settingsStamp.videoOperation;
+    const parameter = bundle.workflow.currentRevision.parameters.find((item) => item.id === parameterId);
+    const finalFrameInput = extension?.kind === "extend" && extension.sourceId === assetId && parameter?.mediaKind === "image";
+    if (finalFrameInput) {
+      const frame = await createLastFrameInput(new Uint8Array(await media.arrayBuffer()), asset.mimeType);
+      filenames[parameterId] = await uploadComfyInput(config, asset, new Blob([frame], { type: "image/jpeg" }), `cs_${asset.id}_final-frame.jpg`);
+    } else {
+      filenames[parameterId] = await uploadComfyInput(config, asset, media);
+    }
   }
-  return applyInputFilenames(bundle.graph, bundle.workflow.currentRevision.parameters, filenames);
+  return { graph: applyInputFilenames(bundle.graph, bundle.workflow.currentRevision.parameters, filenames), downloadedInputs };
 }
 
 async function submitPrompt(config, graph, jobId) {
@@ -425,9 +440,124 @@ async function fetchOutput(config, output) {
   return { bytes, contentType: contentType(output.filename, response.headers.get("content-type")) };
 }
 
+function videoExtension(contentTypeValue) {
+  return ({ "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" })[contentTypeValue] || "mp4";
+}
+
+async function runFfmpeg(args, errorPrefix) {
+  if (!ffmpegPath) throw new Error(`${errorPrefix}_ffmpeg_unavailable`);
+  await new Promise((resolve, reject) => {
+    const stderr = [];
+    const child = spawn(ffmpegPath, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${errorPrefix}:${signal || code}:${Buffer.concat(stderr).toString("utf8").slice(-500)}`));
+    });
+  });
+}
+
+async function probeVideoFile(filePath) {
+  if (!ffmpegPath) throw new Error("video_probe_ffmpeg_unavailable");
+  const stderr = await new Promise((resolve, reject) => {
+    const chunks = [];
+    const child = spawn(ffmpegPath, ["-hide_banner", "-i", filePath], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    child.stderr.on("data", (chunk) => chunks.push(chunk));
+    child.once("error", reject);
+    child.once("exit", () => resolve(Buffer.concat(chunks).toString("utf8")));
+  });
+  const durationMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+  const videoLine = stderr.split(/\r?\n/).find((line) => /Video:/i.test(line)) || "";
+  const sizeMatch = videoLine.match(/(?:^|,\s)(\d{2,5})x(\d{2,5})(?:\s|,|\[|$)/);
+  const fpsMatch = videoLine.match(/(\d+(?:\.\d+)?)\s*fps/i);
+  if (!sizeMatch) throw new Error("video_probe_dimensions_unavailable");
+  const duration = durationMatch
+    ? Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3])
+    : 0;
+  return {
+    width: Number(sizeMatch[1]),
+    height: Number(sizeMatch[2]),
+    fps: Math.max(1, Math.min(120, Number(fpsMatch?.[1]) || 24)),
+    duration,
+    hasAudio: /Audio:/i.test(stderr),
+  };
+}
+
+export async function createLastFrameInput(bytes, contentTypeValue) {
+  const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-final-frame-"));
+  const inputPath = join(directory, `source.${videoExtension(contentTypeValue)}`);
+  const outputPath = join(directory, "final-frame.jpg");
+  try {
+    await writeFile(inputPath, bytes);
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-sseof", "-2", "-i", inputPath,
+      "-map", "0:v:0", "-vf", "scale=1280:-2:force_original_aspect_ratio=decrease",
+      "-fps_mode", "passthrough", "-update", "1", "-q:v", "2", "-y", outputPath,
+    ], "video_final_frame_failed");
+    const frame = await readFile(outputPath);
+    if (!frame.byteLength) throw new Error("video_final_frame_empty");
+    return frame;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+export async function combineVideoExtension(sourceBytes, sourceContentType, continuationBytes, continuationContentType, operation) {
+  const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-extension-"));
+  const sourcePath = join(directory, `source.${videoExtension(sourceContentType)}`);
+  const continuationPath = join(directory, `continuation.${videoExtension(continuationContentType)}`);
+  const outputPath = join(directory, "extended.mp4");
+  try {
+    await Promise.all([writeFile(sourcePath, sourceBytes), writeFile(continuationPath, continuationBytes)]);
+    const [source, continuation] = await Promise.all([probeVideoFile(sourcePath), probeVideoFile(continuationPath)]);
+    const width = continuation.width % 2 === 0 ? continuation.width : continuation.width - 1;
+    const height = continuation.height % 2 === 0 ? continuation.height : continuation.height - 1;
+    const fps = continuation.fps.toFixed(3).replace(/\.0+$/, "");
+    const normalize = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,fps=${fps},format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS`;
+    const requestedTransition = Number(operation.transitionSeconds) || 0;
+    const transition = Math.max(0, Math.min(requestedTransition, source.duration - 0.05, continuation.duration - 0.05));
+    const videoJoin = transition > 0
+      ? `[v0][v1]xfade=transition=fade:duration=${transition.toFixed(3)}:offset=${Math.max(0, source.duration - transition).toFixed(3)}[v]`
+      : "[v0][v1]concat=n=2:v=1:a=0[v]";
+    const totalDuration = Math.max(0.1, source.duration + continuation.duration - transition);
+    const filters = [`[0:v:0]${normalize}[v0]`, `[1:v:0]${normalize}[v1]`, videoJoin];
+    const keepAudio = operation.audioMode === "keep-source" && source.hasAudio;
+    if (keepAudio) filters.push("[0:a:0]aresample=async=1:first_pts=0,apad[a]");
+    const args = [
+      "-hide_banner", "-loglevel", "error", "-i", sourcePath, "-i", continuationPath,
+      "-filter_complex", filters.join(";"), "-map", "[v]",
+    ];
+    if (keepAudio) args.push("-map", "[a]", "-c:a", "aac", "-b:a", "192k");
+    args.push("-t", totalDuration.toFixed(3), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-y", outputPath);
+    await runFfmpeg(args, "video_extension_join_failed");
+    const bytes = await readFile(outputPath);
+    if (!bytes.byteLength) throw new Error("video_extension_output_empty");
+    return { bytes, contentType: "video/mp4" };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+export async function muteVideoOutput(bytes, contentTypeValue) {
+  const extension = videoExtension(contentTypeValue);
+  const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-mute-"));
+  const inputPath = join(directory, `source.${extension}`);
+  const outputPath = join(directory, `muted.${extension}`);
+  try {
+    await writeFile(inputPath, bytes);
+    await runFfmpeg(["-hide_banner", "-loglevel", "error", "-i", inputPath, "-map", "0:v:0", "-c:v", "copy", "-an", "-y", outputPath], "video_audio_remove_failed");
+    const output = await readFile(outputPath);
+    if (!output.byteLength) throw new Error("video_audio_remove_empty");
+    return { bytes: output, contentType: contentTypeValue };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 export async function createFirstFrameThumbnail(bytes, contentTypeValue) {
   if (!ffmpegPath) throw new Error("video_thumbnail_ffmpeg_unavailable");
-  const extension = ({ "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" })[contentTypeValue] || "mp4";
+  const extension = videoExtension(contentTypeValue);
   const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-thumbnail-"));
   const inputPath = join(directory, `source.${extension}`);
   const outputPath = join(directory, "first-frame.jpg");
@@ -456,7 +586,8 @@ export async function createFirstFrameThumbnail(bytes, contentTypeValue) {
 
 async function executeBundle(config, bundle) {
   try {
-    const graph = await prepareGraph(config, bundle);
+    const prepared = await prepareGraph(config, bundle);
+    const graph = prepared.graph;
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ progress: 7, stage: "submitting" }),
@@ -471,7 +602,28 @@ async function executeBundle(config, bundle) {
       method: "POST",
       body: JSON.stringify({ progress: 92, stage: "downloading-output" }),
     });
-    const retained = await fetchOutput(config, output);
+    let retained = await fetchOutput(config, output);
+    let outputFileName = output.filename;
+    const videoOperation = bundle.job.settingsStamp.videoOperation;
+    if (videoOperation?.kind === "extend") {
+      await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ progress: 93, stage: "post-processing" }),
+      });
+      if (videoOperation.outputMode === "combined") {
+        const sourceMedia = prepared.downloadedInputs.get(videoOperation.sourceId);
+        const sourceAsset = bundle.inputs.find((asset) => asset.id === videoOperation.sourceId);
+        if (!sourceMedia || !sourceAsset) throw new Error("video_extension_source_unavailable");
+        retained = await combineVideoExtension(
+          new Uint8Array(await sourceMedia.arrayBuffer()), sourceAsset.mimeType,
+          retained.bytes, retained.contentType, videoOperation,
+        );
+        outputFileName = `${bundle.job.id}-extended.mp4`;
+      } else if (videoOperation.audioMode === "mute") {
+        retained = await muteVideoOutput(retained.bytes, retained.contentType);
+        outputFileName = `${bundle.job.id}-continuation.${videoExtension(retained.contentType)}`;
+      }
+    }
     let videoThumbnail = null;
     if (bundle.job.modality === "video") {
       try {
@@ -489,7 +641,7 @@ async function executeBundle(config, bundle) {
       headers: {
         "content-type": retained.contentType,
         "x-cs-file-size": String(retained.bytes.byteLength),
-        "x-cs-output-file-name": encodeURIComponent(output.filename),
+        "x-cs-output-file-name": encodeURIComponent(outputFileName),
       },
       body: retained.bytes,
     });
@@ -504,7 +656,7 @@ async function executeBundle(config, bundle) {
         process.stderr.write(`[Creative Studio Runner] could not retain first-frame thumbnail for ${bundle.job.id}: ${thumbnailError.message}\n`);
       }
     }
-    process.stdout.write(`[Creative Studio Runner] completed ${bundle.job.id} (${output.filename})\n`);
+    process.stdout.write(`[Creative Studio Runner] completed ${bundle.job.id} (${outputFileName})\n`);
   } catch (caught) {
     const error = (caught instanceof Error ? caught.message : "local_runner_failed").slice(0, 500);
     try {
@@ -636,6 +788,36 @@ async function selfTest() {
   const measuredAudio = await analyzeAudio(testAudio, "self-test.wav", "audio/wav", "Self-test audio");
   if (measuredAudio.metrics.sampleRate !== sampleRate || !Number.isFinite(measuredAudio.dimensions.energy)) {
     throw new Error("runner_self_test_audio_analysis_failed");
+  }
+  const videoDirectory = await mkdtemp(join(tmpdir(), "creative-studio-runner-self-test-"));
+  try {
+    const sourcePath = join(videoDirectory, "source.mp4");
+    const continuationPath = join(videoDirectory, "continuation.mp4");
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=0.8:r=12",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=0.8", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", sourcePath,
+    ], "runner_self_test_source_video_failed");
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=0.8:r=12",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", continuationPath,
+    ], "runner_self_test_continuation_video_failed");
+    const [sourceVideo, continuationVideo] = await Promise.all([readFile(sourcePath), readFile(continuationPath)]);
+    const finalFrame = await createLastFrameInput(sourceVideo, "video/mp4");
+    if (finalFrame.byteLength < 100) throw new Error("runner_self_test_final_frame_failed");
+    const extended = await combineVideoExtension(sourceVideo, "video/mp4", continuationVideo, "video/mp4", {
+      kind: "extend", sourceId: "artifact_self_test", source: "artifact", sourceFrame: "last",
+      outputMode: "combined", transitionSeconds: 0.25, audioMode: "keep-source",
+    });
+    const extendedPath = join(videoDirectory, "extended.mp4");
+    await writeFile(extendedPath, extended.bytes);
+    const extendedProbe = await probeVideoFile(extendedPath);
+    if (extendedProbe.duration < 1 || !extendedProbe.hasAudio) throw new Error("runner_self_test_video_extension_failed");
+    const muted = await muteVideoOutput(sourceVideo, "video/mp4");
+    const mutedPath = join(videoDirectory, "muted.mp4");
+    await writeFile(mutedPath, muted.bytes);
+    if ((await probeVideoFile(mutedPath)).hasAudio) throw new Error("runner_self_test_video_mute_failed");
+  } finally {
+    await rm(videoDirectory, { recursive: true, force: true });
   }
   process.stdout.write("Creative Studio Local Runner self-test passed.\n");
 }

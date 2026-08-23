@@ -89,6 +89,7 @@ const STAGE_LABELS: Record<GenerationExecutionStage, string> = {
   submitting: "Submitting workflow",
   rendering: "Rendering in ComfyUI",
   "downloading-output": "Downloading generated output",
+  "post-processing": "Joining video extension",
   retaining: "Verifying retained result",
   completed: "Completed and retained",
   failed: "Failed",

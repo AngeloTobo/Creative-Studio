@@ -40,7 +40,7 @@ function ModalShell({ labelledBy, onClose, className = "", children }: { labelle
   );
 }
 
-export function ArtifactMediaReview({ artifact, onInspect }: { artifact: Artifact; onInspect: () => void }) {
+export function ArtifactMediaReview({ artifact, onInspect, onExtend }: { artifact: Artifact; onInspect: () => void; onExtend?: () => void }) {
   const mediaUrl = artifact.preview.kind === "remote-media" ? artifact.preview.url : null;
   if (!mediaUrl) return null;
   if (artifact.kind === "music") {
@@ -55,6 +55,7 @@ export function ArtifactMediaReview({ artifact, onInspect }: { artifact: Artifac
   if (artifact.kind === "video") {
     return (
       <section className="artifact-video-tools" aria-label={`Video actions for ${artifact.name}`}>
+        {onExtend ? <button type="button" className="btn artifact-extend" onClick={onExtend}><Icon name="video" size={15} /> Extend video</button> : null}
         <a className="btn btn-ghost artifact-download" href={mediaUrl} download={downloadName(artifact)}><Icon name="arrow" size={15} /> Download video</a>
       </section>
     );
@@ -115,7 +116,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; focused: boolean }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, onExtendVideo, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; focused: boolean }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [expanded, setExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -131,7 +132,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
         <p>{artifact.prompt}</p>
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
-        <ArtifactMediaReview artifact={artifact} onInspect={() => artifact.kind === "image" && onInspect(artifact)} />
+        <ArtifactMediaReview artifact={artifact} onInspect={() => artifact.kind === "image" && onInspect(artifact)} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} />
         <DecisionHistory decisions={decisions} />
         <button className="lineage-toggle" onClick={() => setExpanded((value) => !value)}><Icon name="history" size={15} /> {expanded ? "Hide lineage" : "Show lineage"}</button>
         {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span><span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}
@@ -147,7 +148,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
   );
 }
 
-export function ArtifactsView({ onQueued, onContinueLoop, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; focusArtifactId?: string }) {
+export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; focusArtifactId?: string }) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
@@ -166,7 +167,7 @@ export function ArtifactsView({ onQueued, onContinueLoop, focusArtifactId }: { o
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid">
-        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} focused={focusArtifactId === artifact.id} />)}
+        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} focused={focusArtifactId === artifact.id} />)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}

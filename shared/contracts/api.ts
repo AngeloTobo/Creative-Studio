@@ -15,6 +15,7 @@ import type {
   CreativeDnaTrainingReview,
   CreativeDnaTrainingReviewDecision,
   LocalRunner,
+  VideoGenerationOperation,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis } from "./creativeDna";
 import type { ProjectProductionLoop } from "./productionLoop";
@@ -144,6 +145,7 @@ export type SubmitJobRequest = {
     revisionId: string;
     inputBindings: Record<string, string>;
   };
+  videoOperation?: VideoGenerationOperation;
 };
 
 export type SubmitJobResponse = {

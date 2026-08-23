@@ -41,6 +41,7 @@ export function App() {
   const { snapshot, loading, error, activeProjectId, setActiveProjectId } = useStudio();
   const [view, setView] = useState<StudioView>(hashView);
   const [cockpitTarget, setCockpitTarget] = useState<ProductionCockpitAction | null>(null);
+  const [videoExtensionArtifactId, setVideoExtensionArtifactId] = useState("");
   const mobile = useResponsive();
   useEffect(() => {
     const update = () => setView(hashView());
@@ -53,8 +54,17 @@ export function App() {
 
   const navigate = (next: StudioView) => {
     setCockpitTarget(null);
+    setVideoExtensionArtifactId("");
     setView(next);
     window.history.pushState(null, "", `#/${next}`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openVideoExtension = (artifactId: string) => {
+    setCockpitTarget(null);
+    setVideoExtensionArtifactId(artifactId);
+    setView("dna");
+    window.history.pushState(null, "", "#/dna");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -71,10 +81,10 @@ export function App() {
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "cockpit": return <CockpitView onOpen={openCockpitAction} />;
-      case "dna": return <CreativeDnaWorkbench key={activeProjectId} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
+      case "dna": return <CreativeDnaWorkbench key={activeProjectId} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "media": return <MediaView onGenerate={() => navigate("dna")} />;
       case "queue": return <QueueView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} />;
-      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;
+      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} onExtendVideo={openVideoExtension} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;
       case "library": return <LibraryView />;
       case "projects": return <ProjectsView onOpen={navigate} />;
       case "runtime": return <RuntimeView />;

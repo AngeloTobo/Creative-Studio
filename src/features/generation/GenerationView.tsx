@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { creativeDnaCanGenerate, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { StatusDot } from "../../components/Visuals";
@@ -15,6 +15,7 @@ import {
   type WorkflowDefinition,
   type WorkflowParameter,
   type WorkflowScalar,
+  type VideoGenerationOperation,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
@@ -78,6 +79,7 @@ export function GenerationView({
   onWorkflows,
   onDesign,
   onTrain,
+  initialVideoExtensionArtifactId,
   embedded = false,
 }: {
   onQueued: () => void;
@@ -85,6 +87,7 @@ export function GenerationView({
   onWorkflows: () => void;
   onDesign: () => void;
   onTrain: (assetIds?: string[]) => void;
+  initialVideoExtensionArtifactId?: string;
   embedded?: boolean;
 }) {
   const {
@@ -102,24 +105,36 @@ export function GenerationView({
     error,
   } = useStudio();
   const mediaInputRef = useRef<HTMLInputElement>(null);
-  const directionInitialized = useRef(false);
-  const directionProjectId = useRef<string | null>(null);
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const availableDna = snapshot ? projectDna.filter((artifact) => creativeDnaCanGenerate(snapshot, artifact)) : [];
   const selected = snapshot && activeDna && creativeDnaCanGenerate(snapshot, activeDna) ? activeDna : availableDna[0] ?? null;
-  const projectMedia = snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [];
-  const projectArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.retention.state === "retained") ?? [];
+  const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
+  const projectArtifacts = useMemo(() => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.retention.state === "retained") ?? [], [activeProjectId, snapshot?.artifacts]);
   const workflows = snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [];
-  const [intent, setIntent] = useState<CreateIntent>("image");
-  const [direction, setDirection] = useState("");
-  const [quickSourceId, setQuickSourceId] = useState("");
+  const initialVideoSource = initialVideoExtensionArtifactId
+    ? projectArtifacts.find((artifact) => artifact.id === initialVideoExtensionArtifactId && artifact.kind === "video") ?? null
+    : null;
+  const directionInitialized = useRef(Boolean(initialVideoSource));
+  const directionProjectId = useRef<string | null>(activeProjectId);
+  const [intent, setIntent] = useState<CreateIntent>(initialVideoSource ? "video" : "image");
+  const [direction, setDirection] = useState(initialVideoSource?.prompt ?? "");
+  const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? "");
   const [workflowId, setWorkflowId] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
   const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : "");
+  const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
+    kind: "extend",
+    sourceId: initialVideoSource.id,
+    source: "artifact",
+    sourceFrame: "last",
+    outputMode: "combined",
+    transitionSeconds: 0.5,
+    audioMode: "keep-source",
+  } : null);
 
   useEffect(() => {
     if (directionProjectId.current !== activeProjectId) {
@@ -133,6 +148,7 @@ export function GenerationView({
       setWorkflowValues({});
       setValuesRevisionId("");
       setNotice("");
+      setVideoOperation(null);
     }
     if (!selected || directionInitialized.current) return;
     directionInitialized.current = true;
@@ -140,17 +156,23 @@ export function GenerationView({
     setIntent(selected.targetModality);
   }, [activeProjectId, selected]);
 
-  const sourceChoices = intent === "train"
+  const sourceChoices = videoOperation
+    ? [...projectArtifacts.filter((artifact) => artifact.kind === "video").map(sourceFromArtifact), ...projectMedia.filter((asset) => asset.kind === "video").map(sourceFromAsset)]
+    : intent === "train"
     ? projectMedia.map(sourceFromAsset)
     : [...projectArtifacts.map(sourceFromArtifact), ...projectMedia.map(sourceFromAsset)];
   const quickSource = sourceChoices.find((source) => source.id === quickSourceId) ?? null;
   const generationIntent = intent === "train" ? "image" : intent;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
-  const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, quickSource?.kind ?? null);
+  const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null);
   const workflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? preferredWorkflow;
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
   const scalarParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind !== "media") ?? [];
-  const effectiveInputBindings = quickInputBindings(mediaParameters, inputBindings, quickSource);
+  const bindingSource = videoOperation && quickSource ? { ...quickSource, kind: "image" as const } : quickSource;
+  const effectiveInputBindings = quickInputBindings(mediaParameters, inputBindings, bindingSource);
+  const effectiveVideoOperation = videoOperation && quickSource?.kind === "video"
+    ? { ...videoOperation, sourceId: quickSource.id, source: quickSource.source } satisfies VideoGenerationOperation
+    : null;
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
   const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
   const parameterValue = (parameter: WorkflowParameter) => {
@@ -200,6 +222,7 @@ export function GenerationView({
 
   const chooseIntent = (nextIntent: CreateIntent) => {
     setIntent(nextIntent);
+    setVideoOperation(null);
     resetWorkflowOverrides();
   };
 
@@ -221,6 +244,10 @@ export function GenerationView({
     }
     try {
       const asset = await uploadMedia(file, intent === "train" ? true : trainingEligible);
+      if (videoOperation && asset.kind !== "video") {
+        setLocalError("Choose a video to extend.");
+        return;
+      }
       setQuickSourceId(asset.id);
       if (mediaInputRef.current) mediaInputRef.current.value = "";
       if (intent === "train") {
@@ -261,6 +288,10 @@ export function GenerationView({
   const queueWorkflow = async () => {
     if (!workflow || !workflowReady) return;
     setLocalError("");
+    if (videoOperation && !effectiveVideoOperation) {
+      setLocalError("Choose a retained video to extend.");
+      return;
+    }
     try {
       const dna = await ensureDna();
       if (!dna) return;
@@ -274,8 +305,8 @@ export function GenerationView({
         setValuesRevisionId(runWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
       }
-      await submitWorkflowJob(runWorkflow, effectiveInputBindings, dna.artifactId);
-      setNotice(`${runWorkflow.name} queued. You can keep creating while it runs.`);
+      await submitWorkflowJob(runWorkflow, effectiveInputBindings, dna.artifactId, effectiveVideoOperation ?? undefined);
+      setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
     } catch {
       // The provider exposes a normalized visible error.
     }
@@ -315,8 +346,10 @@ export function GenerationView({
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
       : settingsChanged
-        ? `Save & generate ${generationIntent}`
-        : `Generate ${generationIntent}`;
+        ? effectiveVideoOperation ? "Save & extend video" : `Save & generate ${generationIntent}`
+        : effectiveVideoOperation
+          ? "Extend video"
+          : `Generate ${generationIntent}`;
 
   return (
     <section className={`generation-section create-surface quick-create${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-label="Create with Creative Studio">
@@ -329,7 +362,7 @@ export function GenerationView({
       <section className="quick-create-card glass">
         <div className="quick-create-head">
           <div className={`create-output-icon ${intent}`}><Icon name={intent === "train" ? "dna" : intent} size={22} /></div>
-          <div><span className="eyebrow">{intent === "train" ? "Learn from your work" : `New ${intent === "music" ? "song" : intent}`}</span><h2>{intent === "train" ? "Train CreativeDNA" : "Create"}</h2></div>
+          <div><span className="eyebrow">{intent === "train" ? "Learn from your work" : videoOperation ? "Continue retained motion" : `New ${intent === "music" ? "song" : intent}`}</span><h2>{intent === "train" ? "Train CreativeDNA" : videoOperation ? "Extend video" : "Create"}</h2></div>
           {intent !== "train" ? <em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em> : null}
         </div>
 
@@ -340,20 +373,29 @@ export function GenerationView({
           </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
         </div> : null}
 
-        <div className="quick-source-row">
+        <div className={`quick-source-row${videoOperation ? " video-extension-source" : ""}`}>
           <label className={`quick-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
-            <input ref={mediaInputRef} type="file" accept={ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
+            <input ref={mediaInputRef} type="file" accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
             <Icon name="plus" size={16} />
-            <span><strong>{busy ? "Working…" : intent === "train" ? "Upload training media" : "Upload a source"}</strong><small>Image, audio, or video</small></span>
+            <span><strong>{busy ? "Working…" : intent === "train" ? "Upload training media" : videoOperation ? "Upload video to extend" : "Upload a source"}</strong><small>{videoOperation ? "MP4, WebM, or MOV" : "Image, audio, or video"}</small></span>
           </label>
-          {sourceChoices.length ? <label className="quick-source-select"><span>or use retained work</span><select aria-label="Retained source" value={quickSource?.id ?? ""} disabled={busy} onChange={(event) => { setQuickSourceId(event.target.value); setInputBindings({}); }}><option value="">No source</option>{sourceChoices.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.source === "upload" ? "upload" : "generated"}</option>)}</select></label> : null}
+          {sourceChoices.length ? <label className="quick-source-select"><span>{videoOperation ? "video to extend" : "or use retained work"}</span><select aria-label={videoOperation ? "Video to extend" : "Retained source"} value={quickSource?.id ?? ""} disabled={busy} onChange={(event) => { setQuickSourceId(event.target.value); setInputBindings({}); }}><option value="">No source</option>{sourceChoices.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.source === "upload" ? "upload" : "generated"}</option>)}</select></label> : null}
         </div>
+
+        {videoOperation ? <section className="quick-video-tools" aria-label="Video extension settings">
+          <header><span><Icon name="video" size={16} /><strong>Final-frame continuation</strong></span><small>Local FFmpeg + ComfyUI</small></header>
+          <div>
+            <label><span>Result</span><select value={videoOperation.outputMode} disabled={busy} onChange={(event) => setVideoOperation((current) => current ? { ...current, outputMode: event.target.value as VideoGenerationOperation["outputMode"], transitionSeconds: event.target.value === "combined" ? 0.5 : 0, audioMode: event.target.value === "combined" ? "keep-source" : "mute" } : current)}><option value="combined">One longer video</option><option value="continuation">Continuation clip only</option></select></label>
+            <label><span>Join</span><select value={videoOperation.transitionSeconds} disabled={busy || videoOperation.outputMode !== "combined"} onChange={(event) => setVideoOperation((current) => current ? { ...current, transitionSeconds: Number(event.target.value) as VideoGenerationOperation["transitionSeconds"] } : current)}><option value="0">Clean cut</option><option value="0.25">0.25s dissolve</option><option value="0.5">0.5s dissolve</option><option value="1">1s dissolve</option></select></label>
+            <label className="quick-video-audio"><input type="checkbox" checked={videoOperation.audioMode === "keep-source"} disabled={busy || videoOperation.outputMode !== "combined"} onChange={(event) => setVideoOperation((current) => current ? { ...current, audioMode: event.target.checked ? "keep-source" : "mute" } : current)} /><span><strong>Keep source audio</strong><small>Silence continues after the original track ends.</small></span></label>
+          </div>
+        </section> : null}
 
         {intent === "train" ? <>
           <p className="quick-train-copy">Choose one consented upload, then review the full training set and start the durable local run.</p>
           <button className="btn btn-primary quick-primary" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [])}><Icon name="dna" size={17} /> {trainingSource ? "Continue to training" : "Open training"}</button>
         </> : <>
-          <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
+          <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
           <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}

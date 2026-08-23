@@ -1183,6 +1183,54 @@ describe("Creative Studio Worker API", () => {
     expect(thumbnailResponse.headers.get("content-type")).toBe("image/jpeg");
     expect([...new Uint8Array(await thumbnailResponse.arrayBuffer())]).toEqual([...thumbnailBytes]);
 
+    const extension = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        idempotencyKey: "runner_video_extension_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
+        },
+        videoOperation: {
+          kind: "extend",
+          sourceId: history.artifacts[0].id,
+          source: "artifact",
+          sourceFrame: "last",
+          outputMode: "combined",
+          transitionSeconds: 0.5,
+          audioMode: "keep-source",
+        },
+      }),
+    }), local)) as { job: { id: string; settingsStamp: { videoOperation: { sourceId: string; outputMode: string; transitionSeconds: number }; inputArtifactIds: string[] } } };
+    expect(extension.job.settingsStamp).toMatchObject({
+      inputArtifactIds: [history.artifacts[0].id],
+      videoOperation: { sourceId: history.artifacts[0].id, outputMode: "combined", transitionSeconds: 0.5 },
+    });
+    const extensionClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { id: string; settingsStamp: { videoOperation: { sourceFrame: string } } }; inputs: Array<{ id: string; kind: string; source: string }> } };
+    expect(extensionClaim.bundle).toMatchObject({
+      job: { id: extension.job.id, settingsStamp: { videoOperation: { sourceFrame: "last" } } },
+      inputs: [{ id: history.artifacts[0].id, kind: "video", source: "artifact" }],
+    });
+    const extensionBytes = new Uint8Array([...outputBytes, 2]);
+    const extensionComplete = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${extension.job.id}/complete`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "video/mp4", "x-cs-file-size": String(extensionBytes.byteLength) },
+      body: extensionBytes,
+    }), local);
+    expect(extensionComplete.status).toBe(200);
+    const extendedHistory = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ lineage: { sourceArtifactIds: string[] }; settingsStamp: { videoOperation?: { kind: string } } }> };
+    expect(extendedHistory.artifacts[0]).toMatchObject({
+      lineage: { sourceArtifactIds: [history.artifacts[0].id] },
+      settingsStamp: { videoOperation: { kind: "extend" } },
+    });
+
     const remixGraph = JSON.stringify({
       "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },
       "11": { class_type: "SaveVideo", inputs: { video: ["10", 0] } },

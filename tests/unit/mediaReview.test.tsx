@@ -53,13 +53,14 @@ describe("real artifact media review", () => {
     expect(imageMarkup).not.toContain("<audio");
 
     const video = artifact("video");
-    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} playable /><ArtifactMediaReview artifact={video} onInspect={() => undefined} /></>);
+    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} playable /><ArtifactMediaReview artifact={video} onInspect={() => undefined} onExtend={() => undefined} /></>);
     expect(videoMarkup).toContain("<video");
     expect(videoMarkup.match(/<video/g)).toHaveLength(1);
     expect(videoMarkup).toContain("controls=\"\"");
     expect(videoMarkup).toContain("poster=\"/api/creative-studio/artifacts/artifact-video/thumbnail\"");
     expect(videoMarkup).toContain("#t=0.001");
     expect(videoMarkup).toContain("Download video");
+    expect(videoMarkup).toContain("Extend video");
     expect(videoMarkup).not.toContain("Inspect full-size image");
   });
 

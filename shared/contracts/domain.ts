@@ -41,6 +41,7 @@ export type GenerationExecutionStage =
   | "submitting"
   | "rendering"
   | "downloading-output"
+  | "post-processing"
   | "retaining"
   | "completed"
   | "failed"
@@ -100,6 +101,17 @@ export type GenerationSettingsStamp = {
     kind: MediaKind;
   }>;
   inputBindings?: Record<string, string>;
+  videoOperation?: VideoGenerationOperation;
+};
+
+export type VideoGenerationOperation = {
+  kind: "extend";
+  sourceId: string;
+  source: "upload" | "artifact";
+  sourceFrame: "last";
+  outputMode: "combined" | "continuation";
+  transitionSeconds: 0 | 0.25 | 0.5 | 1;
+  audioMode: "keep-source" | "mute";
 };
 
 export type ArtifactStatus = "retaining" | "ready" | "accepted" | "rejected" | "archived";

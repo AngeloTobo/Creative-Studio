@@ -135,6 +135,23 @@ function workflowJobModality(value: string): GenerationModality {
   throw new Error("workflow_modality_not_supported");
 }
 
+function requestedVideoOperation(value: SubmitJobRequest["videoOperation"], modality: GenerationModality) {
+  if (value === undefined) return undefined;
+  if (modality !== "video" || !value || typeof value !== "object" || value.kind !== "extend") {
+    throw new Error("invalid_video_operation");
+  }
+  const sourceId = boundedText(value.sourceId, 100);
+  const transitionSeconds = Number(value.transitionSeconds);
+  if (!sourceId || !["upload", "artifact"].includes(value.source) || value.sourceFrame !== "last"
+    || !["combined", "continuation"].includes(value.outputMode)
+    || ![0, 0.25, 0.5, 1].includes(transitionSeconds)
+    || !["keep-source", "mute"].includes(value.audioMode)
+    || (value.outputMode === "continuation" && (transitionSeconds !== 0 || value.audioMode !== "mute"))) {
+    throw new Error("invalid_video_operation");
+  }
+  return { ...value, sourceId, transitionSeconds } as NonNullable<SubmitJobRequest["videoOperation"]>;
+}
+
 async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awaited<ReturnType<typeof listLocalRunners>>): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
   if (developmentMode(env)) {
@@ -392,6 +409,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (project.status === "archived") return json({ ok: false, error: "project_archived" }, { status: 400 });
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const modality = input.modality as GenerationModality;
+      const videoOperation = requestedVideoOperation(input.videoOperation, modality);
       if (input.provider !== undefined && input.provider !== "afdfw" && input.provider !== "development-preview") {
         throw new Error("invalid_generation_provider");
       }
@@ -410,6 +428,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           .filter(([parameterId, assetId]) => Boolean(parameterId && assetId))) as Record<string, string>;
         if (Object.keys(inputBindings).some((parameterId) => !allowedParameters.has(parameterId))) throw new Error("unknown_workflow_media_parameter");
         if (mediaParameters.some((parameter) => !inputBindings[parameter.id])) throw new Error("workflow_media_input_required");
+        if (videoOperation) {
+          const extensionInputs = mediaParameters.filter((parameter) => parameter.mediaKind === "image" && inputBindings[parameter.id] === videoOperation.sourceId);
+          if (extensionInputs.length !== 1) throw new Error("video_extension_image_input_required");
+        }
         const resolvedInputs = await Promise.all(mediaParameters.map(async (parameter) => ({
           parameter,
           input: await runnerInputById(env, session.userId, inputBindings[parameter.id]),
@@ -417,9 +439,18 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         for (const { parameter, input: resolvedInput } of resolvedInputs) {
           if (!resolvedInput) throw new Error("runner_input_source_not_found");
           if (resolvedInput.projectId !== input.projectId) throw new Error("runner_input_project_mismatch");
-          if (parameter.mediaKind && resolvedInput.kind !== parameter.mediaKind) {
+          const finalFrameInput = Boolean(videoOperation
+            && parameter.mediaKind === "image"
+            && inputBindings[parameter.id] === videoOperation.sourceId
+            && resolvedInput.source === videoOperation.source
+            && resolvedInput.kind === "video");
+          if (parameter.mediaKind && resolvedInput.kind !== parameter.mediaKind && !finalFrameInput) {
             throw new Error("runner_input_media_mismatch");
           }
+        }
+        if (videoOperation) {
+          const source = resolvedInputs.find(({ input: resolvedInput }) => resolvedInput?.id === videoOperation.sourceId)?.input;
+          if (!source || source.source !== videoOperation.source || source.kind !== "video") throw new Error("video_extension_source_invalid");
         }
         const inputSources = resolvedInputs.map(({ input: resolvedInput }) => ({
           id: resolvedInput!.id,
@@ -469,10 +500,12 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             inputArtifactIds: inputSources.filter((inputSource) => inputSource.source === "artifact").map((inputSource) => inputSource.id),
             inputSources,
             inputBindings,
+            videoOperation,
           },
         });
         return json({ ok: true, job: created.job }, { status: 202 });
       }
+      if (videoOperation) throw new Error("video_workflow_required");
       if (modality === "video") throw new Error("video_workflow_required");
       if (localHardwareMode(env)) throw new Error("local_comfyui_workflow_required");
       if (developmentMode(env)) {
