@@ -8,6 +8,8 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("group", { name: "What do you want to make?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Image", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Add workflow JSON", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /No image model is ready/ })).toBeVisible();
   await page.locator(".quick-create-advanced > summary").click();
   await page.getByRole("button", { name: "Build detailed CreativeDNA" }).click();
 

@@ -392,7 +392,6 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           throw new Error("invalid_workflow_job_request");
         }
         const plan = await workflowExecutionPlan(env, session.userId, boundedText(input.workflow.workflowId, 100), boundedText(input.workflow.revisionId, 100));
-        if (plan.workflow.projectId !== input.projectId) throw new Error("workflow_project_mismatch");
         const expectedModality = workflowJobModality(plan.workflow.modality);
         if (expectedModality !== modality) throw new Error("workflow_modality_mismatch");
         const mediaParameters = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "media");

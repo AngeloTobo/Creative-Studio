@@ -6,9 +6,9 @@ import { WorkflowParameterField } from "./WorkflowParameterField";
 import { sameWorkflowValue } from "./workflowValues";
 
 export function FlowsView() {
-  const { snapshot, activeProjectId, busy, error, uploadWorkflow, saveWorkflowRevision } = useStudio();
+  const { snapshot, busy, error, uploadWorkflow, saveWorkflowRevision } = useStudio();
   const inputRef = useRef<HTMLInputElement>(null);
-  const workflows = snapshot?.workflows.filter((workflow) => workflow.projectId === activeProjectId) ?? [];
+  const workflows = snapshot?.workflows ?? [];
   const [selectedId, setSelectedId] = useState("");
   const selected = workflows.find((workflow) => workflow.id === selectedId) ?? workflows[0] ?? null;
   const [file, setFile] = useState<File | null>(null);
@@ -43,7 +43,7 @@ export function FlowsView() {
 
   return <section className="flows-view fade-up">
     <section className="workflow-import glass">
-      <div className="workflow-import-copy"><span className="eyebrow">Workflow library</span><h2>Upload a ComfyUI JSON</h2><p>The original graph is preserved and content-hashed. Creative Studio detects editable prompts and safe generation controls, then saves every modification as a new immutable version.</p></div>
+      <div className="workflow-import-copy"><span className="eyebrow">Model library</span><h2>Add a ComfyUI workflow</h2><p>Import once, then select this model from Create in any project. The graph and every settings revision remain immutable and content-hashed.</p></div>
       <label className="workflow-drop">
         <input ref={inputRef} type="file" accept="application/json,.json" disabled={busy || uiOnlyDevelopment} onChange={(event) => {
           const next = event.target.files?.[0] ?? null;
@@ -64,7 +64,7 @@ export function FlowsView() {
 
     <div className="workflow-layout">
       <aside className="workflow-list glass">
-        <div className="workflow-list-head"><span><span className="eyebrow">Project workflows</span><strong>{workflows.length} saved</strong></span></div>
+        <div className="workflow-list-head"><span><span className="eyebrow">Your models</span><strong>{workflows.length} saved</strong></span></div>
         {workflows.map((workflow) => <button key={workflow.id} className={selected?.id === workflow.id ? "on" : ""} onClick={() => {
           setSelectedId(workflow.id);
           setValuesRevisionId(workflow.currentRevision.id);
@@ -73,7 +73,7 @@ export function FlowsView() {
           <Icon name={workflow.modality === "music" || workflow.modality === "audio" ? "music" : workflow.modality === "video" ? "video" : workflow.modality === "3d" ? "cube" : "image"} size={18} />
           <span><strong>{workflow.name}</strong><small>v{workflow.currentRevision.version} · {workflow.modality} · {workflow.currentRevision.format}</small></span>
         </button>)}
-        {!workflows.length ? <p>No workflow JSONs have been imported for this project.</p> : null}
+        {!workflows.length ? <p>No workflow JSONs have been imported yet.</p> : null}
       </aside>
 
       <section className="workflow-editor glass">
@@ -98,7 +98,7 @@ export function FlowsView() {
             <button className="btn btn-ghost" disabled={!changed || busy} onClick={() => { setValuesRevisionId(selected.currentRevision.id); setValues(Object.fromEntries(selected.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={15} /> Reset</button>
             <button className="btn btn-primary" disabled={!changed || busy} onClick={() => void saveVersion()}><Icon name="history" size={15} /> Save as v{selected.currentRevision.version + 1}</button>
           </footer>
-        </> : <div className="empty-state"><Icon name="flows" size={34} /><h2>Upload or build a workflow</h2><p>Imported ComfyUI graphs will become reusable, versioned project tools.</p></div>}
+        </> : <div className="empty-state"><Icon name="flows" size={34} /><h2>Add your first model</h2><p>Import one working ComfyUI graph here, then reuse it from Create across projects.</p></div>}
       </section>
     </div>
   </section>;

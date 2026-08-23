@@ -704,6 +704,37 @@ describe("Creative Studio Worker API", () => {
     expect(exported.status).toBe(200);
     expect(exported.headers.get("x-creative-studio-workflow-hash")).toBe(revisedPayload.workflow.currentRevision.contentHash);
     expect(await exported.json()).toMatchObject({ "2": { inputs: { value: "A chrome object in warm light" } }, "3": { inputs: { seed: 99 } } });
+
+    const secondProject = await testProject(ownerId, "Second Workflow Study");
+    const secondDna = await createLocalDna(env, ownerId, {
+      projectId: secondProject.id,
+      name: "Shared model direction",
+      directive: "A precise silver object isolated against a dark studio background.",
+      targetModality: "image",
+    });
+    const sharedModelJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify({
+        projectId: secondProject.id,
+        dnaArtifactId: secondDna.artifactId,
+        modality: "image",
+        idempotencyKey: "shared_owner_model_001",
+        workflow: {
+          workflowId: importedPayload.workflow.id,
+          revisionId: revisedPayload.workflow.currentRevision.id,
+          inputBindings: {},
+        },
+      }),
+    }), local);
+    expect(sharedModelJob.status).toBe(202);
+    expect(await result(sharedModelJob)).toMatchObject({
+      job: {
+        projectId: secondProject.id,
+        provider: "local-comfyui",
+        settingsStamp: { workflow: { workflowId: importedPayload.workflow.id, revisionId: revisedPayload.workflow.currentRevision.id } },
+      },
+    });
   });
 
   it("rejects unsupported media before writing R2", async () => {

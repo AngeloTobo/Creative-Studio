@@ -12,6 +12,7 @@ import {
   workflowRuntimeHistory,
   type Artifact,
   type MediaAsset,
+  type WorkflowDefinition,
   type WorkflowParameter,
   type WorkflowScalar,
 } from "../../../shared/contracts";
@@ -27,7 +28,6 @@ import {
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
-const MAX_WORKFLOW_BYTES = 1024 * 1024;
 
 type QuickSource = {
   id: string;
@@ -63,6 +63,15 @@ function shortDnaName(direction: string, intent: Exclude<CreateIntent, "train">)
   return words || `${intent === "music" ? "Song" : intent[0].toUpperCase() + intent.slice(1)} direction`;
 }
 
+function modelSummary(workflow: WorkflowDefinition) {
+  const inputKinds = [...new Set(workflow.currentRevision.parameters
+    .filter((parameter) => parameter.kind === "media" && parameter.mediaKind)
+    .map((parameter) => parameter.mediaKind))];
+  const input = inputKinds.length ? `${inputKinds.join(" + ")} source` : "No source required";
+  const models = workflow.currentRevision.models.length;
+  return `${input} · ${models || "No detected"} model ${models === 1 ? "file" : "files"}`;
+}
+
 export function GenerationView({
   onQueued,
   onMedia,
@@ -85,7 +94,6 @@ export function GenerationView({
     selectDna,
     saveDna,
     uploadMedia,
-    uploadWorkflow,
     submitAfdfwJob,
     submitDevelopmentPreviewJob,
     submitWorkflowJob,
@@ -94,7 +102,6 @@ export function GenerationView({
     error,
   } = useStudio();
   const mediaInputRef = useRef<HTMLInputElement>(null);
-  const workflowInputRef = useRef<HTMLInputElement>(null);
   const directionInitialized = useRef(false);
   const directionProjectId = useRef<string | null>(null);
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
@@ -102,7 +109,7 @@ export function GenerationView({
   const selected = snapshot && activeDna && creativeDnaCanGenerate(snapshot, activeDna) ? activeDna : availableDna[0] ?? null;
   const projectMedia = snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [];
   const projectArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.retention.state === "retained") ?? [];
-  const workflows = snapshot?.workflows.filter((item) => item.projectId === activeProjectId && item.executionState === "ready" && item.modality !== "3d") ?? [];
+  const workflows = snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [];
   const [intent, setIntent] = useState<CreateIntent>("image");
   const [direction, setDirection] = useState("");
   const [quickSourceId, setQuickSourceId] = useState("");
@@ -138,7 +145,8 @@ export function GenerationView({
     : [...projectArtifacts.map(sourceFromArtifact), ...projectMedia.map(sourceFromAsset)];
   const quickSource = sourceChoices.find((source) => source.id === quickSourceId) ?? null;
   const generationIntent = intent === "train" ? "image" : intent;
-  const preferredWorkflow = preferredQuickWorkflow(workflows, generationIntent, quickSource?.kind ?? null);
+  const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
+  const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, quickSource?.kind ?? null);
   const workflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? preferredWorkflow;
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
   const scalarParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind !== "media") ?? [];
@@ -156,7 +164,6 @@ export function GenerationView({
   const developmentPreviewAvailable = Boolean(uiOnlyDevelopment && snapshot?.adapter.development);
   const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && (job.status === "queued" || job.status === "running")) ?? [];
   const missingMediaParameters = mediaParameters.filter((parameter) => !effectiveInputBindings[parameter.id]);
-  const sourceConnected = Boolean(quickSource && Object.values(effectiveInputBindings).includes(quickSource.id));
   const workflowReady = Boolean(workflow) && missingMediaParameters.length === 0;
   const directionReady = direction.trim().length >= 4;
   const trainingSource = quickSource?.source === "upload" && quickSource.trainingEligible ? quickSource : null;
@@ -221,32 +228,6 @@ export function GenerationView({
         return;
       }
       setNotice(`${asset.name} uploaded and ready to use.`);
-    } catch {
-      // The provider exposes a normalized visible error.
-    }
-  };
-
-  const importAndUseWorkflow = async (file: File | null) => {
-    setLocalError("");
-    if (!file || uiOnlyDevelopment) return;
-    if (file.size > MAX_WORKFLOW_BYTES) {
-      setLocalError("Choose a workflow JSON no larger than 1 MB.");
-      if (workflowInputRef.current) workflowInputRef.current.value = "";
-      return;
-    }
-    try {
-      const imported = await uploadWorkflow(file);
-      if (workflowInputRef.current) workflowInputRef.current.value = "";
-      if (imported.executionState === "ready" && imported.modality !== "3d") {
-        setIntent(workflowCreateIntent(imported.modality));
-        setWorkflowId(imported.id);
-        setInputBindings({});
-        setWorkflowValues({});
-        setValuesRevisionId("");
-        setNotice(`${imported.name} imported and selected.`);
-      } else {
-        setNotice(`${imported.name} was saved. Export it from ComfyUI in API format before generation.`);
-      }
     } catch {
       // The provider exposes a normalized visible error.
     }
@@ -330,7 +311,7 @@ export function GenerationView({
 
   const sourceRequirement = missingMediaParameters[0]?.mediaKind;
   const primaryLabel = !workflow
-    ? "Add workflow JSON"
+    ? "Choose a model"
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
       : settingsChanged
@@ -352,6 +333,13 @@ export function GenerationView({
           {intent !== "train" ? <em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em> : null}
         </div>
 
+        {intent !== "train" ? <div className="quick-model-picker">
+          <div className="quick-model-head"><span>Model</span><button className="link-btn" onClick={onWorkflows}>Manage models</button></div>
+          {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
+            {intentWorkflows.map((item) => <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}</small></span></button>)}
+          </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
+        </div> : null}
+
         <div className="quick-source-row">
           <label className={`quick-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
             <input ref={mediaInputRef} type="file" accept={ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
@@ -366,16 +354,15 @@ export function GenerationView({
           <button className="btn btn-primary quick-primary" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [])}><Icon name="dna" size={17} /> {trainingSource ? "Continue to training" : "Open training"}</button>
         </> : <>
           <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
-          <div className="quick-workflow-line"><span><Icon name="flows" size={14} /> {workflow?.name ?? `No ${intent === "music" ? "music" : intent} workflow`}</span>{quickSource ? <small>{sourceConnected ? "Source connected" : "Source not used by this workflow"}</small> : workflow?.currentRevision.parameters.some((parameter) => parameter.kind === "media") ? <small>Source required</small> : <small>No source required</small>}</div>
-          <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !directionReady || (Boolean(workflow) && !workflowReady)} onClick={() => workflow ? void queueWorkflow() : workflowInputRef.current?.click()}><Icon name={workflow ? "send" : "plus"} size={17} /> {primaryLabel}</button>
+          <button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>
 
       {intent !== "train" ? <details className="quick-create-advanced glass">
-        <summary><span><Icon name="settings" size={15} /><strong>Advanced</strong></span><small>DNA, workflow, exact settings, and remote route</small></summary>
+        <summary><span><Icon name="settings" size={15} /><strong>Advanced</strong></span><small>DNA, exact settings, and remote route</small></summary>
         <div className="quick-advanced-body">
-          <section className="quick-advanced-section">
+          <section className="quick-advanced-section quick-advanced-wide">
             <header><strong>CreativeDNA</strong><button className="link-btn" onClick={onDesign}>Edit DNA</button></header>
             {availableDna.length ? <select aria-label="CreativeDNA direction" value={selected?.artifactId ?? ""} disabled={busy} onChange={(event) => {
               const dna = availableDna.find((artifact) => artifact.artifactId === event.target.value) ?? null;
@@ -383,12 +370,6 @@ export function GenerationView({
               if (dna) setDirection(dna.source.directive || creativeDnaGenerationPrompt(dna, dna.targetModality));
             }}>{availableDna.map((artifact) => <option key={artifact.artifactId} value={artifact.artifactId}>{artifact.name} · v{artifact.version}</option>)}</select> : <button className="btn btn-ghost" onClick={onDesign}>Build detailed CreativeDNA</button>}
             <label className="create-consent"><input type="checkbox" checked={trainingEligible} disabled={busy || uiOnlyDevelopment} onChange={(event) => setTrainingEligible(event.target.checked)} /> New uploads can be used for training</label>
-          </section>
-
-          <section className="quick-advanced-section">
-            <header><strong>ComfyUI workflow</strong><button className="link-btn" onClick={onWorkflows}>Manage</button></header>
-            {workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent).length ? <select aria-label="Generation workflow" value={workflow?.id ?? ""} disabled={busy} onChange={(event) => chooseWorkflow(event.target.value)}>{workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent).map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.currentRevision.version}</option>)}</select> : <span className="create-step-empty">No API-ready workflow for this output</span>}
-            <label className={`create-file-button${uiOnlyDevelopment ? " disabled" : ""}`}><input ref={workflowInputRef} type="file" accept="application/json,.json" disabled={busy || uiOnlyDevelopment} onChange={(event) => void importAndUseWorkflow(event.target.files?.[0] ?? null)} /><Icon name="plus" size={14} /> Import workflow JSON</label>
           </section>
 
           {mediaParameters.length > 1 || missingMediaParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Workflow inputs</strong><small>{missingMediaParameters.length ? `${missingMediaParameters.length} required` : "Connected"}</small></header><div className="quick-binding-grid">{mediaParameters.map((parameter) => {

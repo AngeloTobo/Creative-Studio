@@ -3,7 +3,7 @@ export type StudioView = "portal" | "cockpit" | "dna" | "media" | "library" | "g
 export const VIEW_TITLES: Record<StudioView, [string, string]> = {
   portal: ["Welcome back, Angelo.", "This is your Creative Studio. What shall we make today?"],
   cockpit: ["Production Cockpit", "Cross-project decisions, runs, recovery, runners, and retained storage."],
-  dna: ["Create", "Upload or choose a source, then make an image, video, song, or CreativeDNA."],
+  dna: ["Create", "Choose a model, add a source if needed, then generate."],
   media: ["Media", "Upload, retain, and inspect real project source assets."],
   library: ["Library", "CreativeDNA versions, decisions, and retained memory."],
   gallery: ["Artifact History", "Review outputs, lineage, and explicit decisions."],

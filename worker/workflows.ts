@@ -158,9 +158,6 @@ export async function createWorkflowRevision(env: Env, ownerId: string, workflow
   const workflow = await env.DB.prepare(`select ${WORKFLOW_COLUMNS} from creative_workflows where id = ? and owner_id = ?`)
     .bind(workflowId, ownerId).first<WorkflowRow>();
   if (!workflow) throw new Error("workflow_not_found");
-  const project = await projectById(env, ownerId, workflow.projectId);
-  if (!project) throw new Error("project_not_found");
-  if (project.status === "archived") throw new Error("project_archived");
   const base = await ownedRevision(env, ownerId, workflowId, boundedText(input.baseRevisionId, 100));
   if (!base) throw new Error("workflow_revision_not_found");
   let graph: unknown;
