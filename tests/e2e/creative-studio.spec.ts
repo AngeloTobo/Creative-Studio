@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("image creation is fast by default and makes a slow custom run explicit", async ({ page }) => {
+test("creation keeps image speed safe and never reuses an imported video prompt", async ({ page }) => {
   const createdAt = "2026-08-23T14:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
@@ -17,6 +17,15 @@ test("image creation is fast by default and makes a slow custom run explicit", a
             { id: "2::text", label: "Prompt", kind: "text", value: "A quiet portrait", mediaKind: null, binding: { format: "comfyui-api", nodeId: "2", inputName: "text" } },
           ],
         },
+      }, {
+        id: "workflow_minimax", projectId: "project_fast", name: "MiniMax Video H3", description: "", sourceFileName: "minimax-h3.json", modality: "video", executionState: "ready", createdAt: time, updatedAt: time,
+        currentRevision: {
+          id: "workflowrev_minimax", workflowId: "workflow_minimax", version: 4, parentRevisionId: "workflowrev_minimax_3", format: "comfyui-api", contentHash: "def456", nodeCount: 3, models: ["minimax_h3.safetensors"], createdAt: time,
+          parameters: [
+            { id: "114::image", label: "Load Image", kind: "media", value: "source.png", mediaKind: "image", binding: { format: "comfyui-api", nodeId: "114", inputName: "image" } },
+            { id: "105:104::prompt", label: "MiniMax H3 Image to Video: Prompt", kind: "text", value: "Imported cybernetic prompt that must not be reused", mediaKind: null, binding: { format: "comfyui-api", nodeId: "105:104", inputName: "prompt" } },
+          ],
+        },
       }],
     }));
   }, { createdAt });
@@ -29,7 +38,14 @@ test("image creation is fast by default and makes a slow custom run explicit", a
   await expect(page.getByRole("spinbutton", { name: "Height" })).toHaveValue("512");
   await speed.getByRole("button", { name: /Custom · can be slow/ }).click();
   await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("1024");
-  await expect(page.getByRole("button", { name: /Generate image · can be slow/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  const videoDirection = page.getByRole("textbox", { name: "Describe the video" });
+  const exactVideoPrompt = page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax H3 Image to Video: Prompt" });
+  await expect(videoDirection).toHaveValue("");
+  await expect(exactVideoPrompt).toHaveValue("");
+  await videoDirection.fill("The subject turns toward the sunrise while the camera slowly pulls back.");
+  await expect(exactVideoPrompt).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
 });
 
 test("CreativeDNA survives the full review loop", async ({ page }) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowDefinition, WorkflowParameter } from "../../shared/contracts";
-import { preferredQuickWorkflow, quickInputBindings, workflowCreateIntent } from "../../src/features/generation/quickCreate";
+import { preferredQuickWorkflow, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
 
 function workflow(id: string, modality: WorkflowDefinition["modality"], mediaKind: WorkflowParameter["mediaKind"] = null): WorkflowDefinition {
   return {
@@ -36,5 +36,14 @@ describe("quick Create routing", () => {
     expect(quickInputBindings(parameters, {}, { id: "media_1", kind: "image" })).toEqual({ "image-video_media": "media_1" });
     expect(quickInputBindings(parameters, { "image-video_media": "media_2" }, { id: "media_1", kind: "image" })).toEqual({ "image-video_media": "media_2" });
     expect(quickInputBindings(parameters, {}, { id: "media_1", kind: "audio" })).toEqual({});
+  });
+
+  it("always gives the current direction priority over a cached or imported workflow prompt", () => {
+    const prompt: WorkflowParameter = {
+      id: "105:104::prompt", label: "MiniMax H3: Prompt", kind: "text", value: "Imported cybernetic prompt", mediaKind: null,
+      binding: { format: "comfyui-api", nodeId: "105:104", inputName: "prompt" },
+    };
+    expect(quickParameterValue(prompt, prompt.id, "New motion for this source", { [prompt.id]: "Previously saved prompt" })).toBe("New motion for this source");
+    expect(quickParameterValue(prompt, prompt.id, "", { [prompt.id]: "Previously saved prompt" })).toBe("");
   });
 });

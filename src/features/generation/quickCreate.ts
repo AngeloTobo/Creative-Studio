@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowParameter } from "../../../shared/contracts";
+import type { WorkflowDefinition, WorkflowParameter, WorkflowScalar } from "../../../shared/contracts";
 
 export type CreateIntent = "image" | "video" | "music" | "train";
 export type QuickSourceKind = "image" | "audio" | "video";
@@ -37,4 +37,15 @@ export function quickInputBindings(
     && (!item.mediaKind || item.mediaKind === source.kind));
   if (parameter) bindings[parameter.id] = source.id;
   return bindings;
+}
+
+export function quickParameterValue(
+  parameter: WorkflowParameter,
+  promptParameterId: string | null,
+  direction: string,
+  effectiveValues: Record<string, WorkflowScalar>,
+) {
+  if (parameter.id === promptParameterId) return direction.trim();
+  if (Object.prototype.hasOwnProperty.call(effectiveValues, parameter.id)) return effectiveValues[parameter.id];
+  return parameter.value;
 }

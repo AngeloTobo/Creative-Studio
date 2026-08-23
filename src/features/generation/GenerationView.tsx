@@ -26,6 +26,7 @@ import { sameWorkflowValue } from "../workflows/workflowValues";
 import {
   preferredQuickWorkflow,
   quickInputBindings,
+  quickParameterValue,
   workflowCreateIntent,
   type CreateIntent,
   type QuickSourceKind,
@@ -121,7 +122,7 @@ export function GenerationView({
   const directionInitialized = useRef(Boolean(initialVideoSource));
   const directionProjectId = useRef<string | null>(activeProjectId);
   const [intent, setIntent] = useState<CreateIntent>(initialVideoSource ? "video" : "image");
-  const [direction, setDirection] = useState(initialVideoSource?.prompt ?? "");
+  const [direction, setDirection] = useState("");
   const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? "");
   const [workflowId, setWorkflowId] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
@@ -181,11 +182,12 @@ export function GenerationView({
     : null;
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
   const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
-  const rawParameterValue = (parameter: WorkflowParameter) => {
-    if (Object.prototype.hasOwnProperty.call(effectiveValues, parameter.id)) return effectiveValues[parameter.id];
-    if (parameter.id === workflowPromptParameter?.id && direction.trim()) return direction.trim();
-    return parameter.value;
-  };
+  const rawParameterValue = (parameter: WorkflowParameter) => quickParameterValue(
+    parameter,
+    workflowPromptParameter?.id ?? null,
+    direction,
+    effectiveValues,
+  );
   const fastImageOverrides = generationIntent === "image" && imagePerformanceMode === "fast-default"
     ? fastImageParameterOverrides(scalarParameters.map((parameter) => ({ ...parameter, value: rawParameterValue(parameter) })))
     : {};
@@ -236,6 +238,7 @@ export function GenerationView({
   };
 
   const chooseIntent = (nextIntent: CreateIntent) => {
+    if (nextIntent !== intent) setDirection("");
     setIntent(nextIntent);
     setVideoOperation(null);
     resetWorkflowOverrides();
@@ -461,6 +464,10 @@ export function GenerationView({
 
           {scalarParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Exact settings</strong><small>{settingsChanged ? `Will save workflow v${(workflow?.currentRevision.version ?? 0) + 1}` : `Workflow v${workflow?.currentRevision.version}`}</small></header><div className="workflow-run-parameters">{scalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} onChange={(value) => {
             if (!workflow) return;
+            if (parameter.id === workflowPromptParameter?.id) {
+              setDirection(String(value));
+              return;
+            }
             const displayedValues = Object.fromEntries(scalarParameters.map((item) => [item.id, parameterValue(item)]));
             setImagePerformanceMode("explicit-custom");
             setValuesRevisionId(workflow.currentRevision.id);
