@@ -50,7 +50,7 @@ function ReferenceAssetPreview({ asset }: { asset: MediaAsset }) {
   return <Icon name={asset.kind === "audio" ? "music" : "video"} size={20} />;
 }
 
-export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflows, initialReviewJobId, initialVideoExtensionArtifactId, initialEvolutionSourceId, initialSourceId, initialCreateIntent, initialTrainingAssetIds = [], onCockpitTargetHandled }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void; onWorkflows: () => void; initialReviewJobId?: string; initialVideoExtensionArtifactId?: string; initialEvolutionSourceId?: string; initialSourceId?: string; initialCreateIntent?: CreateIntent; initialTrainingAssetIds?: string[]; onCockpitTargetHandled?: () => void }) {
+export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflows, initialReviewJobId, initialVideoExtensionArtifactId, initialEvolutionSourceId, initialSourceId, initialCreateIntent, initialAutoStart = false, initialTrainingAssetIds = [], onCockpitTargetHandled }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void; onWorkflows: () => void; initialReviewJobId?: string; initialVideoExtensionArtifactId?: string; initialEvolutionSourceId?: string; initialSourceId?: string; initialCreateIntent?: CreateIntent; initialAutoStart?: boolean; initialTrainingAssetIds?: string[]; onCockpitTargetHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, selectDna, saveDna, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
@@ -246,7 +246,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
       </div></> : null}
 
       {workspace === "train" ? <><button className="workspace-return" onClick={() => setWorkspace("create")}><Icon name="chevron" size={15} /> Back to Create</button><DnaTrainingPanel onMedia={onMedia} initialAssetIds={trainingSeedAssetIds} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /></> : null}
-      {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} onTrain={(assetIds = []) => { setTrainingSeedAssetIds(assetIds); setWorkspace("train"); }} initialVideoExtensionArtifactId={initialVideoExtensionArtifactId} initialEvolutionSourceId={initialEvolutionSourceId} initialSourceId={initialSourceId} initialCreateIntent={initialCreateIntent} embedded /> : null}
+      {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} onTrain={(assetIds = []) => { setTrainingSeedAssetIds(assetIds); setWorkspace("train"); }} initialVideoExtensionArtifactId={initialVideoExtensionArtifactId} initialEvolutionSourceId={initialEvolutionSourceId} initialSourceId={initialSourceId} initialCreateIntent={initialCreateIntent} initialAutoStart={initialAutoStart} embedded /> : null}
     </section>
   );
 }

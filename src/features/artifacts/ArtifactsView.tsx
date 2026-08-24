@@ -125,7 +125,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, onExtendVideo, onEvolve, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; focused: boolean }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [expanded, setExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -146,6 +146,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
         <button className="lineage-toggle" onClick={() => setExpanded((value) => !value)}><Icon name="history" size={15} /> {expanded ? "Hide lineage" : "Show lineage"}</button>
         {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span>{artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}{artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}{artifact.settingsStamp.promptEnhancement ? <><span>Song prompt <b>{artifact.settingsStamp.promptEnhancement.targetModel ?? artifact.settingsStamp.workflow?.name ?? "selected model"}</b> · Gemma 4 · {artifact.settingsStamp.promptEnhancement.sourceWordCount} → {artifact.settingsStamp.promptEnhancement.enhancedWordCount} words</span><details className="lineage-prompt" open><summary>Exact caption sent to the music model</summary><pre>{artifact.settingsStamp.promptEnhancement.enhancedPrompt}</pre></details><details className="lineage-prompt"><summary>Authored brief before Gemma formatting · lineage only</summary><p>{artifact.settingsStamp.promptEnhancement.sourcePrompt}</p></details></> : null}<span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}
         <div className="artifact-actions">
+          {artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={busy || artifact.status === "retaining"} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Animate</button> : null}
           <button className="btn artifact-evolve" disabled={busy || artifact.status === "retaining"} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>
           <button className="btn btn-ghost artifact-reuse" disabled={busy || artifact.status === "retaining"} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>
           <button className="btn artifact-accept" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>
@@ -181,7 +182,7 @@ function LearnedNotice({ signals, onClose }: { signals: CreativeTasteSignal[]; o
   return <div className="creative-learned" role="status"><Icon name="dna" size={18} /><span><strong>Creative Studio learned from that decision</strong>{signals.map((signal) => <small key={signal.id}><b>{signal.kind}</b> · {signal.text}</small>)}</span><button className="icon-button" aria-label="Close learned feedback" onClick={onClose}><Icon name="close" size={15} /></button></div>;
 }
 
-export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; focusArtifactId?: string }) {
+export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focusArtifactId?: string }) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
@@ -207,8 +208,8 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid" role="feed" aria-label="Artifact history, newest first">
         {history.map((entry) => entry.kind === "study"
-          ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} cardProps={{ onQueued, onInspect: setInspected, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve }} />
-          : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} focused={focusArtifactId === entry.artifact.id} />)}
+          ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} cardProps={{ onQueued, onInspect: setInspected, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate }} />
+          : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} focused={focusArtifactId === entry.artifact.id} />)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}

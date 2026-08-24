@@ -18,7 +18,7 @@ function MediaPreview({ asset }: { asset: MediaAsset }) {
   return <video src={asset.contentUrl} controls preload="metadata" aria-label={asset.name} />;
 }
 
-export function MediaView({ onGenerate, onEvolve }: { onGenerate: () => void; onEvolve: (sourceId: string) => void }) {
+export function MediaView({ onGenerate, onEvolve, onAnimate }: { onGenerate: () => void; onEvolve: (sourceId: string) => void; onAnimate: (sourceId: string) => void }) {
   const { snapshot, activeProjectId, uploadMedia, busy, error } = useStudio();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -81,7 +81,10 @@ export function MediaView({ onGenerate, onEvolve }: { onGenerate: () => void; on
           <p>{asset.originalFileName}</p>
           <div className="media-card-meta"><span>{asset.mimeType}</span><span>{formatBytes(asset.size)}</span></div>
           <div className="media-provenance"><Icon name="shield" size={15} /><span><strong>Owner upload · provenance recorded</strong><small>{asset.trainingEligible ? "Training eligible by consent" : "Excluded from training"} · {new Date(asset.createdAt).toLocaleString()}</small></span></div>
-          <button className="btn artifact-evolve media-evolve" onClick={() => onEvolve(asset.id)}><Icon name="star" size={15} /> Evolve this upload</button>
+          <div className="media-card-actions">
+            {asset.kind === "image" ? <button className="btn btn-primary media-animate" onClick={() => onAnimate(asset.id)}><Icon name="video" size={15} /> Animate</button> : null}
+            <button className="btn artifact-evolve media-evolve" onClick={() => onEvolve(asset.id)}><Icon name="star" size={15} /> Evolve</button>
+          </div>
         </div>
       </article>)}</div> : <div className="empty-state glass"><Icon name="image" size={32} /><strong>No media uploaded yet.</strong><p>Upload the first real asset for this project. Nothing is seeded or simulated here.</p></div>}
     </section>

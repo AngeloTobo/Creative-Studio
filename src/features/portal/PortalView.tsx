@@ -99,7 +99,7 @@ export function PortalView({
   onTrain,
 }: {
   navigate: (view: StudioView) => void;
-  onCreate: (intent: Exclude<CreateIntent, "train">, sourceId?: string) => void;
+  onCreate: (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart?: boolean) => void;
   onTrain: (sourceId: string) => void;
 }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, busy, error } = useStudio();
@@ -179,7 +179,7 @@ export function PortalView({
       <div className="home-action-pane">
         <header className="home-pane-head"><span><small>3 · MAKE</small><strong>Create from here</strong></span></header>
         <div className="home-action-grid">
-          {CREATE_ACTIONS.map((action) => <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, selectedSource?.id)}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{selectedSource ? action.detail : "Start without a source"}</small><Icon name="arrow" size={15} /></button>)}
+          {CREATE_ACTIONS.map((action) => <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, selectedSource?.id, action.intent === "video" && Boolean(selectedSource))}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{selectedSource ? action.intent === "video" ? "Make 2 videos now" : action.detail : "Start without a source"}</small><Icon name="arrow" size={15} /></button>)}
           <button className="home-action train" disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><span><Icon name="dna" size={20} /></span><strong>Train DNA</strong><small>{selectedSource ? analysisMatch ? "Build another version" : "Analyze this work" : "Select an upload first"}</small><Icon name="arrow" size={15} /></button>
         </div>
         <button className="home-all-tools" onClick={() => navigate("dna")}>Open full Create controls <Icon name="chevron" size={14} /></button>

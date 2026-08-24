@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { musicWorkflowLyricsParameter, type WorkflowDefinition, type WorkflowParameter } from "../../shared/contracts";
-import { preferredQuickWorkflow, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
+import { preferredQuickWorkflow, quickAnimationDirection, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
 
 function workflow(id: string, modality: WorkflowDefinition["modality"], mediaKind: WorkflowParameter["mediaKind"] = null): WorkflowDefinition {
   return {
@@ -29,6 +29,26 @@ describe("quick Create routing", () => {
     expect(preferredQuickWorkflow([textImage, imageToImage, video], "image", "image")?.id).toBe("image-image");
     expect(preferredQuickWorkflow([imageToImage, textImage, video], "image", null)?.id).toBe("text-image");
     expect(preferredQuickWorkflow([textImage, imageToImage, video], "video", "image")?.id).toBe("image-video");
+  });
+
+  it("prefers the faster proven compatible animation workflow", () => {
+    const slower = workflow("slower-image-video", "video", "image");
+    const faster = workflow("faster-image-video", "video", "image");
+    expect(preferredQuickWorkflow(
+      [slower, faster],
+      "video",
+      "image",
+      { "slower-image-video": 240_000, "faster-image-video": 90_000 },
+    )?.id).toBe("faster-image-video");
+  });
+
+  it("uses retained source evidence for a truthful animation brief without an imported demo prompt", () => {
+    const prompt = quickAnimationDirection("A hand-built ceramic figure stands under a warm side light.");
+    expect(prompt).toContain("A hand-built ceramic figure stands under a warm side light.");
+    expect(prompt).toContain("exact first frame");
+    expect(prompt).toContain("No text, captions, logos, black frames");
+    expect(prompt).not.toContain("cybernetic");
+    expect(quickAnimationDirection(null)).toContain("Preserve every visible subject");
   });
 
   it("automatically binds one compatible retained source without overwriting explicit inputs", () => {

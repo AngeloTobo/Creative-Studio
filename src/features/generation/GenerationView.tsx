@@ -34,6 +34,7 @@ import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
 import {
   preferredQuickWorkflow,
+  quickAnimationDirection,
   quickInputBindings,
   quickParameterValue,
   workflowCreateIntent,
@@ -104,6 +105,7 @@ export function GenerationView({
   initialEvolutionSourceId,
   initialSourceId,
   initialCreateIntent,
+  initialAutoStart = false,
   embedded = false,
 }: {
   onQueued: () => void;
@@ -115,6 +117,7 @@ export function GenerationView({
   initialEvolutionSourceId?: string;
   initialSourceId?: string;
   initialCreateIntent?: CreateIntent;
+  initialAutoStart?: boolean;
   embedded?: boolean;
 }) {
   const {
@@ -154,13 +157,28 @@ export function GenerationView({
   const initialDirectArtifact = initialSourceId ? allProjectArtifacts.find((artifact) => artifact.id === initialSourceId) ?? null : null;
   const initialDirectAsset = initialSourceId ? projectMedia.find((asset) => asset.id === initialSourceId) ?? null : null;
   const initialDirectSource = initialDirectArtifact ? sourceFromArtifact(initialDirectArtifact) : initialDirectAsset ? sourceFromAsset(initialDirectAsset) : null;
+  const initialDirectAnalysis = initialDirectAsset
+    ? [...projectDna]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .flatMap((artifact) => artifact.training?.analysis.sources ?? [])
+      .find((source) => source.kind === "image" && (source.mediaId === initialDirectAsset.id || source.sourceId === initialDirectAsset.id) && source.detailedDescription)
+    : null;
+  const initialDirectDescription = initialDirectAnalysis?.detailedDescription
+    ? creativeDnaDescriptionSummaries(initialDirectAnalysis.detailedDescription).shortSummary
+    : null;
   const initialIntent: CreateIntent = initialCreateIntent ?? (initialVideoSource || initialEvolutionSource?.kind === "video"
     ? "video"
     : initialEvolutionSource?.kind === "audio" ? "music" : "image");
+  const autoAnimate = Boolean(initialAutoStart && initialIntent === "video" && initialDirectSource?.kind === "image");
+  const initialDirection = autoAnimate
+    ? quickAnimationDirection(initialDirectArtifact?.prompt ?? initialDirectDescription)
+    : initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "";
+  const autoStartRequested = useRef(autoAnimate);
+  const queueWorkflowRef = useRef<(openQueueAfter?: boolean) => Promise<void>>(async () => undefined);
   const directionInitialized = useRef(Boolean(initialVideoSource || initialEvolutionSource || initialDirectSource));
   const directionProjectId = useRef<string | null>(activeProjectId);
   const [intent, setIntent] = useState<CreateIntent>(initialIntent);
-  const [direction, setDirection] = useState(initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "");
+  const [direction, setDirection] = useState(initialDirection);
   const [lyrics, setLyrics] = useState("");
   const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? initialDirectSource?.id ?? "");
   const [evolutionEnabled, setEvolutionEnabled] = useState(Boolean(initialEvolutionSource));
@@ -172,7 +190,7 @@ export function GenerationView({
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
-  const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected as the source.` : "");
+  const [notice, setNotice] = useState(autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected as the source.` : "");
   const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
     kind: "extend",
     sourceId: initialVideoSource.id,
@@ -236,7 +254,17 @@ export function GenerationView({
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
-  const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null);
+  const runtimeMsByWorkflowId = Object.fromEntries(intentWorkflows.map((item) => {
+    const durations = (snapshot?.jobs ?? [])
+      .filter((job) => job.status === "completed" && job.settingsStamp.workflow?.workflowId === item.id && job.startedAt && job.completedAt)
+      .map((job) => new Date(job.completedAt!).getTime() - new Date(job.startedAt!).getTime())
+      .filter((duration) => Number.isFinite(duration) && duration >= 0)
+      .sort((left, right) => left - right);
+    const middle = Math.floor(durations.length / 2);
+    const median = !durations.length ? null : durations.length % 2 ? durations[middle] : (durations[middle - 1] + durations[middle]) / 2;
+    return [item.id, median];
+  }));
+  const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null, runtimeMsByWorkflowId);
   const workflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? preferredWorkflow;
   const musicPromptProfile = generationIntent === "music" && workflow ? musicWorkflowPromptProfile(workflow) : null;
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
@@ -381,7 +409,7 @@ export function GenerationView({
     });
   };
 
-  const queueWorkflow = async () => {
+  const queueWorkflow = async (openQueueAfter = false) => {
     if (!workflow || !workflowReady) return;
     setLocalError("");
     if (videoOperation && !effectiveVideoOperation) {
@@ -461,6 +489,7 @@ export function GenerationView({
         setValuesRevisionId(branchWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(branchWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
         setNotice("Refine, Correct, and Discovery queued as one durable evolution study. Review the three retained branches together in Artifacts.");
+        if (openQueueAfter) onQueued();
         return;
       }
       if (videoVersions && workflowPromptParameter) {
@@ -493,6 +522,7 @@ export function GenerationView({
           discovery.variant,
         );
         setNotice("Aligned and Discovery queued as 2 durable video jobs. They will render one after the other on the Local Runner.");
+        if (openQueueAfter) onQueued();
         return;
       }
       setValuesRevisionId(runWorkflow.currentRevision.id);
@@ -506,10 +536,43 @@ export function GenerationView({
         generationIntent === "image" ? imagePerformanceMode : undefined,
       );
       setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
+      if (openQueueAfter) onQueued();
     } catch {
       // The provider exposes a normalized visible error.
     }
   };
+  useEffect(() => {
+    queueWorkflowRef.current = queueWorkflow;
+  });
+
+  useEffect(() => {
+    if (!autoStartRequested.current || busy || !snapshot) return;
+    const stopAutoStart = (message: string) => {
+      autoStartRequested.current = false;
+      void Promise.resolve().then(() => {
+        setNotice("");
+        setLocalError(message);
+      });
+    };
+    if (uiOnlyDevelopment) {
+      stopAutoStart("One-click Animate needs the real Creative Studio backend. The labeled development adapter cannot submit simulated video as a real result.");
+      return;
+    }
+    if (!workflow) {
+      stopAutoStart("No image-to-video model is ready. Connect a one-image video workflow in Models, then tap Animate again.");
+      return;
+    }
+    if (!workflowReady) {
+      stopAutoStart("The available video model needs more than one source. Connect a one-image image-to-video workflow for one-click Animate.");
+      return;
+    }
+    if (!directionReady || !workflowPromptParameter) {
+      stopAutoStart("The selected video model must expose a prompt input before one-click Animate can create two distinct versions.");
+      return;
+    }
+    autoStartRequested.current = false;
+    void queueWorkflowRef.current(true);
+  }, [busy, directionReady, snapshot, uiOnlyDevelopment, workflow, workflowPromptParameter, workflowReady]);
 
   const submitRemote = async () => {
     if (generationIntent === "video") return;

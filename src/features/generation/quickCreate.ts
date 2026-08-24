@@ -11,7 +11,8 @@ export function workflowCreateIntent(value: string): Exclude<CreateIntent, "trai
 function workflowScore(workflow: WorkflowDefinition, sourceKind: QuickSourceKind | null) {
   const media = workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "media");
   if (!sourceKind) return media.length ? 0 : 4;
-  if (media.some((parameter) => !parameter.mediaKind || parameter.mediaKind === sourceKind)) return 8;
+  const compatible = media.filter((parameter) => !parameter.mediaKind || parameter.mediaKind === sourceKind);
+  if (compatible.length) return 12 - Math.max(0, media.length - 1) * 4;
   return media.length ? -4 : 2;
 }
 
@@ -19,11 +20,23 @@ export function preferredQuickWorkflow(
   workflows: WorkflowDefinition[],
   intent: Exclude<CreateIntent, "train">,
   sourceKind: QuickSourceKind | null,
+  runtimeMsByWorkflowId: Record<string, number | null> = {},
 ) {
   return workflows
     .filter((workflow) => workflowCreateIntent(workflow.modality) === intent)
-    .map((workflow, index) => ({ workflow, index, score: workflowScore(workflow, sourceKind) }))
-    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.workflow ?? null;
+    .map((workflow, index) => ({ workflow, index, score: workflowScore(workflow, sourceKind), runtime: runtimeMsByWorkflowId[workflow.id] ?? null }))
+    .sort((a, b) => {
+      const runtimeOrder = a.runtime === null && b.runtime === null ? 0
+        : a.runtime === null ? 1
+          : b.runtime === null ? -1 : a.runtime - b.runtime;
+      return b.score - a.score || runtimeOrder || a.index - b.index;
+    })[0]?.workflow ?? null;
+}
+
+export function quickAnimationDirection(sourceEvidence: string | null | undefined) {
+  const evidence = String(sourceEvidence ?? "").replace(/\s+/g, " ").trim().slice(0, 760);
+  const source = evidence ? `${evidence} ` : "";
+  return `${source}Use the provided image as the exact first frame. Preserve every visible subject, identity, composition, material, color, and light relationship. Add coherent natural motion, subtle environmental movement, and one controlled camera move while maintaining temporal continuity. No text, captions, logos, black frames, scene replacement, or abrupt cuts.`.slice(0, 1_200);
 }
 
 export function quickInputBindings(

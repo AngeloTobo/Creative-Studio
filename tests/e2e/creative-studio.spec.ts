@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("Home turns an analyzed upload into a visual CreativeDNA launchpad", async ({ page }) => {
+test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-tap animation brief", async ({ page }) => {
   const createdAt = "2026-08-23T23:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     const dimensions = { energy: 76, tension: 64, contrast: 88, warmth: 32, spaciousness: 71, rhythmicity: 58, organicity: 42, polish: 81 };
@@ -33,6 +33,9 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad", async 
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Retained source")).toHaveValue("media_home");
+  await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
+  await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
+  await expect(page.getByRole("alert")).toContainText("development adapter cannot submit simulated video");
 
   await page.goto("/#/portal");
   await page.getByRole("button", { name: /Train DNA/ }).click();
