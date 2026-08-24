@@ -1,5 +1,44 @@
 import { expect, test } from "@playwright/test";
 
+test("Home turns an analyzed upload into a visual CreativeDNA launchpad", async ({ page }) => {
+  const createdAt = "2026-08-23T23:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    const dimensions = { energy: 76, tension: 64, contrast: 88, warmth: 32, spaciousness: 71, rhythmicity: 58, organicity: 42, polish: 81 };
+    const analysis = {
+      schemaVersion: "creative-dna-training-analysis/1.1", createdAt: time, summary: "Measured the retained source.",
+      sources: [{
+        sourceId: "media_home", mediaId: "media_home", sourceType: "upload", kind: "image", label: "Rebecca embryo", observations: [], metrics: {}, dimensions, confidence: .93,
+        detailedDescription: { schemaVersion: "creative-dna-media-description/1.1", longSummary: "A long source-grounded description of Rebecca's embryo artwork.", shortSummary: "A luminous embryo-like form floats in a dark violet field, with branching vessels and a cool internal glow.", provider: "local-comfyui", workflowId: "gemma4-multimodal-description", workflowVersion: 1, model: "gemma4_e4b_it_fp8_scaled.safetensors", prompt: "Describe the image.", comfyPromptId: "prompt_home_dna", settings: {} },
+      }],
+      dimensions: Object.fromEntries(Object.entries(dimensions).map(([key, value]) => [key, { value, confidence: .93, sourceIds: ["media_home"] }])),
+    };
+    const dna = { schemaVersion: "creative-dna/1.0", artifactId: "dna_home", projectId: "project_home", version: 1, rootArtifactId: "dna_home", name: "Embryo light", createdAt: time, targetModality: "image", capability: "IMAGE_GENERATE", source: { kind: "owner_uploads", directive: "Luminous embryonic forms in deep violet space.", referenceLabel: null, referenceAssetIds: ["media_home"] }, shared: dimensions, native: {}, influence: { angeloCore: 75, currentProject: 15, reference: 50 }, evidence: [], rights: { policy: "original-input", referenceStoredAsProvenanceOnly: false, allowedDownstream: [], blockedDownstream: [] }, translations: [], generationPrompts: { image: "Luminous embryonic forms in deep violet space.", music: "Translate the luminous tension into sound." }, lineage: { rootArtifactId: "dna_home", parentArtifactId: null }, training: { jobId: "training_home", runnerId: "runner_home", assetIds: ["media_home"], trainingExampleIds: [], analysis } };
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "project_home", activeDnaArtifactId: "dna_home", name: "Rebecca", type: "Visual study", status: "active", description: "", note: "", hue: "#d946ef", initials: "RE", createdAt: time, updatedAt: time }],
+      dnaArtifacts: [dna],
+      mediaAssets: [{ id: "media_home", projectId: "project_home", kind: "image", name: "Rebecca embryo", originalFileName: "rebecca-embryo.png", mimeType: "image/png", size: 68, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: time, parentAssetIds: [] }, createdAt: time, updatedAt: time }],
+      jobs: [], artifacts: [], workflows: [], acceptances: [], trainingExamples: [], trainingJobs: [], idempotencyKeys: {},
+      trainingReviews: [{ id: "review_home", projectId: "project_home", trainingJobId: "training_home", dnaArtifactId: "dna_home", decision: "approved", note: "Approved.", actor: "development-user", activeDnaArtifactId: "dna_home", createdAt: time }],
+    }));
+  }, { createdAt });
+
+  await page.goto("/#/portal");
+  await expect(page.getByRole("region", { name: "CreativeDNA canvas" })).toBeVisible();
+  await expect(page.getByRole("img", { name: /Measured upload DNA: Energy 76, Tension 64, Contrast 88/ })).toBeVisible();
+  await expect(page.getByText("93% confidence")).toBeVisible();
+  await expect(page.getByText(/A luminous embryo-like form floats in a dark violet field/)).toBeVisible();
+  await expect(page.locator(".orb-stage")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /Animate/ }).click();
+  await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Retained source")).toHaveValue("media_home");
+
+  await page.goto("/#/portal");
+  await page.getByRole("button", { name: /Train DNA/ }).click();
+  await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
+});
+
 test("creation keeps image speed safe and never reuses an imported video prompt", async ({ page }) => {
   const createdAt = "2026-08-23T14:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {

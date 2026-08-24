@@ -100,6 +100,8 @@ export function GenerationView({
   onTrain,
   initialVideoExtensionArtifactId,
   initialEvolutionSourceId,
+  initialSourceId,
+  initialCreateIntent,
   embedded = false,
 }: {
   onQueued: () => void;
@@ -109,6 +111,8 @@ export function GenerationView({
   onTrain: (assetIds?: string[]) => void;
   initialVideoExtensionArtifactId?: string;
   initialEvolutionSourceId?: string;
+  initialSourceId?: string;
+  initialCreateIntent?: CreateIntent;
   embedded?: boolean;
 }) {
   const {
@@ -145,15 +149,18 @@ export function GenerationView({
   const initialEvolutionSource = initialEvolutionArtifact
     ? sourceFromArtifact(initialEvolutionArtifact)
     : initialEvolutionAsset ? sourceFromAsset(initialEvolutionAsset) : null;
-  const initialIntent: CreateIntent = initialVideoSource || initialEvolutionSource?.kind === "video"
+  const initialDirectArtifact = initialSourceId ? allProjectArtifacts.find((artifact) => artifact.id === initialSourceId) ?? null : null;
+  const initialDirectAsset = initialSourceId ? projectMedia.find((asset) => asset.id === initialSourceId) ?? null : null;
+  const initialDirectSource = initialDirectArtifact ? sourceFromArtifact(initialDirectArtifact) : initialDirectAsset ? sourceFromAsset(initialDirectAsset) : null;
+  const initialIntent: CreateIntent = initialCreateIntent ?? (initialVideoSource || initialEvolutionSource?.kind === "video"
     ? "video"
-    : initialEvolutionSource?.kind === "audio" ? "music" : "image";
-  const directionInitialized = useRef(Boolean(initialVideoSource || initialEvolutionSource));
+    : initialEvolutionSource?.kind === "audio" ? "music" : "image");
+  const directionInitialized = useRef(Boolean(initialVideoSource || initialEvolutionSource || initialDirectSource));
   const directionProjectId = useRef<string | null>(activeProjectId);
   const [intent, setIntent] = useState<CreateIntent>(initialIntent);
   const [direction, setDirection] = useState(initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "");
   const [lyrics, setLyrics] = useState("");
-  const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? "");
+  const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? initialDirectSource?.id ?? "");
   const [evolutionEnabled, setEvolutionEnabled] = useState(Boolean(initialEvolutionSource));
   const [evolutionStudyId] = useState(() => `evolve_${crypto.randomUUID()}`);
   const [workflowId, setWorkflowId] = useState("");
@@ -163,7 +170,7 @@ export function GenerationView({
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
-  const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : "");
+  const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected as the source.` : "");
   const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
     kind: "extend",
     sourceId: initialVideoSource.id,

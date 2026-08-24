@@ -16,6 +16,7 @@ import { SettingsView } from "../features/settings/SettingsView";
 import { CockpitView } from "../features/cockpit/CockpitView";
 import { SystemView } from "../features/system/SystemView";
 import type { ProductionCockpitAction } from "../../shared/contracts";
+import type { CreateIntent } from "../features/generation/quickCreate";
 
 const VIEWS = new Set<StudioView>(["portal", "cockpit", "dna", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings", "system"]);
 
@@ -42,6 +43,9 @@ export function App() {
   const [cockpitTarget, setCockpitTarget] = useState<ProductionCockpitAction | null>(null);
   const [videoExtensionArtifactId, setVideoExtensionArtifactId] = useState("");
   const [evolutionSourceId, setEvolutionSourceId] = useState("");
+  const [createSourceId, setCreateSourceId] = useState("");
+  const [createIntent, setCreateIntent] = useState<CreateIntent | undefined>();
+  const [trainingSourceIds, setTrainingSourceIds] = useState<string[]>([]);
   const mobile = useResponsive();
   useEffect(() => {
     const update = () => setView(hashView());
@@ -56,6 +60,9 @@ export function App() {
     setCockpitTarget(null);
     setVideoExtensionArtifactId("");
     setEvolutionSourceId("");
+    setCreateSourceId("");
+    setCreateIntent(undefined);
+    setTrainingSourceIds([]);
     setView(next);
     window.history.pushState(null, "", `#/${next}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -65,6 +72,9 @@ export function App() {
     setCockpitTarget(null);
     setVideoExtensionArtifactId(artifactId);
     setEvolutionSourceId("");
+    setCreateSourceId("");
+    setCreateIntent(undefined);
+    setTrainingSourceIds([]);
     setView("dna");
     window.history.pushState(null, "", "#/dna");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -74,6 +84,33 @@ export function App() {
     setCockpitTarget(null);
     setVideoExtensionArtifactId("");
     setEvolutionSourceId(sourceId);
+    setCreateSourceId("");
+    setCreateIntent(undefined);
+    setTrainingSourceIds([]);
+    setView("dna");
+    window.history.pushState(null, "", "#/dna");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openHomeCreate = (intent: Exclude<CreateIntent, "train">, sourceId?: string) => {
+    setCockpitTarget(null);
+    setVideoExtensionArtifactId("");
+    setEvolutionSourceId("");
+    setCreateSourceId(sourceId ?? "");
+    setCreateIntent(intent);
+    setTrainingSourceIds([]);
+    setView("dna");
+    window.history.pushState(null, "", "#/dna");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openHomeTraining = (sourceId: string) => {
+    setCockpitTarget(null);
+    setVideoExtensionArtifactId("");
+    setEvolutionSourceId("");
+    setCreateSourceId("");
+    setCreateIntent(undefined);
+    setTrainingSourceIds([sourceId]);
     setView("dna");
     window.history.pushState(null, "", "#/dna");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -81,6 +118,11 @@ export function App() {
 
   const openCockpitAction = (action: ProductionCockpitAction) => {
     if (action.projectId) setActiveProjectId(action.projectId);
+    setVideoExtensionArtifactId("");
+    setEvolutionSourceId("");
+    setCreateSourceId("");
+    setCreateIntent(undefined);
+    setTrainingSourceIds([]);
     setCockpitTarget(action);
     setView(action.surface);
     window.history.pushState(null, "", `#/${action.surface}`);
@@ -90,9 +132,9 @@ export function App() {
   const content = (() => {
     if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView onOpen={(destination, action) => action ? openCockpitAction(action) : navigate(destination)} />;
     switch (view) {
-      case "portal": return <PortalView navigate={navigate} />;
+      case "portal": return <PortalView navigate={navigate} onCreate={openHomeCreate} onTrain={openHomeTraining} />;
       case "cockpit": return <CockpitView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} onOpen={openCockpitAction} />;
-      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
+      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${createSourceId}:${createIntent ?? ""}:${trainingSourceIds.join(",")}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} initialSourceId={createSourceId || undefined} initialCreateIntent={createIntent} initialTrainingAssetIds={trainingSourceIds} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "media": return <MediaView onGenerate={() => navigate("dna")} onEvolve={openEvolution} />;
       case "queue": return <CockpitView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} onOpen={openCockpitAction} />;
       case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} onExtendVideo={openVideoExtension} onEvolve={openEvolution} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;

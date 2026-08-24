@@ -46,17 +46,18 @@ test("mobile primary pages render one route heading", async ({ page }, testInfo)
   await expect(page.locator(".mtabbar .mtab")).toHaveCount(6);
 });
 
-test("reduced-motion preference suppresses portal animation", async ({ page }) => {
+test("reduced-motion preference suppresses Home action motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/#/portal");
   await page.getByRole("textbox", { name: "Project name" }).fill("Motion Test");
   await page.getByRole("textbox", { name: "Project type" }).fill("Interaction System");
   await page.getByRole("button", { name: "Create project" }).click();
 
-  const animation = await page.locator(".orb-ring.a").evaluate((element) => {
+  const motion = await page.locator(".home-action.image").evaluate((element) => {
     const style = getComputedStyle(element);
-    return { name: style.animationName, duration: style.animationDuration };
+    return { animationName: style.animationName, animationDuration: style.animationDuration, transitionDuration: style.transitionDuration };
   });
-  expect(animation.name).toBe("none");
-  expect(Number.parseFloat(animation.duration)).toBeLessThanOrEqual(0.001);
+  expect(motion.animationName).toBe("none");
+  expect(Number.parseFloat(motion.animationDuration)).toBeLessThanOrEqual(0.001);
+  expect(Number.parseFloat(motion.transitionDuration)).toBeLessThanOrEqual(0.001);
 });
