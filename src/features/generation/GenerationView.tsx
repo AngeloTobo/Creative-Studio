@@ -9,6 +9,7 @@ import {
   analyzeGenerationWorkload,
   createVideoGenerationVersions,
   createSongPromptRecommendations,
+  evolutionBranchPrompt,
   creativeDnaDescriptionSummaries,
   creativeDnaGenerationPrompt,
   fastImageParameterOverrides,
@@ -24,6 +25,8 @@ import {
   type WorkflowParameter,
   type WorkflowScalar,
   type VideoGenerationOperation,
+  type EvolutionJobContext,
+  type EvolutionRole,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
@@ -96,6 +99,7 @@ export function GenerationView({
   onDesign,
   onTrain,
   initialVideoExtensionArtifactId,
+  initialEvolutionSourceId,
   embedded = false,
 }: {
   onQueued: () => void;
@@ -104,6 +108,7 @@ export function GenerationView({
   onDesign: () => void;
   onTrain: (assetIds?: string[]) => void;
   initialVideoExtensionArtifactId?: string;
+  initialEvolutionSourceId?: string;
   embedded?: boolean;
 }) {
   const {
@@ -125,17 +130,32 @@ export function GenerationView({
   const availableDna = snapshot ? projectDna.filter((artifact) => creativeDnaCanGenerate(snapshot, artifact)) : [];
   const selected = snapshot && activeDna && creativeDnaCanGenerate(snapshot, activeDna) ? activeDna : availableDna[0] ?? null;
   const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
-  const projectArtifacts = useMemo(() => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.retention.state === "retained") ?? [], [activeProjectId, snapshot?.artifacts]);
+  const allProjectArtifacts = useMemo(() => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.artifacts]);
+  const projectArtifacts = useMemo(() => allProjectArtifacts.filter((artifact) => artifact.retention.state === "retained"), [allProjectArtifacts]);
   const workflows = snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [];
   const initialVideoSource = initialVideoExtensionArtifactId
     ? projectArtifacts.find((artifact) => artifact.id === initialVideoExtensionArtifactId && artifact.kind === "video") ?? null
     : null;
-  const directionInitialized = useRef(Boolean(initialVideoSource));
+  const initialEvolutionArtifact = initialEvolutionSourceId
+    ? allProjectArtifacts.find((artifact) => artifact.id === initialEvolutionSourceId) ?? null
+    : null;
+  const initialEvolutionAsset = initialEvolutionSourceId
+    ? projectMedia.find((asset) => asset.id === initialEvolutionSourceId) ?? null
+    : null;
+  const initialEvolutionSource = initialEvolutionArtifact
+    ? sourceFromArtifact(initialEvolutionArtifact)
+    : initialEvolutionAsset ? sourceFromAsset(initialEvolutionAsset) : null;
+  const initialIntent: CreateIntent = initialVideoSource || initialEvolutionSource?.kind === "video"
+    ? "video"
+    : initialEvolutionSource?.kind === "audio" ? "music" : "image";
+  const directionInitialized = useRef(Boolean(initialVideoSource || initialEvolutionSource));
   const directionProjectId = useRef<string | null>(activeProjectId);
-  const [intent, setIntent] = useState<CreateIntent>(initialVideoSource ? "video" : "image");
-  const [direction, setDirection] = useState("");
+  const [intent, setIntent] = useState<CreateIntent>(initialIntent);
+  const [direction, setDirection] = useState(initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "");
   const [lyrics, setLyrics] = useState("");
-  const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? "");
+  const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? "");
+  const [evolutionEnabled, setEvolutionEnabled] = useState(Boolean(initialEvolutionSource));
+  const [evolutionStudyId] = useState(() => `evolve_${crypto.randomUUID()}`);
   const [workflowId, setWorkflowId] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
   const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
@@ -143,7 +163,7 @@ export function GenerationView({
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
-  const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : "");
+  const [notice, setNotice] = useState(initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : "");
   const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
     kind: "extend",
     sourceId: initialVideoSource.id,
@@ -169,6 +189,7 @@ export function GenerationView({
       setImagePerformanceMode("fast-default");
       setNotice("");
       setVideoOperation(null);
+      setEvolutionEnabled(false);
     }
     if (!selected || directionInitialized.current) return;
     directionInitialized.current = true;
@@ -176,7 +197,13 @@ export function GenerationView({
     setIntent(selected.targetModality);
   }, [activeProjectId, selected]);
 
-  const sourceChoices = videoOperation
+  const sourceChoices = evolutionEnabled
+    ? [
+      ...(initialEvolutionArtifact && !projectArtifacts.some((artifact) => artifact.id === initialEvolutionArtifact.id) ? [sourceFromArtifact(initialEvolutionArtifact)] : []),
+      ...projectArtifacts.map(sourceFromArtifact),
+      ...projectMedia.map(sourceFromAsset),
+    ]
+    : videoOperation
     ? [...projectArtifacts.filter((artifact) => artifact.kind === "video").map(sourceFromArtifact), ...projectMedia.filter((asset) => asset.kind === "video").map(sourceFromAsset)]
     : intent === "train"
     ? projectMedia.map(sourceFromAsset)
@@ -197,6 +224,8 @@ export function GenerationView({
     ? createSongPromptRecommendations({ artDescription: songArtDescription, dna: selected })
     : [];
   const generationIntent = intent === "train" ? "image" : intent;
+  const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
+  const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
   const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null);
   const workflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? preferredWorkflow;
@@ -267,7 +296,7 @@ export function GenerationView({
   };
 
   const chooseIntent = (nextIntent: CreateIntent) => {
-    if (nextIntent !== intent) setDirection("");
+    if (nextIntent !== intent && !evolutionEnabled) setDirection("");
     setIntent(nextIntent);
     setVideoOperation(null);
     resetWorkflowOverrides();
@@ -369,6 +398,55 @@ export function GenerationView({
       if (Object.keys(modified).length) {
         runWorkflow = await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified);
       }
+      if (evolutionEnabled && quickSource && workflowPromptParameter && projectTasteMemory && personalTaste) {
+        const roles: EvolutionRole[] = ["refine", "correct", "discovery"];
+        const videoVersions = generationIntent === "video"
+          ? createVideoGenerationVersions({
+            direction: direction.trim(),
+            dimensions: dna.shared,
+            pairId: `video_pair_${crypto.randomUUID()}`,
+            discoverySeed: randomUint32(),
+            hasSource: Boolean(quickSource),
+          })
+          : null;
+        let branchWorkflow = runWorkflow;
+        for (const role of roles) {
+          const prompt = evolutionBranchPrompt({
+            basePrompt: direction.trim(),
+            role,
+            canon: projectTasteMemory.canon,
+            personalTaste,
+            projectTaste: projectTasteMemory.taste,
+            dimensions: dna.shared,
+          });
+          const values: Record<string, WorkflowScalar> = { [workflowPromptParameter.id]: prompt };
+          const variant = generationIntent === "video"
+            ? role === "discovery" ? videoVersions?.[1].variant : videoVersions?.[0].variant
+            : undefined;
+          if (workflowSeedParameter && variant?.seed !== null && variant?.seed !== undefined) values[workflowSeedParameter.id] = variant.seed;
+          branchWorkflow = await saveWorkflowRevision(branchWorkflow.id, branchWorkflow.currentRevision.id, values);
+          const evolution: EvolutionJobContext = {
+            schemaVersion: "creative-studio-evolution-request/1.0",
+            studyId: evolutionStudyId,
+            role,
+            sourceId: quickSource.id,
+            source: quickSource.source,
+          };
+          await submitWorkflowJob(
+            branchWorkflow,
+            effectiveInputBindings,
+            dna.artifactId,
+            effectiveVideoOperation ?? undefined,
+            generationIntent === "image" ? imagePerformanceMode : undefined,
+            variant,
+            evolution,
+          );
+        }
+        setValuesRevisionId(branchWorkflow.currentRevision.id);
+        setWorkflowValues(Object.fromEntries(branchWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+        setNotice("Refine, Correct, and Discovery queued as one durable evolution study. Review the three retained branches together in Artifacts.");
+        return;
+      }
       if (videoVersions && workflowPromptParameter) {
         const [aligned, discovery] = videoVersions;
         const discoveryValues: Record<string, WorkflowScalar> = { [workflowPromptParameter.id]: discovery.prompt };
@@ -448,6 +526,8 @@ export function GenerationView({
     ? "Choose a model"
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
+      : evolutionEnabled
+        ? `Generate 3 ${generationLabel} branches`
       : settingsChanged
         ? effectiveVideoOperation ? "Save & extend 2 versions" : generationIntent === "video" ? "Save & generate 2 videos" : `Save & generate ${generationLabel}`
         : effectiveVideoOperation
@@ -472,6 +552,13 @@ export function GenerationView({
           {intent !== "train" ? <em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em> : null}
         </div>
 
+        {evolutionEnabled && initialEvolutionSource ? <section className="evolution-create-plan" aria-label="Evolution study">
+          <header><span><Icon name="star" size={16} /><strong>Evolve {initialEvolutionSource.name}</strong></span><button type="button" className="link-btn" onClick={() => setEvolutionEnabled(false)}>Use as a normal source</button></header>
+          <p>One request creates three retained branches with the same source, canon, taste evidence, model settings, and study stamp. Switch Image, Video, or Song to add another medium to this study.</p>
+          <div><span><b>Refine</b><small>strengthen what already works</small></span><span><b>Correct</b><small>resolve review feedback</small></span><span><b>Discovery</b><small>take a distinct new path</small></span></div>
+          <footer><span>{projectTasteMemory?.taste.signalCount ?? 0} project signals</span><span>{personalTaste?.signalCount ?? 0} personal signals</span><span>{projectTasteMemory?.canon.identity ? "Canon attached" : "Add canon in Projects"}</span></footer>
+        </section> : null}
+
         {intent !== "train" ? <div className="quick-model-picker">
           <div className="quick-model-head"><span>Model</span><button className="link-btn" onClick={onWorkflows}>Manage models</button></div>
           {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
@@ -493,7 +580,7 @@ export function GenerationView({
                 : "Custom mode is explicit, but these exact controls are still within the fast limits."}</small>
         </div> : null}
 
-        {generationIntent === "video" && workflow ? <div className="quick-video-pair" aria-label="Two video versions per request">
+        {generationIntent === "video" && workflow && !evolutionEnabled ? <div className="quick-video-pair" aria-label="Two video versions per request">
           <Icon name="video" size={16} />
           <span><strong>2 versions per run</strong><small>Aligned: your exact direction · Discovery: 70% random DNA</small></span>
         </div> : null}

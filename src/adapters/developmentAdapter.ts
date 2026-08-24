@@ -1,8 +1,10 @@
 import {
   compileCreativeDna,
+  compileCreativeTasteMemory,
   creativeDnaGenerationPrompt,
   creativeDnaReferenceAssetIds,
   deriveProductionCockpit,
+  deriveEvolutionStudies,
   deriveProjectProductionLoop,
   PROJECT_HUES,
   resolveCreativeDnaGenerationArtifact,
@@ -117,6 +119,9 @@ function capabilitySnapshot(now: string): Capability[] {
 
 function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
   const projects = state.projects.map((project) => ({ ...project, activeDnaArtifactId: project.activeDnaArtifactId ?? null }));
+  const artifacts = [...state.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const acceptances = [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const trainingReviews = [...(state.trainingReviews ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return {
     adapter: {
       id: "development-local-storage",
@@ -128,12 +133,12 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     projects,
     dnaArtifacts: [...state.dnaArtifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     jobs: [...state.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    artifacts: [...state.artifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    artifacts,
     mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    trainingReviews: [...(state.trainingReviews ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    trainingReviews,
     productionLoops: projects.map((project) => deriveProjectProductionLoop({
       project,
       dnaArtifacts: state.dnaArtifacts,
@@ -158,7 +163,9 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     }),
     runners: [],
     capabilities: capabilitySnapshot(now),
-    acceptances: [...state.acceptances].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    acceptances,
+    tasteMemory: compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts: state.dnaArtifacts }),
+    evolutionStudies: deriveEvolutionStudies(state.jobs, artifacts),
     refreshedAt: now,
   };
 }
@@ -413,7 +420,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         idempotencyKey,
       }, null);
       reused.prompt = original.settingsStamp.prompt;
-      reused.settingsStamp = { ...original.settingsStamp, createdAt: now().toISOString(), reusedFromJobId: original.id, provider: reused.provider };
+      reused.settingsStamp = { ...original.settingsStamp, createdAt: now().toISOString(), reusedFromJobId: original.id, provider: reused.provider, evolution: undefined };
       write(state);
       return reused;
     },

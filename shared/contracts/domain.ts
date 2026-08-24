@@ -16,6 +16,11 @@ export type Project = {
   updatedAt: IsoDateString;
 };
 
+export type ProjectCanon = {
+  identity: string;
+  currentDirection: string;
+};
+
 export const PROJECT_HUES = ["#d946ef", "#8b5cf6", "#22d3ee", "#14b8a6", "#f59e0b", "#fb7185"] as const;
 export type ProjectHue = (typeof PROJECT_HUES)[number];
 
@@ -105,6 +110,31 @@ export type GenerationSettingsStamp = {
   inputBindings?: Record<string, string>;
   videoVariant?: import("./creativeDna").VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
+  evolution?: GenerationEvolutionStamp;
+};
+
+export type EvolutionRole = "refine" | "correct" | "discovery";
+
+export type EvolutionJobContext = {
+  schemaVersion: "creative-studio-evolution-request/1.0";
+  studyId: string;
+  role: EvolutionRole;
+  sourceId: string;
+  source: "upload" | "artifact";
+};
+
+export type GenerationEvolutionStamp = {
+  schemaVersion: "creative-studio-evolution/1.0";
+  studyId: string;
+  role: EvolutionRole;
+  sourceId: string;
+  source: "upload" | "artifact";
+  sourceKind: MediaKind;
+  sourceName: string;
+  projectCanon: ProjectCanon;
+  personalTasteSignalIds: string[];
+  projectTasteSignalIds: string[];
+  createdAt: IsoDateString;
 };
 
 export type VideoGenerationOperation = {
@@ -228,6 +258,61 @@ export type Acceptance = {
   decision: AcceptanceDecision;
   note: string;
   actor: "angelo" | "development-user";
+  createdAt: IsoDateString;
+};
+
+export type CreativeTasteSignalKind = "preserve" | "redirect" | "avoid";
+
+export type CreativeTasteSignal = {
+  id: string;
+  projectId: string;
+  artifactId: string | null;
+  modality: GenerationModality | "training";
+  kind: CreativeTasteSignalKind;
+  text: string;
+  decision: AcceptanceDecision | CreativeDnaTrainingReviewDecision;
+  actor: Acceptance["actor"];
+  source: "artifact-review" | "training-review";
+  sourceReviewId: string;
+  providerPromptEligible: boolean;
+  createdAt: IsoDateString;
+};
+
+export type CreativeTasteProfile = {
+  signalCount: number;
+  preserve: CreativeTasteSignal[];
+  redirect: CreativeTasteSignal[];
+  avoid: CreativeTasteSignal[];
+  updatedAt: IsoDateString | null;
+};
+
+export type CreativeTasteMemory = {
+  schemaVersion: "creative-studio-taste-memory/1.0";
+  personal: CreativeTasteProfile;
+  projects: Record<string, {
+    canon: ProjectCanon;
+    taste: CreativeTasteProfile;
+  }>;
+};
+
+export type EvolutionStudyBranch = {
+  role: EvolutionRole;
+  modality: GenerationModality;
+  jobId: string;
+  artifactId: string | null;
+  status: JobStatus | ArtifactStatus;
+  createdAt: IsoDateString;
+};
+
+export type EvolutionStudy = {
+  id: string;
+  projectId: string;
+  sourceId: string;
+  source: "upload" | "artifact";
+  sourceKind: MediaKind;
+  sourceName: string;
+  canon: ProjectCanon;
+  branches: EvolutionStudyBranch[];
   createdAt: IsoDateString;
 };
 

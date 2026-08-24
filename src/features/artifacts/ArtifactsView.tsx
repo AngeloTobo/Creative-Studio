@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import type { Acceptance, AcceptanceDecision, Artifact } from "../../../shared/contracts";
+import { compileCreativeTasteMemory, type Acceptance, type AcceptanceDecision, type Artifact, type CreativeTasteSignal, type EvolutionStudy } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ArtifactThumb } from "../../components/Visuals";
@@ -116,7 +116,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, onExtendVideo, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; focused: boolean }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, onExtendVideo, onEvolve, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; focused: boolean }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [expanded, setExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -135,8 +135,9 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
         <ArtifactMediaReview artifact={artifact} onInspect={() => artifact.kind === "image" && onInspect(artifact)} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} />
         <DecisionHistory decisions={decisions} />
         <button className="lineage-toggle" onClick={() => setExpanded((value) => !value)}><Icon name="history" size={15} /> {expanded ? "Hide lineage" : "Show lineage"}</button>
-        {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span>{artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}<span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}
+        {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span>{artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}{artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}<span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}
         <div className="artifact-actions">
+          <button className="btn artifact-evolve" disabled={busy || artifact.status === "retaining"} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>
           <button className="btn btn-ghost artifact-reuse" disabled={busy || artifact.status === "retaining"} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>
           <button className="btn artifact-accept" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>
           <button className="btn artifact-reject" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>
@@ -148,11 +149,39 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
   );
 }
 
-export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; focusArtifactId?: string }) {
+type ArtifactCardSharedProps = Omit<Parameters<typeof ArtifactCard>[0], "artifact" | "focused">;
+
+function EvolutionStudyGroup({ study, artifacts, cardProps }: { study: EvolutionStudy; artifacts: Artifact[]; cardProps: ArtifactCardSharedProps }) {
+  return <article className="evolution-study glass">
+    <header><span><small>Evolution study · {new Date(study.createdAt).toLocaleString()}</small><h2>{study.sourceName}</h2></span><span className="evolution-study-count">{study.branches.length} {study.branches.length === 1 ? "result" : "results"}</span></header>
+    <div className="evolution-study-context"><span><b>Canon</b>{study.canon.identity || "Not set"}</span><span><b>Current direction</b>{study.canon.currentDirection || "Not set"}</span></div>
+    <div className="evolution-branch-grid">
+      {study.branches.map((branch) => {
+        const artifact = artifacts.find((item) => item.id === branch.artifactId);
+        return <section className="evolution-branch" key={branch.jobId}>
+          <div className="evolution-branch-label"><span className={`state-pill ${branch.status}`}>{branch.status}</span><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)}</strong><small>{branch.modality}</small></div>
+          {artifact ? <ArtifactCard {...cardProps} artifact={artifact} focused={false} /> : <div className="evolution-branch-pending"><Icon name="history" size={22} /><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)} is {branch.status}</strong><small>Job {branch.jobId}</small></div>}
+        </section>;
+      })}
+    </div>
+  </article>;
+}
+
+function LearnedNotice({ signals, onClose }: { signals: CreativeTasteSignal[]; onClose: () => void }) {
+  if (!signals.length) return null;
+  return <div className="creative-learned" role="status"><Icon name="dna" size={18} /><span><strong>Creative Studio learned from that decision</strong>{signals.map((signal) => <small key={signal.id}><b>{signal.kind}</b> · {signal.text}</small>)}</span><button className="icon-button" aria-label="Close learned feedback" onClick={onClose}><Icon name="close" size={15} /></button></div>;
+}
+
+export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; focusArtifactId?: string }) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
+  const [learnedSignals, setLearnedSignals] = useState<CreativeTasteSignal[]>([]);
   const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
+  const studies = snapshot?.evolutionStudies?.filter((study) => study.projectId === activeProjectId) ?? [];
+  const groupedArtifactIds = new Set(studies.flatMap((study) => study.branches.flatMap((branch) => branch.artifactId ? [branch.artifactId] : [])));
+  const standaloneArtifacts = artifacts.filter((artifact) => !groupedArtifactIds.has(artifact.id));
+  const projectTaste = snapshot?.tasteMemory?.projects[activeProjectId]?.taste;
   const artifactCounts = (["retaining", "ready", "accepted", "rejected", "archived"] as const)
     .map((status) => ({ status, count: artifacts.filter((artifact) => artifact.status === status).length }))
     .filter(({ count }) => count > 0);
@@ -165,13 +194,22 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, focusAr
       <div className="artifact-summary">
         {artifactCounts.map(({ status, count }) => <div className="glass" key={status}><strong>{count}</strong><span>{status}</span></div>)}
       </div>
+      {projectTaste?.signalCount ? <details className="taste-memory-summary glass"><summary><span><Icon name="dna" size={16} /><strong>What Creative Studio has learned</strong></span><small>{projectTaste.signalCount} project signals · {snapshot?.tasteMemory?.personal.signalCount ?? 0} personal signals</small></summary><div><span><b>Preserve</b>{projectTaste.preserve[0]?.text ?? "No preserve signal yet"}</span><span><b>Redirect</b>{projectTaste.redirect[0]?.text ?? "No redirect signal yet"}</span><span><b>Avoid</b>{projectTaste.avoid[0]?.text ?? "No avoid signal yet"}</span></div></details> : null}
+      <LearnedNotice signals={learnedSignals} onClose={() => setLearnedSignals([])} />
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
+      {studies.length ? <section className="evolution-studies" aria-label="Evolution studies"><header><span><span className="eyebrow">Grouped comparisons</span><h2>Evolution studies</h2></span><small>Refine · Correct · Discovery</small></header>{studies.map((study) => <EvolutionStudyGroup key={study.id} study={study} artifacts={artifacts} cardProps={{ onQueued, onInspect: setInspected, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve }} />)}</section> : null}
       <div className="artifact-grid">
-        {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} focused={focusArtifactId === artifact.id} />)}
+        {standaloneArtifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} focused={focusArtifactId === artifact.id} />)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}
-      {reviewIntent ? <ReviewDialog key={`${reviewIntent.artifact.id}-${reviewIntent.decision}`} intent={reviewIntent} busy={busy} onClose={() => setReviewIntent(null)} onConfirm={(note) => reviewArtifact(reviewIntent.artifact.id, reviewIntent.decision, note)} /> : null}
+      {reviewIntent ? <ReviewDialog key={`${reviewIntent.artifact.id}-${reviewIntent.decision}`} intent={reviewIntent} busy={busy} onClose={() => setReviewIntent(null)} onConfirm={async (note) => {
+        const result = await reviewArtifact(reviewIntent.artifact.id, reviewIntent.decision, note);
+        if (snapshot) {
+          const learned = compileCreativeTasteMemory({ projects: snapshot.projects, artifacts: [result.artifact], acceptances: [result.acceptance], trainingReviews: [], dnaArtifacts: snapshot.dnaArtifacts });
+          setLearnedSignals([...learned.personal.preserve, ...learned.personal.redirect, ...learned.personal.avoid]);
+        }
+      }} /> : null}
     </section>
   );
 }

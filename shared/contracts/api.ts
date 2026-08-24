@@ -17,6 +17,9 @@ import type {
   CreativeDnaTrainingReviewDecision,
   LocalRunner,
   VideoGenerationOperation,
+  EvolutionJobContext,
+  CreativeTasteMemory,
+  EvolutionStudy,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis, VideoGenerationVariant } from "./creativeDna";
 import type { ProjectProductionLoop } from "./productionLoop";
@@ -120,6 +123,8 @@ export type StudioSnapshot = {
   runners: LocalRunner[];
   capabilities: Capability[];
   acceptances: Acceptance[];
+  tasteMemory?: CreativeTasteMemory;
+  evolutionStudies?: EvolutionStudy[];
   refreshedAt: string;
 };
 
@@ -149,6 +154,7 @@ export type SubmitJobRequest = {
   performanceMode?: ImagePerformanceMode;
   videoVariant?: VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
+  evolution?: EvolutionJobContext;
 };
 
 export type SubmitJobResponse = {
@@ -194,6 +200,7 @@ export type CreativeDnaTrainingBundleResponse = {
   baseDna: CreativeDnaArtifact | null;
   assets: MediaAsset[];
   trainingExamples: CreativeTrainingExample[];
+  tasteMemory?: CreativeTasteMemory;
 };
 export type ImportWorkflowResponse = { workflow: WorkflowDefinition };
 export type SaveWorkflowRevisionResponse = { workflow: WorkflowDefinition };

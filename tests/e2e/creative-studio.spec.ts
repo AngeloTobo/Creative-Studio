@@ -100,6 +100,46 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
   await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax Music3 Text Encode: Lyrics" })).toHaveValue("");
 });
 
+test("evolution results stay in one side-by-side study instead of repeating in artifact history", async ({ page }) => {
+  const createdAt = "2026-08-23T21:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    const project = { id: "project_evolution", activeDnaArtifactId: null, name: "Rebecca", type: "Character study", status: "active", description: "Rebecca has a precise biomechanical silhouette and luminous blue eyes.", note: "Keep the rooftop sequence nocturnal and intimate.", hue: "#d946ef", initials: "RE", createdAt: time, updatedAt: time };
+    const roles = ["refine", "correct", "discovery"];
+    const stamp = (role: string) => ({ schemaVersion: 1, source: "comfyui-workflow", createdAt: time, reusedFromJobId: null, prompt: `${role} rooftop direction`, provider: "local-comfyui", modality: "image", workflow: null, parameters: { prompt: `${role} rooftop direction` }, models: ["z_image_turbo_bf16.safetensors"], inputAssetIds: [], evolution: { schemaVersion: "creative-studio-evolution/1.0", studyId: "evolve_e2e-study-001", role, sourceId: "artifact_source", source: "artifact", sourceKind: "image", sourceName: "Rebecca rooftop", projectCanon: { identity: project.description, currentDirection: project.note }, personalTasteSignalIds: [], projectTasteSignalIds: [], createdAt: time } });
+    const jobs = roles.map((role) => ({ id: `job_${role}`, projectId: project.id, dnaArtifactId: "dna_evolution", capability: "IMAGE_GENERATE", modality: "image", status: "completed", progress: 100, prompt: `${role} rooftop direction`, provider: "local-comfyui", upstreamId: `comfy_${role}`, artifactId: `artifact_${role}`, retryOfJobId: null, error: null, createdAt: time, updatedAt: time, startedAt: time, executionStage: "completed", stageUpdatedAt: time, completedAt: time, settingsStamp: stamp(role) }));
+    const artifacts = roles.map((role, index) => ({ id: `artifact_${role}`, projectId: project.id, jobId: `job_${role}`, dnaArtifactId: "dna_evolution", kind: "image", name: `Rebecca · ${role}`, status: index === 0 ? "accepted" : "ready", provider: "local-comfyui", prompt: `${role} rooftop direction`, preview: { kind: "development-gradient", url: null, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: ["artifact_source"], parentArtifactId: "artifact_source" }, retention: { state: "development-only", size: null }, settingsStamp: stamp(role), createdAt: time, updatedAt: time }));
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs, artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [{ id: "accept_evolution", artifactId: "artifact_refine", decision: "accepted", note: "Keep the luminous eyes and controlled silhouette.", actor: "development-user", createdAt: time }], idempotencyKeys: {} }));
+  }, { createdAt });
+
+  await page.goto("/#/gallery");
+  const study = page.locator(".evolution-study");
+  await expect(page.getByRole("heading", { name: "Evolution studies" })).toBeVisible();
+  await expect(study).toHaveCount(1);
+  await expect(study.locator(".evolution-branch")).toHaveCount(3);
+  await expect(study).toContainText("Refine");
+  await expect(study).toContainText("Correct");
+  await expect(study).toContainText("Discovery");
+  await expect(study).toContainText("3 results");
+  await expect(page.locator(".artifact-grid > .artifact-card")).toHaveCount(0);
+});
+
+test("Projects opens the exact pending trained-DNA review instead of the default Create panel", async ({ page }) => {
+  const createdAt = "2026-08-23T22:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    const dimensions = { energy: 60, tension: 50, contrast: 70, warmth: 35, spaciousness: 75, rhythmicity: 55, organicity: 45, polish: 70 };
+    const dna = (id: string, version: number, parent: string | null, training: unknown) => ({ schemaVersion: "creative-dna/1.0", artifactId: id, projectId: "project_review", version, rootArtifactId: "dna_base", name: version === 1 ? "Rebecca baseline" : "Rebecca trained", createdAt: time, targetModality: "image", capability: "IMAGE_GENERATE", source: { kind: "original", directive: version === 1 ? "Rebecca baseline direction." : "Rebecca trained direction.", referenceLabel: null, referenceAssetIds: [] }, shared: dimensions, native: {}, influence: { angeloCore: 75, currentProject: 15, reference: 50 }, evidence: [], rights: { policy: "original-input", referenceStoredAsProvenanceOnly: false, allowedDownstream: [], blockedDownstream: [] }, translations: [], generationPrompts: { image: "Rebecca direction.", music: "Rebecca translated into sound." }, lineage: { rootArtifactId: "dna_base", parentArtifactId: parent }, training });
+    const analysis = { schemaVersion: "creative-dna-training-analysis/1.1", createdAt: time, summary: "Measured training result.", sources: [], dimensions: Object.fromEntries(Object.entries(dimensions).map(([key, value]) => [key, { value, confidence: .9, sourceIds: [] }])) };
+    const trainingJob = { id: "training_pending_review", projectId: "project_review", baseDnaArtifactId: "dna_base", resultDnaArtifactId: "dna_trained", name: "Rebecca trained", targetModality: "image", status: "completed", progress: 100, provider: "local-creative-dna-runner", assetIds: ["media_review"], trainingExampleIds: [], runnerId: "runner_review", error: null, createdAt: time, updatedAt: time, startedAt: time, completedAt: time };
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [{ id: "project_review", activeDnaArtifactId: "dna_base", name: "Rebecca", type: "Character study", status: "active", description: "Rebecca canon.", note: "Current rooftop direction.", hue: "#d946ef", initials: "RE", createdAt: time, updatedAt: time }], dnaArtifacts: [dna("dna_trained", 2, "dna_base", { jobId: trainingJob.id, runnerId: "runner_review", assetIds: ["media_review"], trainingExampleIds: [], analysis }), dna("dna_base", 1, null, null)], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [trainingJob], trainingReviews: [], acceptances: [], idempotencyKeys: {} }));
+  }, { createdAt });
+
+  await page.goto("/#/projects");
+  await page.getByRole("button", { name: "Review trained version" }).click();
+  await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.getByRole("heading", { name: "Compare before activation" })).toBeVisible();
+  await expect(page.getByText("Rebecca trained direction.", { exact: true })).toBeVisible();
+});
+
 test("CreativeDNA survives the full review loop", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/#/dna");
@@ -146,9 +186,19 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(review.getByRole("button", { name: "Accept artifact" })).toBeDisabled();
   await review.getByRole("textbox", { name: /Review note/ }).fill("Keep the cyan reflections and spacious focal hierarchy.");
   await review.getByRole("button", { name: "Accept artifact" }).click();
+  await expect(page.getByRole("status")).toContainText("Creative Studio learned from that decision");
+  await expect(page.getByRole("status")).toContainText("preserve · Keep the cyan reflections and spacious focal hierarchy");
+  await expect(page.getByText(/1 project signals · 1 personal signals/)).toBeVisible();
   await expect(artifact.locator(".artifact-title").getByText("accepted", { exact: true })).toBeVisible();
   await expect(artifact.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
   await expect(artifact.getByText("Reviewed by Development user")).toBeVisible();
+  await artifact.getByRole("button", { name: "Evolve this" }).click();
+  const evolution = page.getByRole("region", { name: "Evolution study" });
+  await expect(evolution).toContainText("Refine");
+  await expect(evolution).toContainText("Correct");
+  await expect(evolution).toContainText("Discovery");
+  await expect(evolution).toContainText("1 project signals");
+  await page.goto("/#/gallery");
 
   await page.reload();
   const persisted = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });

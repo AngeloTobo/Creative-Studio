@@ -1,6 +1,8 @@
 import {
   assessImagePerformance,
+  compileCreativeTasteMemory,
   creativeDnaGenerationPrompt,
+  deriveEvolutionStudies,
   deriveProjectProductionLoop,
   deriveProductionCockpit,
   normalizeVideoGenerationVariant,
@@ -239,6 +241,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listLocalRunners(env, session.userId),
   ]);
   const computedAt = new Date().toISOString();
+  const tasteMemory = compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts });
   const evidencePools = await Promise.all(projects.map((project) => creativeDnaTrainingEvidencePool(env, session.userId, project.id)));
   const productionLoops = projects.map((project, index) => deriveProjectProductionLoop({
     project, dnaArtifacts, jobs, artifacts, trainingExamples, trainingJobs, trainingReviews,
@@ -270,6 +273,8 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     runners,
     capabilities: await capabilities(env, session, runners),
     acceptances,
+    tasteMemory,
+    evolutionStudies: deriveEvolutionStudies(jobs, artifacts),
     refreshedAt: computedAt,
   };
 }
@@ -410,6 +415,25 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!project) return json({ ok: false, error: "project_not_found" }, { status: 404 });
       if (project.status === "archived") return json({ ok: false, error: "project_archived" }, { status: 400 });
       await assertCreativeDnaReviewed(env, session.userId, dna);
+      let evolutionSource: Awaited<ReturnType<typeof runnerInputById>> = null;
+      let evolutionTaste: ReturnType<typeof compileCreativeTasteMemory> | null = null;
+      if (input.evolution) {
+        if (input.evolution.schemaVersion !== "creative-studio-evolution-request/1.0"
+          || !/^evolve_[a-z0-9-]{8,100}$/i.test(boundedText(input.evolution.studyId, 120))
+          || !["refine", "correct", "discovery"].includes(input.evolution.role)
+          || !["upload", "artifact"].includes(input.evolution.source)) throw new Error("invalid_evolution_request");
+        evolutionSource = await runnerInputById(env, session.userId, boundedText(input.evolution.sourceId, 100));
+        if (!evolutionSource || evolutionSource.projectId !== input.projectId || evolutionSource.source !== input.evolution.source) {
+          throw new Error("evolution_source_invalid");
+        }
+        const [reviewArtifacts, reviews, dnaReviews, allProjects] = await Promise.all([
+          listArtifacts(env, session.userId),
+          listAcceptances(env, session.userId),
+          listCreativeDnaTrainingReviews(env, session.userId),
+          listProjects(env, session.userId),
+        ]);
+        evolutionTaste = compileCreativeTasteMemory({ projects: allProjects, artifacts: reviewArtifacts, acceptances: reviews, trainingReviews: dnaReviews, dnaArtifacts });
+      }
       const modality = input.modality as GenerationModality;
       const videoOperation = requestedVideoOperation(input.videoOperation, modality);
       const videoVariant = input.videoVariant === undefined ? undefined : normalizeVideoGenerationVariant(input.videoVariant);
@@ -474,6 +498,19 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         const workflowPrompt = workflowPromptParameter ? String(workflowPromptParameter.value).trim() : "";
         const prompt = boundedText(workflowPrompt, 4_000) || creativeDnaGenerationPrompt(dna, modality === "music" ? "music" : "image");
         const createdAt = new Date().toISOString();
+        const evolution = input.evolution && evolutionSource && evolutionTaste ? {
+          schemaVersion: "creative-studio-evolution/1.0" as const,
+          studyId: boundedText(input.evolution.studyId, 120),
+          role: input.evolution.role,
+          sourceId: evolutionSource.id,
+          source: evolutionSource.source,
+          sourceKind: evolutionSource.kind,
+          sourceName: boundedText(evolutionSource.name, 200),
+          projectCanon: evolutionTaste.projects[input.projectId]?.canon ?? { identity: project.description, currentDirection: project.note },
+          personalTasteSignalIds: evolutionTaste.personal.preserve.concat(evolutionTaste.personal.redirect, evolutionTaste.personal.avoid).map((signal) => signal.id),
+          projectTasteSignalIds: Object.values(evolutionTaste.projects[input.projectId]?.taste ?? { preserve: [], redirect: [], avoid: [] }).flatMap((value) => Array.isArray(value) ? value.map((signal) => signal.id) : []),
+          createdAt,
+        } : undefined;
         const created = await createQueuedJob(env, session.userId, {
           projectId: input.projectId,
           dna,
@@ -515,6 +552,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             inputBindings,
             videoVariant,
             videoOperation,
+            evolution,
           },
         });
         return json({ ok: true, job: created.job }, { status: 202 });
@@ -573,6 +611,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           createdAt,
           reusedFromJobId: original.id,
           provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
+          evolution: undefined,
         },
       });
       if (!developmentMode(env) && !localWorkflow) {

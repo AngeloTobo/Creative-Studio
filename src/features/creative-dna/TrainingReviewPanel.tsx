@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   CREATIVE_DNA_DIMENSION_KEYS,
   creativeDnaDescriptionSummaries,
+  creativeTasteSignalClauses,
   type CreativeDnaArtifact,
   type CreativeDnaDimensionKey,
   type CreativeDnaTrainingJob,
@@ -52,6 +53,7 @@ export function TrainingReviewPanel({
 }) {
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState<CreativeDnaTrainingReviewDecision | null>(null);
+  const [learned, setLearned] = useState<Array<{ kind: string; text: string }>>([]);
   const analysis = artifact.training?.analysis;
   const latest = reviews[0] ?? null;
 
@@ -61,6 +63,7 @@ export function TrainingReviewPanel({
     setSubmitting(decision);
     try {
       await onDecision(decision, reviewNote);
+      setLearned(creativeTasteSignalClauses(reviewNote, decision));
       setNote("");
     } finally {
       setSubmitting(null);
@@ -123,6 +126,7 @@ export function TrainingReviewPanel({
         <div><button className="btn artifact-reject" disabled={busy || Boolean(submitting) || !note.trim()} onClick={() => void decide("rejected")}><Icon name="close" size={16} /> {submitting === "rejected" ? "Recording…" : "Reject trained version"}</button><button className="btn artifact-accept" disabled={busy || Boolean(submitting) || !note.trim()} onClick={() => void decide("approved")}><Icon name="check" size={16} /> {submitting === "approved" ? "Activating…" : "Approve & activate"}</button></div>
         <p>Approval makes this exact immutable version the project’s active CreativeDNA. Rejection keeps the current active version, or returns to the recorded baseline if this result was active.</p>
       </div>
+      {learned.length ? <div className="training-learned" role="status"><Icon name="dna" size={17} /><span><strong>Creative Studio learned from this training decision</strong>{learned.map((signal, index) => <small key={`${signal.kind}:${index}`}><b>{signal.kind}</b> · {signal.text}</small>)}</span></div> : null}
 
       <section className="training-review-history" aria-label="Training review history">
         <header><span><Icon name="history" size={15} /> Decision history</span><b>{reviews.length}</b></header>

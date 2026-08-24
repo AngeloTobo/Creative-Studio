@@ -14,6 +14,7 @@ import type {
 } from "../shared/contracts";
 import {
   CREATIVE_DNA_DIMENSION_KEYS,
+  compileCreativeTasteMemory,
   creativeDnaTrainingDescription,
   resolveCreativeDnaGenerationArtifact,
   splitCreativeDnaMediaDescriptionText,
@@ -22,6 +23,9 @@ import { boundedText, id } from "./lib/http";
 import {
   createLocalDna,
   listLocalDna,
+  listAcceptances,
+  listArtifacts,
+  listProjects,
   listMediaAssets,
   listTrainingExamples,
   projectById,
@@ -211,14 +215,16 @@ export async function creativeDnaTrainingBundle(env: Env, ownerId: string, jobId
   const row = await trainingRow(env, ownerId, jobId);
   if (!row) throw new Error("training_job_not_found");
   const trainingJob = mapTrainingJob(row);
-  const [allDna, allAssets, allExamples] = await Promise.all([
+  const [allDna, allAssets, allExamples, projects, artifacts, acceptances, trainingReviews] = await Promise.all([
     listLocalDna(env, ownerId), listMediaAssets(env, ownerId), listTrainingExamples(env, ownerId),
+    listProjects(env, ownerId), listArtifacts(env, ownerId), listAcceptances(env, ownerId), listCreativeDnaTrainingReviews(env, ownerId),
   ]);
   return {
     trainingJob,
     baseDna: trainingJob.baseDnaArtifactId ? allDna.find((artifact) => artifact.artifactId === trainingJob.baseDnaArtifactId) ?? null : null,
     assets: trainingJob.assetIds.map((assetId) => allAssets.find((asset) => asset.id === assetId)).filter((asset): asset is MediaAsset => Boolean(asset)),
     trainingExamples: trainingJob.trainingExampleIds.map((exampleId) => allExamples.find((example) => example.id === exampleId)).filter((example): example is CreativeTrainingExample => Boolean(example)),
+    tasteMemory: compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts: allDna }),
   };
 }
 

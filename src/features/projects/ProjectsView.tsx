@@ -6,6 +6,7 @@ import {
   type ProjectHue,
   type ProductionLoopStage,
   type ProductionLoopSurface,
+  type ProductionCockpitAction,
   type UpdateProjectRequest,
 } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
@@ -62,8 +63,8 @@ function ProjectForm({ project, firstProject = false, busy, onSave, onCancel }: 
       <div className="project-fields">
         <label className="field"><span>Name</span><input className="input" aria-label="Project name" value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} /></label>
         <label className="field"><span>Type</span><input className="input" aria-label="Project type" value={type} maxLength={80} required onChange={(event) => setType(event.target.value)} /></label>
-        <label className="field project-field-wide"><span>Description</span><textarea className="textarea project-description" aria-label="Project description" value={description} maxLength={500} onChange={(event) => setDescription(event.target.value)} /></label>
-        <label className="field"><span>Current note</span><input className="input" aria-label="Project note" value={note} maxLength={250} onChange={(event) => setNote(event.target.value)} /></label>
+        <label className="field project-field-wide"><span>Project / character canon</span><textarea className="textarea project-description" aria-label="Project or character canon" value={description} maxLength={500} onChange={(event) => setDescription(event.target.value)} placeholder="Identity, world rules, character appearance, and continuity that must remain true." /><small>Stable canon stays separate from your personal taste and from the direction of the current piece.</small></label>
+        <label className="field"><span>Current piece direction</span><input className="input" aria-label="Current piece direction" value={note} maxLength={250} onChange={(event) => setNote(event.target.value)} placeholder="What this piece is doing now" /></label>
         <label className="field"><span>Status</span><select className="input" aria-label="Project status" value={status} onChange={(event) => setStatus(event.target.value as "active" | "paused")}><option value="active">Active</option><option value="paused">Paused</option></select></label>
       </div>
       <fieldset className="project-hues"><legend>Project color</legend>{PROJECT_HUES.map((color) => <button type="button" key={color} aria-label={`Use project color ${color}`} aria-pressed={hue === color} className={hue === color ? "on" : ""} style={{ "--project-hue": color } as React.CSSProperties} onClick={() => setHue(color)} />)}</fieldset>
@@ -75,7 +76,7 @@ function ProjectForm({ project, firstProject = false, busy, onSave, onCancel }: 
   );
 }
 
-export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestination) => void }) {
+export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestination, action?: ProductionCockpitAction) => void }) {
   const { snapshot, activeProjectId, setActiveProjectId, createProject, updateProject, archiveProject, busy, error } = useStudio();
   const projects = snapshot?.projects ?? [];
   const availableProjects = projects.filter((project) => project.status !== "archived");
@@ -87,9 +88,9 @@ export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestinat
   const showCreateForm = creating || availableProjects.length === 0;
   const editingProject = projects.find((project) => project.id === editingId) ?? null;
 
-  const open = (projectId: string, destination: ProjectDestination) => {
+  const open = (projectId: string, destination: ProjectDestination, action?: ProductionCockpitAction) => {
     setActiveProjectId(projectId);
-    onOpen(destination);
+    onOpen(destination, action);
   };
 
   const create = async (input: ProjectFormValue) => {
@@ -132,6 +133,25 @@ export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestinat
           const dna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === project.id).length ?? 0;
           const sources = snapshot?.mediaAssets.filter((asset) => asset.projectId === project.id).length ?? 0;
           const loop = snapshot?.productionLoops.find((item) => item.projectId === project.id) ?? null;
+          const pendingTrainingJob = loop?.pendingTrainingReviewJobId
+            ? snapshot?.trainingJobs.find((job) => job.id === loop.pendingTrainingReviewJobId)
+            : undefined;
+          const contextualAction = loop?.pendingTrainingReviewJobId
+            ? snapshot?.productionCockpit.actions.find((action) => action.kind === "review-training" && action.entityId === loop.pendingTrainingReviewJobId) ?? (pendingTrainingJob ? {
+              id: `review-training:${pendingTrainingJob.id}`,
+              kind: "review-training",
+              severity: "critical",
+              projectId: project.id,
+              projectName: project.name,
+              entityId: pendingTrainingJob.id,
+              modality: "training",
+              title: "Review trained CreativeDNA",
+              detail: `${pendingTrainingJob.name} completed and is waiting for your decision.`,
+              actionLabel: "Review trained version",
+              surface: "dna",
+              createdAt: pendingTrainingJob.completedAt ?? pendingTrainingJob.updatedAt,
+            } satisfies ProductionCockpitAction : undefined)
+            : undefined;
           const current = activeProjectId === project.id;
           return <article key={project.id} className={`project-card project-workspace-card glass${current ? " on" : ""}`}>
             <header className="project-card-head">
@@ -142,7 +162,7 @@ export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestinat
             <div className="project-progress">
               <span className={`production-loop-stage ${loop?.stage ?? "needs-dna"}`}>{loop ? STAGE_LABELS[loop.stage] : "Direction needed"}</span>
               <span><small>Next</small><strong>{loop?.nextAction.label ?? "Build CreativeDNA"}</strong><p>{loop?.nextAction.detail ?? "Create the first reusable direction for this workspace."}</p></span>
-              <button className="btn btn-primary" onClick={() => open(project.id, loop ? destinationFor(loop.nextAction.surface) : "dna")}>{loop?.nextAction.label ?? "Open Create"} <Icon name="arrow" size={14} /></button>
+              <button className="btn btn-primary" onClick={() => open(project.id, loop ? destinationFor(loop.nextAction.surface) : "dna", contextualAction)}>{loop?.nextAction.label ?? "Open Create"} <Icon name="arrow" size={14} /></button>
             </div>
             <div className="project-metrics"><span><b>{dna}</b><small>DNA</small></span><span><b>{sources}</b><small>sources</small></span><span><b>{jobs}</b><small>jobs</small></span><span><b>{artifacts}</b><small>results</small></span></div>
             <footer className="project-actions">

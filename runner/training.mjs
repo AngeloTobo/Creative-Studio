@@ -429,7 +429,23 @@ export function synthesisDirective(bundle, _dimensions, sources) {
       ? boundedDescription(source.detailedDescription.shortSummary)
       : polishedDescription(source.detailedDescription.text)))
     .filter(Boolean);
-  if (descriptions.length) return boundedDescription([...new Set(descriptions)].join(" "));
+  if (descriptions.length) {
+    const projectMemory = bundle.tasteMemory?.projects?.[bundle.trainingJob.projectId];
+    const personal = bundle.tasteMemory?.personal;
+    const uniqueSignals = (values) => [...new Map(values.filter((signal) => signal?.providerPromptEligible !== false).map((signal) => [signal.id, signal])).values()];
+    const preserve = uniqueSignals([...(projectMemory?.taste?.preserve || []), ...(personal?.preserve || [])]).slice(0, 3).map((signal) => signal.text);
+    const redirect = uniqueSignals([...(projectMemory?.taste?.redirect || []), ...(personal?.redirect || [])]).slice(0, 3).map((signal) => signal.text);
+    const avoid = uniqueSignals([...(projectMemory?.taste?.avoid || []), ...(personal?.avoid || [])]).slice(0, 3).map((signal) => signal.text);
+    const canon = projectMemory?.canon;
+    return boundedDescription([
+      ...new Set(descriptions),
+      canon?.identity ? `Project and character continuity: ${canon.identity}.` : "",
+      canon?.currentDirection ? `Current piece direction: ${canon.currentDirection}.` : "",
+      preserve.length ? `Preserve from reviewed work: ${preserve.join("; ")}.` : "",
+      redirect.length ? `Resolve from reviewed work: ${redirect.join("; ")}.` : "",
+      avoid.length ? `Exclude from reviewed work: ${avoid.join("; ")}.` : "",
+    ].filter(Boolean).join(" "));
+  }
   throw new Error("training_media_description_required");
 }
 

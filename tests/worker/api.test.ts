@@ -1149,12 +1149,21 @@ describe("Creative Studio Worker API", () => {
           inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
         },
         videoVariant: alignedVideoVariant,
+        evolution: {
+          schemaVersion: "creative-studio-evolution-request/1.0",
+          studyId: "evolve_runner-test-001",
+          role: "refine",
+          sourceId: uploaded.asset.id,
+          source: "upload",
+        },
       }),
-    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant } } };
+    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant; evolution: { studyId: string; role: string; sourceId: string; sourceKind: string; projectCanon: { identity: string; currentDirection: string } } } } };
     expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
     expect(created.job.settingsStamp.workloadEvidence).toEqual({ source: "workflow-revision", profileId: imported.workflow.currentRevision.id, label: "MiniMax H3 I2V v1" });
     expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
     expect(created.job.settingsStamp.videoVariant).toEqual(alignedVideoVariant);
+    expect(created.job.settingsStamp.evolution).toMatchObject({ studyId: "evolve_runner-test-001", role: "refine", sourceId: uploaded.asset.id, sourceKind: "image" });
+    expect(created.job.settingsStamp.evolution.projectCanon).toEqual({ identity: project.description, currentDirection: project.note });
 
     await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
       method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.0.0", comfyUrl: "http://127.0.0.1:8188", comfyVersion: "0.33.0", device: "RTX 3090" }),

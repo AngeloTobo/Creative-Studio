@@ -41,6 +41,7 @@ export function App() {
   const [view, setView] = useState<StudioView>(hashView);
   const [cockpitTarget, setCockpitTarget] = useState<ProductionCockpitAction | null>(null);
   const [videoExtensionArtifactId, setVideoExtensionArtifactId] = useState("");
+  const [evolutionSourceId, setEvolutionSourceId] = useState("");
   const mobile = useResponsive();
   useEffect(() => {
     const update = () => setView(hashView());
@@ -54,6 +55,7 @@ export function App() {
   const navigate = (next: StudioView) => {
     setCockpitTarget(null);
     setVideoExtensionArtifactId("");
+    setEvolutionSourceId("");
     setView(next);
     window.history.pushState(null, "", `#/${next}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -62,6 +64,16 @@ export function App() {
   const openVideoExtension = (artifactId: string) => {
     setCockpitTarget(null);
     setVideoExtensionArtifactId(artifactId);
+    setEvolutionSourceId("");
+    setView("dna");
+    window.history.pushState(null, "", "#/dna");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openEvolution = (sourceId: string) => {
+    setCockpitTarget(null);
+    setVideoExtensionArtifactId("");
+    setEvolutionSourceId(sourceId);
     setView("dna");
     window.history.pushState(null, "", "#/dna");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -76,16 +88,16 @@ export function App() {
   };
 
   const content = (() => {
-    if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView onOpen={navigate} />;
+    if (!activeProjectId && view !== "cockpit" && view !== "projects" && view !== "runtime" && view !== "settings" && view !== "system") return <ProjectsView onOpen={(destination, action) => action ? openCockpitAction(action) : navigate(destination)} />;
     switch (view) {
       case "portal": return <PortalView navigate={navigate} />;
       case "cockpit": return <CockpitView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} onOpen={openCockpitAction} />;
-      case "dna": return <CreativeDnaWorkbench key={activeProjectId} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
-      case "media": return <MediaView onGenerate={() => navigate("dna")} />;
+      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
+      case "media": return <MediaView onGenerate={() => navigate("dna")} onEvolve={openEvolution} />;
       case "queue": return <CockpitView focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined} onOpen={openCockpitAction} />;
-      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} onExtendVideo={openVideoExtension} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;
+      case "gallery": return <ArtifactsView onQueued={() => navigate("queue")} onContinueLoop={() => navigate("dna")} onExtendVideo={openVideoExtension} onEvolve={openEvolution} focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined} />;
       case "library": return <LibraryView />;
-      case "projects": return <ProjectsView onOpen={navigate} />;
+      case "projects": return <ProjectsView onOpen={(destination, action) => action ? openCockpitAction(action) : navigate(destination)} />;
       case "runtime": return <RuntimeView />;
       case "flows": return <FlowsView />;
       case "settings": return <SettingsView />;

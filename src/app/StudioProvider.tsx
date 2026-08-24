@@ -22,6 +22,8 @@ import type {
   VideoGenerationOperation,
   ImagePerformanceMode,
   VideoGenerationVariant,
+  EvolutionJobContext,
+  ReviewArtifactResponse,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -40,11 +42,11 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => Promise<void>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
-  reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note: string) => Promise<void>;
+  reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note: string) => Promise<ReviewArtifactResponse>;
   uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
   uploadWorkflow: (file: File, name?: string, description?: string) => Promise<WorkflowDefinition>;
   saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
@@ -210,7 +212,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant) => {
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -225,6 +227,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       performanceMode,
       videoVariant,
       videoOperation,
+      evolution,
     }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
 
@@ -241,7 +244,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, transact]);
 
   const reviewArtifact = useCallback(async (artifactId: string, decision: AcceptanceDecision, note: string) => {
-    await transact(() => adapter.reviewArtifact(artifactId, decision, note));
+    return transact(() => adapter.reviewArtifact(artifactId, decision, note));
   }, [adapter, transact]);
 
   const uploadMedia = useCallback(async (file: File, trainingEligible: boolean) => {
