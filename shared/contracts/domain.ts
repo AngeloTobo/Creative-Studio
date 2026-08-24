@@ -44,6 +44,7 @@ export type GenerationExecutionStage =
   | "queued"
   | "provider-queued"
   | "preparing-inputs"
+  | "enhancing-prompt"
   | "submitting"
   | "rendering"
   | "downloading-output"
@@ -111,6 +112,21 @@ export type GenerationSettingsStamp = {
   videoVariant?: import("./creativeDna").VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
   evolution?: GenerationEvolutionStamp;
+  promptEnhancement?: SongPromptEnhancementStamp;
+};
+
+export type SongPromptEnhancementStamp = {
+  schemaVersion: "creative-studio-song-prompt-enhancement/1.0";
+  sourcePrompt: string;
+  enhancedPrompt: string;
+  provider: "local-comfyui";
+  workflowId: "gemma4-song-prompt-enhancer";
+  workflowVersion: 1;
+  model: "gemma4_e4b_it_fp8_scaled.safetensors";
+  comfyPromptId: string;
+  sourceWordCount: number;
+  enhancedWordCount: number;
+  createdAt: IsoDateString;
 };
 
 export type EvolutionRole = "refine" | "correct" | "discovery";

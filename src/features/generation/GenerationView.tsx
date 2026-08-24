@@ -535,7 +535,9 @@ export function GenerationView({
           : generationIntent === "video" ? "Generate 2 videos" : `Generate ${generationLabel}`;
   const primaryLabel = generationIntent === "image" && workflow
     ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
-    : basePrimaryLabel;
+    : generationIntent === "music" && workflow
+      ? `${basePrimaryLabel} · Gemma-enhanced`
+      : basePrimaryLabel;
 
   return (
     <section className={`generation-section create-surface quick-create${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-label="Create with Creative Studio">

@@ -95,6 +95,7 @@ const STAGE_LABELS: Record<GenerationExecutionStage, string> = {
   queued: "Waiting in Creative Studio",
   "provider-queued": "Waiting in provider queue",
   "preparing-inputs": "Preparing retained inputs",
+  "enhancing-prompt": "Enhancing song prompt with Gemma 4",
   submitting: "Submitting workflow",
   rendering: "Rendering in ComfyUI",
   "downloading-output": "Downloading generated output",

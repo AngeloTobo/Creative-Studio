@@ -10,7 +10,7 @@ import type { Env } from "./types";
 import { workflowExecutionPlan } from "./workflows";
 
 const RUNNER_STAGES = new Set<NonNullable<Job["executionStage"]>>([
-  "preparing-inputs", "submitting", "rendering", "downloading-output", "post-processing", "retaining",
+  "preparing-inputs", "enhancing-prompt", "submitting", "rendering", "downloading-output", "post-processing", "retaining",
 ]);
 
 type RunnerRow = {
@@ -36,6 +36,14 @@ export function supportsCreativeDnaMediaDescriptions(version: string | null) {
   const major = Number(match[1]);
   const minor = Number(match[2]);
   return major > 1 || (major === 1 && minor >= 2);
+}
+
+export function supportsSongPromptEnhancement(version: string | null) {
+  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 1 || (major === 1 && minor >= 6);
 }
 
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
@@ -138,10 +146,11 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   const nowValue = now.toISOString();
   const candidate = await env.DB.prepare(`select id from creative_jobs
     where owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
+      and (modality != 'music' or ? = 1)
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
       and (timeout_at is null or timeout_at > ?)
     order by case when runner_id = ? then 0 else 1 end, created_at limit 1`)
-    .bind(runner.ownerId, nowValue, runner.id, nowValue, runner.id).first<{ id: string }>();
+    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, nowValue, runner.id, nowValue, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();
   const claimed = await env.DB.prepare(`update creative_jobs set status = 'running', progress = max(progress, 5),
@@ -168,6 +177,52 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
   const upstreamId = boundedText(input.upstreamId, 120) || null;
   const stage = RUNNER_STAGES.has(input.stage as NonNullable<Job["executionStage"]>) ? input.stage as NonNullable<Job["executionStage"]> : null;
   const now = new Date();
+  if (input.promptEnhancement) {
+    const current = await jobById(env, runner.ownerId, jobId);
+    if (!current) throw new Error("job_not_found");
+    if (current.modality !== "music") throw new Error("song_prompt_enhancement_not_allowed");
+    const parameterId = boundedText(input.promptEnhancement.parameterId, 160);
+    const sourcePrompt = boundedText(input.promptEnhancement.sourcePrompt, 4_000);
+    const enhancedPrompt = boundedText(input.promptEnhancement.enhancedPrompt, 1_200);
+    const comfyPromptId = boundedText(input.promptEnhancement.comfyPromptId, 120);
+    const existing = current.settingsStamp.promptEnhancement;
+    const idempotent = existing?.comfyPromptId === comfyPromptId && existing.enhancedPrompt === enhancedPrompt;
+    const parameterSource = Object.prototype.hasOwnProperty.call(current.settingsStamp.parameters, parameterId)
+      ? boundedText(current.settingsStamp.parameters[parameterId], 4_000)
+      : "";
+    const sourceWordCount = sourcePrompt.split(/\s+/).filter(Boolean).length;
+    const enhancedWordCount = enhancedPrompt.split(/\s+/).filter(Boolean).length;
+    if (!idempotent && (!parameterId || sourcePrompt !== boundedText(current.settingsStamp.prompt, 4_000) || parameterSource !== sourcePrompt
+      || !comfyPromptId || sourceWordCount < 3 || enhancedWordCount < 12 || enhancedWordCount > 140)) {
+      throw new Error("invalid_song_prompt_enhancement");
+    }
+    if (!idempotent) {
+      const promptEnhancement = {
+        schemaVersion: "creative-studio-song-prompt-enhancement/1.0" as const,
+        sourcePrompt,
+        enhancedPrompt,
+        provider: "local-comfyui" as const,
+        workflowId: "gemma4-song-prompt-enhancer" as const,
+        workflowVersion: 1 as const,
+        model: "gemma4_e4b_it_fp8_scaled.safetensors" as const,
+        comfyPromptId,
+        sourceWordCount,
+        enhancedWordCount,
+        createdAt: now.toISOString(),
+      };
+      const settingsStamp = {
+        ...current.settingsStamp,
+        prompt: enhancedPrompt,
+        parameters: { ...current.settingsStamp.parameters, [parameterId]: enhancedPrompt },
+        promptEnhancement,
+      };
+      const updated = await env.DB.prepare(`update creative_jobs set prompt = ?, settings_stamp_json = ?, execution_stage = 'enhancing-prompt',
+        stage_updated_at = ?, updated_at = ? where id = ? and owner_id = ? and runner_id = ?
+        and execution_target = 'local-comfyui' and status = 'running'`)
+        .bind(enhancedPrompt, JSON.stringify(settingsStamp), now.toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id).run();
+      if (!updated.meta.changes) throw new Error("runner_job_not_completable");
+    }
+  }
   const [changed] = await env.DB.batch([
     env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?),
       execution_stage = coalesce(?, execution_stage), stage_updated_at = case when ? is null then stage_updated_at else ? end,

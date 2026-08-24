@@ -1073,6 +1073,113 @@ describe("Creative Studio Worker API", () => {
     expect([...new Uint8Array(await ranged.arrayBuffer())]).toEqual([80, 78]);
   });
 
+  it("requires Local Runner 1.6 and retains Gemma-enhanced song prompts as reusable evidence", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Song Prompt Study");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Violet pulse",
+      directive: "A patient violet atmosphere with fine internal motion and a deliberate human edge.",
+      targetModality: "music",
+    });
+    const { bucket } = memoryBucket();
+    const local = workerEnv("development", undefined, bucket);
+    const graph = JSON.stringify({
+      "1": { class_type: "MiniMaxMusic3TextEncode", inputs: {
+        caption: "Global Metadata: 112 BPM. Visual source translated into sound: patient violet light with fine internal motion. Vocal Details: If lyrics are supplied, use a close human vocal; otherwise remain instrumental. Arrangement: granular percussion, warm bass, suspended harmony, and a gradual final lift.",
+        lyrics: "", seed: 17, max_duration: 60, cfg: 4, steps: 24,
+      } },
+      "2": { class_type: "SaveAudio", inputs: { audio: ["1", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("minimax-music3-api.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("MiniMax Music 3"),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string; parameters: Array<{ id: string; label: string }> } } };
+    const caption = imported.workflow.currentRevision.parameters.find((parameter) => /caption/i.test(`${parameter.id} ${parameter.label}`));
+    expect(caption).toBeTruthy();
+    const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "music",
+        idempotencyKey: "runner_music_enhance_001",
+        workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id, inputBindings: {} },
+      }),
+    }), local)) as { job: { id: string; prompt: string; settingsStamp: { prompt: string; promptEnhancement?: unknown } } };
+
+    const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Song prompt runner" }),
+    }), local)) as { token: string };
+    const runnerHeaders = { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" };
+    await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.5.0", comfyUrl: "http://127.0.0.1:8188" }),
+    }), local);
+    const unsupported = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: unknown };
+    expect(unsupported.bundle).toBeNull();
+
+    await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.6.0", comfyUrl: "http://127.0.0.1:8188" }),
+    }), local);
+    const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { id: string } } };
+    expect(claimed.bundle.job.id).toBe(created.job.id);
+
+    const enhancedPrompt = "A 112 BPM instrumental built from granular percussion, warm bass, suspended violet harmony, fine high-frequency motion, restrained dynamics, spacious depth, and a gradual final lift with tactile human texture.";
+    const enhancement = {
+      schemaVersion: "creative-studio-song-prompt-enhancement/1.0",
+      sourcePrompt: created.job.prompt,
+      enhancedPrompt,
+      provider: "local-comfyui",
+      workflowId: "gemma4-song-prompt-enhancer",
+      workflowVersion: 1,
+      model: "gemma4_e4b_it_fp8_scaled.safetensors",
+      comfyPromptId: "comfy-gemma-song-001",
+      sourceWordCount: created.job.prompt.split(/\s+/).length,
+      enhancedWordCount: enhancedPrompt.split(/\s+/).length,
+      createdAt: new Date().toISOString(),
+      parameterId: caption!.id,
+    };
+    const enhanced = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 6, stage: "enhancing-prompt", promptEnhancement: enhancement }),
+    }), local)) as { job: { prompt: string; executionStage: string; settingsStamp: { prompt: string; parameters: Record<string, string>; promptEnhancement: { sourcePrompt: string; enhancedPrompt: string; sourceWordCount: number; enhancedWordCount: number } } } };
+    expect(enhanced.job).toMatchObject({ prompt: enhancedPrompt, executionStage: "enhancing-prompt" });
+    expect(enhanced.job.settingsStamp.prompt).toBe(enhancedPrompt);
+    expect(enhanced.job.settingsStamp.parameters[caption!.id]).toBe(enhancedPrompt);
+    expect(enhanced.job.settingsStamp.promptEnhancement).toMatchObject({
+      sourcePrompt: created.job.prompt,
+      enhancedPrompt,
+      sourceWordCount: created.job.prompt.split(/\s+/).length,
+      enhancedWordCount: enhancedPrompt.split(/\s+/).length,
+    });
+
+    const audioBytes = new Uint8Array([82, 73, 70, 70]);
+    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/complete`, {
+      method: "POST",
+      headers: { ...runnerHeaders, "content-type": "audio/wav", "x-cs-file-size": String(audioBytes.byteLength) },
+      body: audioBytes,
+    }), local);
+    expect(completed.status).toBe(200);
+    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as {
+      artifacts: Array<{ prompt: string; settingsStamp: { promptEnhancement?: { sourcePrompt: string; enhancedPrompt: string } } }>;
+    };
+    expect(history.artifacts[0]).toMatchObject({
+      prompt: enhancedPrompt,
+      settingsStamp: { promptEnhancement: { sourcePrompt: created.job.prompt, enhancedPrompt } },
+    });
+  });
+
   it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
     const ownerId = "development-angelo";
     const project = await testProject(ownerId, "Runner Study");
