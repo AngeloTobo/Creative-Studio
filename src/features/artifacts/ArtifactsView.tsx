@@ -3,6 +3,7 @@ import { compileCreativeTasteMemory, type Acceptance, type AcceptanceDecision, t
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ArtifactThumb } from "../../components/Visuals";
+import { orderArtifactHistory } from "./artifactHistory";
 
 type ReviewIntent = { artifact: Artifact; decision: AcceptanceDecision };
 
@@ -187,8 +188,7 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
   const [learnedSignals, setLearnedSignals] = useState<CreativeTasteSignal[]>([]);
   const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const studies = snapshot?.evolutionStudies?.filter((study) => study.projectId === activeProjectId) ?? [];
-  const groupedArtifactIds = new Set(studies.flatMap((study) => study.branches.flatMap((branch) => branch.artifactId ? [branch.artifactId] : [])));
-  const standaloneArtifacts = artifacts.filter((artifact) => !groupedArtifactIds.has(artifact.id));
+  const history = orderArtifactHistory(artifacts, studies);
   const projectTaste = snapshot?.tasteMemory?.projects[activeProjectId]?.taste;
   const artifactCounts = (["retaining", "ready", "accepted", "rejected", "archived"] as const)
     .map((status) => ({ status, count: artifacts.filter((artifact) => artifact.status === status).length }))
@@ -205,9 +205,10 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
       {projectTaste?.signalCount ? <details className="taste-memory-summary glass"><summary><span><Icon name="dna" size={16} /><strong>What Creative Studio has learned</strong></span><small>{projectTaste.signalCount} project signals · {snapshot?.tasteMemory?.personal.signalCount ?? 0} personal signals</small></summary><div><span><b>Preserve</b>{projectTaste.preserve[0]?.text ?? "No preserve signal yet"}</span><span><b>Redirect</b>{projectTaste.redirect[0]?.text ?? "No redirect signal yet"}</span><span><b>Avoid</b>{projectTaste.avoid[0]?.text ?? "No avoid signal yet"}</span></div></details> : null}
       <LearnedNotice signals={learnedSignals} onClose={() => setLearnedSignals([])} />
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
-      {studies.length ? <section className="evolution-studies" aria-label="Evolution studies"><header><span><span className="eyebrow">Grouped comparisons</span><h2>Evolution studies</h2></span><small>Refine · Correct · Discovery</small></header>{studies.map((study) => <EvolutionStudyGroup key={study.id} study={study} artifacts={artifacts} cardProps={{ onQueued, onInspect: setInspected, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve }} />)}</section> : null}
-      <div className="artifact-grid">
-        {standaloneArtifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} focused={focusArtifactId === artifact.id} />)}
+      <div className="artifact-grid" role="feed" aria-label="Artifact history, newest first">
+        {history.map((entry) => entry.kind === "study"
+          ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} cardProps={{ onQueued, onInspect: setInspected, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve }} />
+          : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} focused={focusArtifactId === entry.artifact.id} />)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
       </div>
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}

@@ -152,7 +152,7 @@ test("evolution results stay in one side-by-side study instead of repeating in a
 
   await page.goto("/#/gallery");
   const study = page.locator(".evolution-study");
-  await expect(page.getByRole("heading", { name: "Evolution studies" })).toBeVisible();
+  await expect(page.getByRole("feed", { name: "Artifact history, newest first" })).toBeVisible();
   await expect(study).toHaveCount(1);
   await expect(study.locator(".evolution-branch")).toHaveCount(3);
   await expect(study).toContainText("Refine");
