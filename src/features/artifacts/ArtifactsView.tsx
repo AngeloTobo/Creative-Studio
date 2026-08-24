@@ -15,6 +15,14 @@ function downloadName(artifact: Artifact) {
   return `${name || "creative-studio-artifact"}-${artifact.kind}`;
 }
 
+function compactArtifactPrompt(artifact: Artifact) {
+  const prompt = artifact.prompt.replace(/\s+/g, " ").trim();
+  if (prompt.length <= 320) return prompt;
+  const sentence = prompt.slice(0, 321);
+  const boundary = Math.max(sentence.lastIndexOf(". "), sentence.lastIndexOf("; "), sentence.lastIndexOf(", "));
+  return `${sentence.slice(0, boundary >= 180 ? boundary + 1 : 317).trim()}…`;
+}
+
 function ModalShell({ labelledBy, onClose, className = "", children }: { labelledBy: string; onClose: () => void; className?: string; children: ReactNode }) {
   const panel = useRef<HTMLElement>(null);
 
@@ -130,12 +138,12 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
       <ArtifactThumb artifact={artifact} playable />
       <div className="artifact-body">
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
-        <p>{artifact.prompt}</p>
+        <p>{compactArtifactPrompt(artifact)}</p>
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
         <ArtifactMediaReview artifact={artifact} onInspect={() => artifact.kind === "image" && onInspect(artifact)} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} />
         <DecisionHistory decisions={decisions} />
         <button className="lineage-toggle" onClick={() => setExpanded((value) => !value)}><Icon name="history" size={15} /> {expanded ? "Hide lineage" : "Show lineage"}</button>
-        {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span>{artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}{artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}{artifact.settingsStamp.promptEnhancement ? <><span>Song prompt <b>Gemma 4 enhanced</b> · {artifact.settingsStamp.promptEnhancement.sourceWordCount} → {artifact.settingsStamp.promptEnhancement.enhancedWordCount} words</span><small>authored direction · {artifact.settingsStamp.promptEnhancement.sourcePrompt}</small></> : null}<span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}
+        {expanded ? <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span>{artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}{artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}{artifact.settingsStamp.promptEnhancement ? <><span>Song prompt <b>{artifact.settingsStamp.promptEnhancement.targetModel ?? artifact.settingsStamp.workflow?.name ?? "selected model"}</b> · Gemma 4 · {artifact.settingsStamp.promptEnhancement.sourceWordCount} → {artifact.settingsStamp.promptEnhancement.enhancedWordCount} words</span><details className="lineage-prompt" open><summary>Exact caption sent to the music model</summary><pre>{artifact.settingsStamp.promptEnhancement.enhancedPrompt}</pre></details><details className="lineage-prompt"><summary>Authored brief before Gemma formatting · lineage only</summary><p>{artifact.settingsStamp.promptEnhancement.sourcePrompt}</p></details></> : null}<span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div> : null}
         <div className="artifact-actions">
           <button className="btn artifact-evolve" disabled={busy || artifact.status === "retaining"} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>
           <button className="btn btn-ghost artifact-reuse" disabled={busy || artifact.status === "retaining"} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>

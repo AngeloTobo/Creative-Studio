@@ -16,6 +16,7 @@ import {
   formatGenerationDuration,
   generationProviderWorkloadProfile,
   musicWorkflowLyricsParameter,
+  musicWorkflowPromptProfile,
   primaryWorkflowPromptParameter,
   workflowRuntimeHistory,
   type Artifact,
@@ -236,6 +237,7 @@ export function GenerationView({
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
   const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null);
   const workflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? preferredWorkflow;
+  const musicPromptProfile = generationIntent === "music" && workflow ? musicWorkflowPromptProfile(workflow) : null;
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
   const scalarParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind !== "media") ?? [];
   const bindingSource = videoOperation && quickSource ? { ...quickSource, kind: "image" as const } : quickSource;
@@ -425,6 +427,7 @@ export function GenerationView({
             personalTaste,
             projectTaste: projectTasteMemory.taste,
             dimensions: dna.shared,
+            modality: generationIntent,
           });
           const values: Record<string, WorkflowScalar> = { [workflowPromptParameter.id]: prompt };
           const variant = generationIntent === "video"
@@ -543,7 +546,7 @@ export function GenerationView({
   const primaryLabel = generationIntent === "image" && workflow
     ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
     : generationIntent === "music" && workflow
-      ? `${basePrimaryLabel} · Gemma-enhanced`
+      ? `${basePrimaryLabel} · model-tuned`
       : basePrimaryLabel;
 
   return (
@@ -563,7 +566,7 @@ export function GenerationView({
 
         {evolutionEnabled && initialEvolutionSource ? <section className="evolution-create-plan" aria-label="Evolution study">
           <header><span><Icon name="star" size={16} /><strong>Evolve {initialEvolutionSource.name}</strong></span><button type="button" className="link-btn" onClick={() => setEvolutionEnabled(false)}>Use as a normal source</button></header>
-          <p>One request creates three retained branches with the same source, canon, taste evidence, model settings, and study stamp. Switch Image, Video, or Song to add another medium to this study.</p>
+          <p>One request creates three retained branches with the same source, taste evidence, model settings, and study stamp. Project canon stays in lineage; song prompts use only music-specific evidence.</p>
           <div><span><b>Refine</b><small>strengthen what already works</small></span><span><b>Correct</b><small>resolve review feedback</small></span><span><b>Discovery</b><small>take a distinct new path</small></span></div>
           <footer><span>{projectTasteMemory?.taste.signalCount ?? 0} project signals</span><span>{personalTaste?.signalCount ?? 0} personal signals</span><span>{projectTasteMemory?.canon.identity ? "Canon attached" : "Add canon in Projects"}</span></footer>
         </section> : null}
@@ -573,6 +576,7 @@ export function GenerationView({
           {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
             {intentWorkflows.map((item) => <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}</small></span></button>)}
           </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
+          {musicPromptProfile ? <small className="quick-model-prompt-profile">Gemma formats this for {musicPromptProfile.targetModel}: {musicPromptProfile.outputFormat === "structured-caption" ? "Global Metadata + Vocal Details + section-by-section Arrangement" : "one concise natural-language audio prompt"}.</small> : null}
         </div> : null}
 
         {generationIntent === "image" && workflow ? <div className={`quick-image-speed${fastImageBlocked ? " blocked" : ""}`}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkflowValues, inspectWorkflowGraph, primaryWorkflowPromptParameter } from "../../shared/contracts";
+import { applyWorkflowValues, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter } from "../../shared/contracts";
 
 describe("ComfyUI workflow inspection", () => {
   it("recognizes API prompt graphs and exposes only safe scalar controls", () => {
@@ -61,5 +61,18 @@ describe("ComfyUI workflow inspection", () => {
       "3": { class_type: "SaveImage", inputs: { images: ["4", 0] } },
     });
     expect(primaryWorkflowPromptParameter(inspection.parameters, "image")?.id).toBe("1::text");
+  });
+
+  it("selects different prompt contracts for MiniMax Music 3 and Stable Audio", () => {
+    expect(musicPromptProfileForIdentity({
+      name: "MiniMax Music 3",
+      models: ["minimax_music3_dit_fp16.safetensors"],
+      parameters: [{ id: "37:13::caption", label: "Caption" }],
+    })).toMatchObject({ id: "minimax-music-3-structured-caption/1.0", outputFormat: "structured-caption" });
+    expect(musicPromptProfileForIdentity({
+      name: "Stable Audio 3 Medium",
+      models: ["stable_audio_3_medium.safetensors", "t5gemma_b_b_ul2.safetensors"],
+      parameters: [{ id: "12::value", label: "Music prompt" }],
+    })).toMatchObject({ id: "stable-audio-natural-language/1.0", outputFormat: "natural-language" });
   });
 });

@@ -55,6 +55,61 @@ export type WorkflowGraphInspection = {
   models: string[];
 };
 
+export type MusicPromptProfile = {
+  id: import("./domain").SongPromptProfileId;
+  label: string;
+  targetModel: string;
+  outputFormat: "structured-caption" | "natural-language";
+};
+
+export function musicPromptProfileForIdentity(input: {
+  name?: string | null;
+  description?: string | null;
+  sourceFileName?: string | null;
+  models?: string[];
+  parameters?: Array<Pick<WorkflowParameter, "id" | "label">>;
+}): MusicPromptProfile {
+  const identity = [
+    input.name,
+    input.description,
+    input.sourceFileName,
+    ...(input.models ?? []),
+    ...(input.parameters ?? []).flatMap((parameter) => [parameter.id, parameter.label]),
+  ].join(" ").toLowerCase();
+  if (/minimax[^\n]*music\s*3|music\s*3[^\n]*minimax|minimax_music3|minimaxmusic3/.test(identity)) {
+    return {
+      id: "minimax-music-3-structured-caption/1.0",
+      label: "MiniMax Music 3 structured caption",
+      targetModel: "MiniMax Music 3",
+      outputFormat: "structured-caption",
+    };
+  }
+  if (/stable[_ .-]*audio|stable_audio/.test(identity)) {
+    return {
+      id: "stable-audio-natural-language/1.0",
+      label: "Stable Audio natural-language prompt",
+      targetModel: "Stable Audio",
+      outputFormat: "natural-language",
+    };
+  }
+  return {
+    id: "generic-music-natural-language/1.0",
+    label: "Model-ready music prompt",
+    targetModel: "Selected music model",
+    outputFormat: "natural-language",
+  };
+}
+
+export function musicWorkflowPromptProfile(workflow: Pick<WorkflowDefinition, "name" | "description" | "sourceFileName" | "currentRevision">): MusicPromptProfile {
+  return musicPromptProfileForIdentity({
+    name: workflow.name,
+    description: workflow.description,
+    sourceFileName: workflow.sourceFileName,
+    models: workflow.currentRevision.models,
+    parameters: workflow.currentRevision.parameters,
+  });
+}
+
 export function primaryWorkflowPromptParameter(parameters: WorkflowParameter[], modality?: WorkflowModality | "image" | "music" | "video") {
   const candidates = parameters.filter((parameter) => {
     if (parameter.kind !== "text") return false;

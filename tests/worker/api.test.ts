@@ -1073,7 +1073,7 @@ describe("Creative Studio Worker API", () => {
     expect([...new Uint8Array(await ranged.arrayBuffer())]).toEqual([80, 78]);
   });
 
-  it("requires Local Runner 1.6 and retains Gemma-enhanced song prompts as reusable evidence", async () => {
+  it("requires Local Runner 1.7 and retains model-profiled Gemma song prompts as reusable evidence", async () => {
     const ownerId = "development-angelo";
     const project = await testProject(ownerId, "Song Prompt Study");
     const dna = await createLocalDna(env, ownerId, {
@@ -1129,16 +1129,21 @@ describe("Creative Studio Worker API", () => {
     expect(unsupported.bundle).toBeNull();
 
     await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
-      method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.6.0", comfyUrl: "http://127.0.0.1:8188" }),
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.7.0", comfyUrl: "http://127.0.0.1:8188" }),
     }), local);
     const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
     }), local)) as { bundle: { job: { id: string } } };
     expect(claimed.bundle.job.id).toBe(created.job.id);
 
-    const enhancedPrompt = "A 112 BPM instrumental built from granular percussion, warm bass, suspended violet harmony, fine high-frequency motion, restrained dynamics, spacious depth, and a gradual final lift with tactile human texture.";
+    const section = (lead: string) => `${lead} ${Array.from({ length: 62 }, (_, index) => `musical${index + 1}`).join(" ")}.`;
+    const enhancedPrompt = `### Global Metadata\n${section("A measured 112 BPM electronic instrumental")}
+
+### Vocal Details\n${section("Instrumental lead texture with no singer")}
+
+### Arrangement\n${section("The opening develops through contrast, peak, return, and ending")}`;
     const enhancement = {
-      schemaVersion: "creative-studio-song-prompt-enhancement/1.0",
+      schemaVersion: "creative-studio-song-prompt-enhancement/1.1",
       sourcePrompt: created.job.prompt,
       enhancedPrompt,
       provider: "local-comfyui",
@@ -1150,6 +1155,9 @@ describe("Creative Studio Worker API", () => {
       enhancedWordCount: enhancedPrompt.split(/\s+/).length,
       createdAt: new Date().toISOString(),
       parameterId: caption!.id,
+      promptProfileId: "minimax-music-3-structured-caption/1.0",
+      targetModel: "MiniMax Music 3",
+      outputFormat: "structured-caption",
     };
     const enhanced = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
       method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 6, stage: "enhancing-prompt", promptEnhancement: enhancement }),
@@ -1162,6 +1170,9 @@ describe("Creative Studio Worker API", () => {
       enhancedPrompt,
       sourceWordCount: created.job.prompt.split(/\s+/).length,
       enhancedWordCount: enhancedPrompt.split(/\s+/).length,
+      promptProfileId: "minimax-music-3-structured-caption/1.0",
+      targetModel: "MiniMax Music 3",
+      outputFormat: "structured-caption",
     });
 
     const audioBytes = new Uint8Array([82, 73, 70, 70]);

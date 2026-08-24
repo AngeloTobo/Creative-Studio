@@ -4,6 +4,7 @@ import type {
   RunnerHeartbeatRequest,
   RunnerJobHeartbeatRequest,
 } from "../shared/contracts";
+import { musicPromptProfileForIdentity } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
 import { completeLocalRunnerJob, jobById, retainLocalRunnerVideoThumbnail, runnerInputById } from "./repository";
 import type { Env } from "./types";
@@ -43,7 +44,7 @@ export function supportsSongPromptEnhancement(version: string | null) {
   if (!match) return false;
   const major = Number(match[1]);
   const minor = Number(match[2]);
-  return major > 1 || (major === 1 && minor >= 6);
+  return major > 1 || (major === 1 && minor >= 7);
 }
 
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
@@ -183,8 +184,22 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
     if (current.modality !== "music") throw new Error("song_prompt_enhancement_not_allowed");
     const parameterId = boundedText(input.promptEnhancement.parameterId, 160);
     const sourcePrompt = boundedText(input.promptEnhancement.sourcePrompt, 4_000);
-    const enhancedPrompt = boundedText(input.promptEnhancement.enhancedPrompt, 1_200);
+    const enhancedPrompt = String(input.promptEnhancement.enhancedPrompt ?? "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\t ]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+      .slice(0, 8_000);
     const comfyPromptId = boundedText(input.promptEnhancement.comfyPromptId, 120);
+    const schemaVersion = boundedText(input.promptEnhancement.schemaVersion, 80);
+    const promptProfileId = boundedText(input.promptEnhancement.promptProfileId, 100);
+    const targetModel = boundedText(input.promptEnhancement.targetModel, 100);
+    const outputFormat = boundedText(input.promptEnhancement.outputFormat, 40);
+    const expectedProfile = musicPromptProfileForIdentity({
+      name: current.settingsStamp.workflow?.name,
+      models: current.settingsStamp.models,
+      parameters: Object.keys(current.settingsStamp.parameters).map((parameterId) => ({ id: parameterId, label: parameterId })),
+    });
     const existing = current.settingsStamp.promptEnhancement;
     const idempotent = existing?.comfyPromptId === comfyPromptId && existing.enhancedPrompt === enhancedPrompt;
     const parameterSource = Object.prototype.hasOwnProperty.call(current.settingsStamp.parameters, parameterId)
@@ -192,13 +207,22 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
       : "";
     const sourceWordCount = sourcePrompt.split(/\s+/).filter(Boolean).length;
     const enhancedWordCount = enhancedPrompt.split(/\s+/).filter(Boolean).length;
+    const validLength = expectedProfile.outputFormat === "structured-caption"
+      ? enhancedWordCount >= 180 && enhancedWordCount <= 475
+      : enhancedWordCount >= 12 && enhancedWordCount <= 100;
+    const validStructuredCaption = expectedProfile.outputFormat !== "structured-caption"
+      || (/^### Global Metadata\s*\n/i.test(enhancedPrompt)
+        && /\n\s*### Vocal Details\s*\n/i.test(enhancedPrompt)
+        && /\n\s*### Arrangement\s*\n/i.test(enhancedPrompt));
     if (!idempotent && (!parameterId || sourcePrompt !== boundedText(current.settingsStamp.prompt, 4_000) || parameterSource !== sourcePrompt
-      || !comfyPromptId || sourceWordCount < 3 || enhancedWordCount < 12 || enhancedWordCount > 140)) {
+      || !comfyPromptId || schemaVersion !== "creative-studio-song-prompt-enhancement/1.1"
+      || promptProfileId !== expectedProfile.id || targetModel !== expectedProfile.targetModel || outputFormat !== expectedProfile.outputFormat
+      || sourceWordCount < 3 || !validLength || !validStructuredCaption)) {
       throw new Error("invalid_song_prompt_enhancement");
     }
     if (!idempotent) {
       const promptEnhancement = {
-        schemaVersion: "creative-studio-song-prompt-enhancement/1.0" as const,
+        schemaVersion: "creative-studio-song-prompt-enhancement/1.1" as const,
         sourcePrompt,
         enhancedPrompt,
         provider: "local-comfyui" as const,
@@ -209,6 +233,9 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
         sourceWordCount,
         enhancedWordCount,
         createdAt: now.toISOString(),
+        promptProfileId: expectedProfile.id,
+        targetModel: expectedProfile.targetModel,
+        outputFormat: expectedProfile.outputFormat,
       };
       const settingsStamp = {
         ...current.settingsStamp,

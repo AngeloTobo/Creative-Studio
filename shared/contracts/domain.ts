@@ -115,8 +115,13 @@ export type GenerationSettingsStamp = {
   promptEnhancement?: SongPromptEnhancementStamp;
 };
 
+export type SongPromptProfileId =
+  | "minimax-music-3-structured-caption/1.0"
+  | "stable-audio-natural-language/1.0"
+  | "generic-music-natural-language/1.0";
+
 export type SongPromptEnhancementStamp = {
-  schemaVersion: "creative-studio-song-prompt-enhancement/1.0";
+  schemaVersion: "creative-studio-song-prompt-enhancement/1.0" | "creative-studio-song-prompt-enhancement/1.1";
   sourcePrompt: string;
   enhancedPrompt: string;
   provider: "local-comfyui";
@@ -127,6 +132,9 @@ export type SongPromptEnhancementStamp = {
   sourceWordCount: number;
   enhancedWordCount: number;
   createdAt: IsoDateString;
+  promptProfileId?: SongPromptProfileId;
+  targetModel?: string;
+  outputFormat?: "structured-caption" | "natural-language";
 };
 
 export type EvolutionRole = "refine" | "correct" | "discovery";

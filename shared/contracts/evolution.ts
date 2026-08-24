@@ -9,6 +9,7 @@ import type {
   CreativeTasteSignalKind,
   EvolutionRole,
   EvolutionStudy,
+  GenerationModality,
   Job,
   Project,
   ProjectCanon,
@@ -163,8 +164,12 @@ export function deriveEvolutionStudies(jobs: Job[], artifacts: Artifact[]): Evol
   return [...studies.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
-function notes(signals: CreativeTasteSignal[], count: number) {
-  return [...new Map(signals.filter((signal) => signal.providerPromptEligible).map((signal) => [signal.id, signal])).values()].slice(0, count).map((signal) => signal.text).join("; ");
+function notes(signals: CreativeTasteSignal[], count: number, modality: GenerationModality) {
+  const lowInformation = /^(?:\d+\s*seconds?\s+(?:on\s+)?)?(?:yes\s+)?(?:it(?:['’]s| is)\s+)?(?:a\s+)?(?:good|great|fine|okay|ok|interesting|nice|successful|works?)(?:\s+(?:one|spin|result))?[.!]?$/i;
+  return [...new Map(signals
+    .filter((signal) => signal.providerPromptEligible && signal.modality === modality && !lowInformation.test(signal.text.trim()))
+    .map((signal) => [signal.id, signal])).values()]
+    .slice(0, count).map((signal) => signal.text).join("; ");
 }
 
 function discoveryLanguage(dimensions: CreativeDnaDimensions) {
@@ -174,6 +179,13 @@ function discoveryLanguage(dimensions: CreativeDnaDimensions) {
   return `${scale}; ${motion}; ${surface}`;
 }
 
+function musicDiscoveryLanguage(dimensions: CreativeDnaDimensions) {
+  const pulse = dimensions.rhythmicity >= 55 ? "a transformed groove with one deliberate rhythmic interruption" : "a free opening that resolves into one unmistakable pulse";
+  const space = dimensions.spaciousness >= 55 ? "a broad spatial field collapsing briefly into dry intimacy" : "close dry detail opening into one expansive section";
+  const texture = dimensions.organicity >= 55 ? "tactile acoustic texture countered by one precise electronic voice" : "precise electronic texture countered by one tactile acoustic voice";
+  return `${pulse}; ${space}; ${texture}`;
+}
+
 export function evolutionBranchPrompt(input: {
   basePrompt: string;
   role: EvolutionRole;
@@ -181,13 +193,19 @@ export function evolutionBranchPrompt(input: {
   personalTaste: CreativeTasteProfile;
   projectTaste: CreativeTasteProfile;
   dimensions: CreativeDnaDimensions;
+  modality: GenerationModality;
 }) {
   const base = clean(input.basePrompt, 2_600);
-  const identity = input.canon.identity ? `Subject and world continuity: ${input.canon.identity}.` : "";
-  const direction = input.canon.currentDirection ? `Current piece direction: ${input.canon.currentDirection}.` : "";
-  const preserve = notes([...input.projectTaste.preserve, ...input.personalTaste.preserve], 3);
-  const redirect = notes([...input.projectTaste.redirect, ...input.personalTaste.redirect], 3);
-  const avoid = notes([...input.projectTaste.avoid, ...input.personalTaste.avoid], 3);
+  const identity = input.modality !== "music" && input.canon.identity ? `Subject and world continuity: ${input.canon.identity}.` : "";
+  const direction = input.modality !== "music" && input.canon.currentDirection ? `Current piece direction: ${input.canon.currentDirection}.` : "";
+  const preserve = notes([...input.projectTaste.preserve, ...input.personalTaste.preserve], 3, input.modality);
+  const redirect = notes([...input.projectTaste.redirect, ...input.personalTaste.redirect], 3, input.modality);
+  const avoid = notes([...input.projectTaste.avoid, ...input.personalTaste.avoid], 3, input.modality);
+  if (input.modality === "music") {
+    if (input.role === "refine") return clean(`${base}. ${preserve ? `Preserve these proven musical qualities: ${preserve}.` : ""} Strengthen groove, motif continuity, instrument entrances and exits, section transitions, and mix coherence.`, 4_000);
+    if (input.role === "correct") return clean(`${base}. ${redirect ? `Resolve this musical feedback: ${redirect}.` : ""} ${avoid ? `Exclude these failed musical qualities: ${avoid}.` : ""}`, 4_000);
+    return clean(`${base}. Build a distinct musical interpretation through ${musicDiscoveryLanguage(input.dimensions)}. ${preserve ? `Retain only these proven musical qualities: ${preserve}.` : ""}`, 4_000);
+  }
   if (input.role === "refine") return clean(`${base}. ${identity} ${direction} ${preserve ? `Preserve these proven qualities: ${preserve}.` : ""} Increase coherence, material specificity, and focal clarity.`, 4_000);
   if (input.role === "correct") return clean(`${base}. ${identity} ${direction} ${redirect ? `Resolve this feedback: ${redirect}.` : ""} ${avoid ? `Exclude these failed qualities: ${avoid}.` : ""}`, 4_000);
   return clean(`${base}. ${identity} ${direction} A distinct interpretation with ${discoveryLanguage(input.dimensions)}. ${preserve ? `Retain only the essential continuity: ${preserve}.` : ""}`, 4_000);

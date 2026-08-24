@@ -63,7 +63,7 @@ describe("Creative Studio taste memory and evolution", () => {
       projects: [project], artifacts: [work], trainingReviews: [],
       acceptances: [{ id: "accept_prompt", artifactId: work.id, decision: "accepted", note: "Keep the fine internal texture, but the silhouette needs more clarity.", actor: "angelo", createdAt: work.createdAt }],
     });
-    const common = { basePrompt: work.prompt, canon: memory.projects[project.id].canon, personalTaste: memory.personal, projectTaste: memory.projects[project.id].taste, dimensions: { energy: 60, tension: 50, contrast: 70, warmth: 30, spaciousness: 80, rhythmicity: 50, organicity: 65, polish: 70 } } as const;
+    const common = { basePrompt: work.prompt, canon: memory.projects[project.id].canon, personalTaste: memory.personal, projectTaste: memory.projects[project.id].taste, dimensions: { energy: 60, tension: 50, contrast: 70, warmth: 30, spaciousness: 80, rhythmicity: 50, organicity: 65, polish: 70 }, modality: "image" } as const;
     const refine = evolutionBranchPrompt({ ...common, role: "refine" });
     const correct = evolutionBranchPrompt({ ...common, role: "correct" });
     const discovery = evolutionBranchPrompt({ ...common, role: "discovery" });
@@ -73,6 +73,34 @@ describe("Creative Studio taste memory and evolution", () => {
     expect(discovery).toContain("wide negative space");
     expect(new Set([refine, correct, discovery]).size).toBe(3);
     expect(refine.toLowerCase()).not.toContain("create an original image");
+  });
+
+  it("keeps music evolution musical and excludes project canon plus visual review language", () => {
+    const visual = artifact("artifact_visual_feedback");
+    const music = artifact("artifact_music_feedback");
+    music.kind = "music";
+    music.prompt = "118 BPM instrumental with hybrid drums, tactile bass, and processed keys.";
+    const memory = compileCreativeTasteMemory({
+      projects: [project], artifacts: [visual, music], trainingReviews: [],
+      acceptances: [
+        { id: "accept_visual", artifactId: visual.id, decision: "accepted", note: "Keep the wide crop and synthetic surface.", actor: "angelo", createdAt: visual.createdAt },
+        { id: "accept_music", artifactId: music.id, decision: "accepted", note: "Keep the tactile bass groove and decisive dynamic drop.", actor: "angelo", createdAt: "2026-08-23T02:00:00.000Z" },
+      ],
+    });
+    const prompt = evolutionBranchPrompt({
+      basePrompt: music.prompt,
+      role: "discovery",
+      canon: memory.projects[project.id].canon,
+      personalTaste: memory.personal,
+      projectTaste: memory.projects[project.id].taste,
+      dimensions: { energy: 60, tension: 50, contrast: 70, warmth: 30, spaciousness: 80, rhythmicity: 50, organicity: 35, polish: 70 },
+      modality: "music",
+    });
+
+    expect(prompt).toContain("tactile bass groove");
+    expect(prompt).toContain("distinct musical interpretation");
+    expect(prompt).not.toContain(project.description);
+    expect(prompt).not.toMatch(/wide crop|synthetic surface|Subject and world continuity|Current piece direction/i);
   });
 
   it("groups durable jobs and retained artifacts by their stamped evolution study", () => {
@@ -98,7 +126,7 @@ describe("Creative Studio taste memory and evolution", () => {
     });
     const signal = memory.personal.preserve[0];
     expect(signal).toMatchObject({ text: "Keep the named commercial artist identity", providerPromptEligible: false });
-    const prompt = evolutionBranchPrompt({ basePrompt: work.prompt, role: "refine", canon: memory.projects[project.id].canon, personalTaste: memory.personal, projectTaste: memory.projects[project.id].taste, dimensions: { energy: 60, tension: 50, contrast: 70, warmth: 30, spaciousness: 80, rhythmicity: 50, organicity: 65, polish: 70 } });
+    const prompt = evolutionBranchPrompt({ basePrompt: work.prompt, role: "refine", canon: memory.projects[project.id].canon, personalTaste: memory.personal, projectTaste: memory.projects[project.id].taste, dimensions: { energy: 60, tension: 50, contrast: 70, warmth: 30, spaciousness: 80, rhythmicity: 50, organicity: 65, polish: 70 }, modality: "image" });
     expect(prompt).not.toContain("commercial artist identity");
   });
 });
