@@ -15,6 +15,7 @@ import {
   fastImageParameterOverrides,
   formatGenerationDuration,
   generationProviderWorkloadProfile,
+  generationWorkflowPromptParameters,
   musicWorkflowLyricsParameter,
   musicWorkflowPromptProfile,
   primaryWorkflowPromptParameter,
@@ -246,14 +247,18 @@ export function GenerationView({
     ? { ...videoOperation, sourceId: quickSource.id, source: quickSource.source } satisfies VideoGenerationOperation
     : null;
   const effectiveValues = workflow && valuesRevisionId === workflow.currentRevision.id ? workflowValues : {};
+  const workflowPromptParameters = generationWorkflowPromptParameters(scalarParameters);
   const workflowPromptParameter = primaryWorkflowPromptParameter(scalarParameters, workflow?.modality);
+  const workflowPromptParameterIds = new Set(workflowPromptParameters.map((parameter) => parameter.id));
   const workflowLyricsParameter = musicWorkflowLyricsParameter(scalarParameters, workflow?.modality);
   const workflowSeedParameter = generationIntent === "video"
     ? scalarParameters.find((parameter) => parameter.kind === "number" && /(?:^|\b|::)(?:noise_)?seed(?:\b|$)/i.test(`${parameter.id} ${parameter.label} ${parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : ""}`)) ?? null
     : null;
   const rawParameterValue = (parameter: WorkflowParameter) => parameter.id === workflowLyricsParameter?.id
     ? lyrics
-    : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues);
+    : workflowPromptParameterIds.has(parameter.id)
+      ? direction.trim()
+      : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues);
   const fastImageOverrides = generationIntent === "image" && imagePerformanceMode === "fast-default"
     ? fastImageParameterOverrides(scalarParameters.map((parameter) => ({ ...parameter, value: rawParameterValue(parameter) })))
     : {};
@@ -429,7 +434,7 @@ export function GenerationView({
             dimensions: dna.shared,
             modality: generationIntent,
           });
-          const values: Record<string, WorkflowScalar> = { [workflowPromptParameter.id]: prompt };
+          const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
           const variant = generationIntent === "video"
             ? role === "discovery" ? videoVersions?.[1].variant : videoVersions?.[0].variant
             : undefined;
@@ -445,6 +450,7 @@ export function GenerationView({
           await submitWorkflowJob(
             branchWorkflow,
             effectiveInputBindings,
+            prompt,
             dna.artifactId,
             effectiveVideoOperation ?? undefined,
             generationIntent === "image" ? imagePerformanceMode : undefined,
@@ -459,7 +465,7 @@ export function GenerationView({
       }
       if (videoVersions && workflowPromptParameter) {
         const [aligned, discovery] = videoVersions;
-        const discoveryValues: Record<string, WorkflowScalar> = { [workflowPromptParameter.id]: discovery.prompt };
+        const discoveryValues: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, discovery.prompt]));
         if (workflowSeedParameter && discovery.variant.seed !== null) discoveryValues[workflowSeedParameter.id] = discovery.variant.seed;
         const discoveryWorkflow = await saveWorkflowRevision(
           runWorkflow.id,
@@ -471,6 +477,7 @@ export function GenerationView({
         await submitWorkflowJob(
           runWorkflow,
           effectiveInputBindings,
+          direction.trim(),
           dna.artifactId,
           effectiveVideoOperation ?? undefined,
           undefined,
@@ -479,6 +486,7 @@ export function GenerationView({
         await submitWorkflowJob(
           discoveryWorkflow,
           effectiveInputBindings,
+          discovery.prompt,
           dna.artifactId,
           effectiveVideoOperation ?? undefined,
           undefined,
@@ -492,6 +500,7 @@ export function GenerationView({
       await submitWorkflowJob(
         runWorkflow,
         effectiveInputBindings,
+        direction.trim(),
         dna.artifactId,
         effectiveVideoOperation ?? undefined,
         generationIntent === "image" ? imagePerformanceMode : undefined,

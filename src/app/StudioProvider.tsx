@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { primaryWorkflowPromptParameter } from "../../shared/contracts";
 import type {
   AcceptanceDecision,
   CreateProjectRequest,
@@ -42,7 +43,7 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPrompt: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => Promise<void>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -212,18 +213,23 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => {
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPromptValue: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
     const modality: GenerationModality = workflow.modality === "audio" || workflow.modality === "music" ? "music" : workflow.modality === "video" ? "video" : "image";
     if (workflow.modality === "3d") throw new Error("workflow_modality_not_supported");
+    const promptParameter = primaryWorkflowPromptParameter(workflow.currentRevision.parameters, workflow.modality);
+    const workflowPrompt = String(promptParameter?.value ?? "").trim();
+    const expectedPrompt = expectedPromptValue.trim();
+    if (!workflowPrompt || !expectedPrompt) throw new Error("workflow_positive_prompt_missing");
+    if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
     await transact(() => adapter.submitJob({
       projectId: activeProjectId,
       dnaArtifactId: dnaId,
       modality,
       idempotencyKey: operationKey("workflow"),
-      workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings },
+      workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings, expectedPrompt },
       performanceMode,
       videoVariant,
       videoOperation,

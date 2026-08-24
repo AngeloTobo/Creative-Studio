@@ -151,6 +151,7 @@ export type SubmitJobRequest = {
     workflowId: string;
     revisionId: string;
     inputBindings: Record<string, string>;
+    expectedPrompt: string;
   };
   performanceMode?: ImagePerformanceMode;
   videoVariant?: VideoGenerationVariant;

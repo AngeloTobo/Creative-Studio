@@ -713,6 +713,26 @@ describe("Creative Studio Worker API", () => {
       directive: "A precise silver object isolated against a dark studio background.",
       targetModality: "image",
     });
+    const mismatchedPromptJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify({
+        projectId: secondProject.id,
+        dnaArtifactId: secondDna.artifactId,
+        modality: "image",
+        performanceMode: "explicit-custom",
+        idempotencyKey: "shared_owner_prompt_guard_001",
+        workflow: {
+          workflowId: importedPayload.workflow.id,
+          revisionId: revisedPayload.workflow.currentRevision.id,
+          inputBindings: {},
+          expectedPrompt: "A different authored direction",
+        },
+      }),
+    }), local);
+    expect(mismatchedPromptJob.status).toBe(400);
+    expect(await result(mismatchedPromptJob)).toMatchObject({ error: "workflow_prompt_confirmation_mismatch" });
+
     const blockedFastJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
@@ -725,6 +745,7 @@ describe("Creative Studio Worker API", () => {
           workflowId: importedPayload.workflow.id,
           revisionId: revisedPayload.workflow.currentRevision.id,
           inputBindings: {},
+          expectedPrompt: "A chrome object in warm light",
         },
       }),
     }), local);
@@ -744,6 +765,7 @@ describe("Creative Studio Worker API", () => {
           workflowId: importedPayload.workflow.id,
           revisionId: revisedPayload.workflow.currentRevision.id,
           inputBindings: {},
+          expectedPrompt: "A chrome object in warm light",
         },
       }),
     }), local);
@@ -1084,9 +1106,10 @@ describe("Creative Studio Worker API", () => {
     });
     const { bucket } = memoryBucket();
     const local = workerEnv("development", undefined, bucket);
+    const musicPrompt = "Global Metadata: 112 BPM. Visual source translated into sound: patient violet light with fine internal motion. Vocal Details: If lyrics are supplied, use a close human vocal; otherwise remain instrumental. Arrangement: granular percussion, warm bass, suspended harmony, and a gradual final lift.";
     const graph = JSON.stringify({
       "1": { class_type: "MiniMaxMusic3TextEncode", inputs: {
-        caption: "Global Metadata: 112 BPM. Visual source translated into sound: patient violet light with fine internal motion. Vocal Details: If lyrics are supplied, use a close human vocal; otherwise remain instrumental. Arrangement: granular percussion, warm bass, suspended harmony, and a gradual final lift.",
+        caption: musicPrompt,
         lyrics: "", seed: 17, max_duration: 60, cfg: 4, steps: 24,
       } },
       "2": { class_type: "SaveAudio", inputs: { audio: ["1", 0] } },
@@ -1112,7 +1135,7 @@ describe("Creative Studio Worker API", () => {
         dnaArtifactId: dna.artifactId,
         modality: "music",
         idempotencyKey: "runner_music_enhance_001",
-        workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id, inputBindings: {} },
+        workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id, inputBindings: {}, expectedPrompt: musicPrompt },
       }),
     }), local)) as { job: { id: string; prompt: string; settingsStamp: { prompt: string; promptEnhancement?: unknown } } };
 
@@ -1265,6 +1288,7 @@ describe("Creative Studio Worker API", () => {
           workflowId: imported.workflow.id,
           revisionId: imported.workflow.currentRevision.id,
           inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+          expectedPrompt: "Original H3 motion prompt",
         },
         videoVariant: alignedVideoVariant,
         evolution: {
@@ -1355,6 +1379,7 @@ describe("Creative Studio Worker API", () => {
           workflowId: imported.workflow.id,
           revisionId: imported.workflow.currentRevision.id,
           inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
+          expectedPrompt: "Original H3 motion prompt",
         },
         videoOperation: {
           kind: "extend",
@@ -1394,6 +1419,7 @@ describe("Creative Studio Worker API", () => {
     const remixGraph = JSON.stringify({
       "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },
       "11": { class_type: "SaveVideo", inputs: { video: ["10", 0] } },
+      "12": { class_type: "PrimitiveStringMultiline", inputs: { value: "Continue the retained motion study" }, _meta: { title: "Prompt" } },
     });
     const remixWorkflow = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
       method: "POST",
@@ -1420,6 +1446,7 @@ describe("Creative Studio Worker API", () => {
           workflowId: remixWorkflow.workflow.id,
           revisionId: remixWorkflow.workflow.currentRevision.id,
           inputBindings: { [videoInput!.id]: history.artifacts[0].id },
+          expectedPrompt: "Continue the retained motion study",
         },
       }),
     }), local)) as { job: { id: string; settingsStamp: { inputAssetIds: string[]; inputArtifactIds: string[]; inputSources: Array<{ id: string; source: string }> } } };

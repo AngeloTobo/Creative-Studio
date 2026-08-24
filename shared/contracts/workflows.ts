@@ -2,6 +2,7 @@ export type WorkflowFormat = "comfyui-api" | "comfyui-ui";
 export type WorkflowModality = "image" | "audio" | "music" | "video" | "3d";
 export type WorkflowScalar = string | number | boolean;
 export type WorkflowParameterKind = "text" | "number" | "boolean" | "choice" | "media";
+export type WorkflowPromptRole = "positive" | "negative" | "lyrics" | "system" | "unknown";
 
 export type WorkflowParameterBinding =
   | { format: "comfyui-api"; nodeId: string; inputName: string }
@@ -13,6 +14,7 @@ export type WorkflowParameter = {
   kind: WorkflowParameterKind;
   value: WorkflowScalar;
   mediaKind: "image" | "audio" | "video" | null;
+  promptRole?: WorkflowPromptRole;
   binding: WorkflowParameterBinding;
 };
 
@@ -110,12 +112,21 @@ export function musicWorkflowPromptProfile(workflow: Pick<WorkflowDefinition, "n
   });
 }
 
-export function primaryWorkflowPromptParameter(parameters: WorkflowParameter[], modality?: WorkflowModality | "image" | "music" | "video") {
-  const candidates = parameters.filter((parameter) => {
+function heuristicPromptCandidates(parameters: WorkflowParameter[]) {
+  return parameters.filter((parameter) => {
     if (parameter.kind !== "text") return false;
     const identity = `${parameter.label} ${parameter.id}`;
-    return /prompt|caption|description|text/i.test(identity) && !/negative|undesired|avoid/i.test(identity);
+    return /prompt|caption|description|text/i.test(identity) && !/negative|undesired|avoid|lyrics?|system|template/i.test(identity);
   });
+}
+
+export function generationWorkflowPromptParameters(parameters: WorkflowParameter[]) {
+  const structural = parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "positive");
+  return structural.length ? structural : heuristicPromptCandidates(parameters);
+}
+
+export function primaryWorkflowPromptParameter(parameters: WorkflowParameter[], modality?: WorkflowModality | "image" | "music" | "video") {
+  const candidates = generationWorkflowPromptParameters(parameters);
   if (modality === "music" || modality === "audio") {
     return candidates.find((parameter) => /caption/i.test(`${parameter.label} ${parameter.id}`)) ?? candidates[0] ?? null;
   }
@@ -185,10 +196,63 @@ function inferModality(types: string[]): WorkflowModality {
   return "image";
 }
 
+function linkedNodeId(value: unknown) {
+  return Array.isArray(value) && value.length >= 2 && (typeof value[0] === "string" || typeof value[0] === "number") && typeof value[1] === "number"
+    ? String(value[0])
+    : null;
+}
+
+function dependencyClosure(graph: RecordValue, roots: Set<string>) {
+  const result = new Set(roots);
+  const pending = [...roots];
+  while (pending.length) {
+    const nodeId = pending.pop()!;
+    const node = graph[nodeId];
+    if (!record(node) || !record(node.inputs)) continue;
+    for (const value of Object.values(node.inputs)) {
+      const linked = linkedNodeId(value);
+      if (!linked || result.has(linked)) continue;
+      result.add(linked);
+      pending.push(linked);
+    }
+  }
+  return result;
+}
+
+function apiPromptRoles(graph: RecordValue) {
+  const positiveRoots = new Set<string>();
+  const negativeRoots = new Set<string>();
+  for (const rawNode of Object.values(graph)) {
+    if (!record(rawNode) || !record(rawNode.inputs)) continue;
+    for (const [inputName, value] of Object.entries(rawNode.inputs)) {
+      const linked = linkedNodeId(value);
+      if (!linked) continue;
+      if (/^(?:positive|positive_prompt|positive_conditioning)$/i.test(inputName)) positiveRoots.add(linked);
+      if (/negative|undesired|avoid/i.test(inputName)) negativeRoots.add(linked);
+    }
+  }
+  return {
+    positive: dependencyClosure(graph, positiveRoots),
+    negative: dependencyClosure(graph, negativeRoots),
+  };
+}
+
+function promptRole(nodeId: string, inputName: string, nodeType: string, title: string, roles: ReturnType<typeof apiPromptRoles>): WorkflowPromptRole {
+  const identity = `${inputName} ${nodeType} ${title}`;
+  if (/lyrics?/i.test(identity)) return "lyrics";
+  if (roles.negative.has(nodeId) && !roles.positive.has(nodeId)) return "negative";
+  if (/negative|undesired|avoid/i.test(identity)) return "negative";
+  if (/system|template|instruction/i.test(identity)) return "system";
+  if (roles.positive.has(nodeId)) return "positive";
+  if (/prompt|caption|description|text/i.test(identity)) return "positive";
+  return "unknown";
+}
+
 function apiInspection(graph: RecordValue): WorkflowGraphInspection {
   const parameters: WorkflowParameter[] = [];
   const models = new Set<string>();
   const types: string[] = [];
+  const roles = apiPromptRoles(graph);
   for (const [nodeId, rawNode] of Object.entries(graph)) {
     if (!record(rawNode) || typeof rawNode.class_type !== "string") throw new Error("invalid_comfyui_api_workflow");
     const nodeType = rawNode.class_type;
@@ -210,13 +274,16 @@ function apiInspection(graph: RecordValue): WorkflowGraphInspection {
     if (/loader|save|preview|markdown/i.test(nodeType)) continue;
     for (const [inputName, value] of Object.entries(inputs)) {
       if (!SAFE_API_INPUTS.has(inputName) || !scalar(value)) continue;
-      const parameterLabel = inputName === "value" && title ? title : `${title}: ${label(inputName)}`;
+      const role = typeof value === "string" ? promptRole(nodeId, inputName, nodeType, title, roles) : undefined;
+      const baseLabel = inputName === "value" && title ? title : `${title}: ${label(inputName)}`;
+      const parameterLabel = role === "negative" && !/negative/i.test(baseLabel) ? `Negative · ${baseLabel}` : baseLabel;
       parameters.push({
         id: `${nodeId}::${inputName}`,
         label: parameterLabel,
         kind: parameterKind(inputName, value),
         value,
         mediaKind: null,
+        promptRole: role,
         binding: { format: "comfyui-api", nodeId, inputName },
       });
     }
@@ -252,12 +319,20 @@ function uiParameter(node: RecordValue, spec: UiWidgetSpec, subgraphId: string |
   if (!scalar(value)) return null;
   const nodeId = String(node.id ?? "");
   const title = displayTitle || (typeof node.title === "string" && node.title ? node.title : String(node.type ?? "Node"));
+  const identity = `${spec.name} ${title} ${String(node.type ?? "")}`;
+  const role: WorkflowPromptRole | undefined = typeof value === "string"
+    ? /lyrics?/i.test(identity) ? "lyrics"
+      : /negative|undesired|avoid/i.test(identity) ? "negative"
+        : /system|template|instruction/i.test(identity) ? "system"
+          : /prompt|caption|description|text/i.test(identity) ? "positive" : "unknown"
+    : undefined;
   return {
     id: `${subgraphId ?? "root"}:${nodeId}::${spec.name}`,
     label: spec.name === "value" ? title : `${title}: ${label(spec.name)}`,
     kind: spec.media ? "media" : parameterKind(spec.name, value),
     value,
     mediaKind: spec.media ?? null,
+    promptRole: role,
     binding: { format: "comfyui-ui", nodeId, widgetIndex: spec.index, subgraphId },
   };
 }

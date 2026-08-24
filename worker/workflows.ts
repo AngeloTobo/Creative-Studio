@@ -47,6 +47,17 @@ const REVISION_COLUMNS = `id, workflow_id as workflowId, version, parent_revisio
   parameters_json as parametersJson, models_json as modelsJson, created_at as createdAt`;
 
 function parseRevision(row: RevisionRow): WorkflowRevision {
+  const storedParameters = JSON.parse(row.parametersJson) as WorkflowRevision["parameters"];
+  const needsPromptRoleRecovery = storedParameters.some((parameter) => parameter.kind === "text")
+    && storedParameters.filter((parameter) => parameter.kind === "text").every((parameter) => parameter.promptRole === undefined);
+  let parameters = storedParameters;
+  if (needsPromptRoleRecovery) {
+    try {
+      parameters = inspectWorkflowGraph(JSON.parse(row.graphJson)).parameters;
+    } catch {
+      parameters = storedParameters;
+    }
+  }
   return {
     id: row.id,
     workflowId: row.workflowId,
@@ -55,7 +66,7 @@ function parseRevision(row: RevisionRow): WorkflowRevision {
     format: row.format,
     contentHash: row.contentHash,
     nodeCount: Number(row.nodeCount),
-    parameters: JSON.parse(row.parametersJson) as WorkflowRevision["parameters"],
+    parameters,
     models: JSON.parse(row.modelsJson) as string[],
     createdAt: row.createdAt,
   };

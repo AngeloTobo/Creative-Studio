@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkflowValues, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter } from "../../shared/contracts";
+import { applyWorkflowValues, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter } from "../../shared/contracts";
 
 describe("ComfyUI workflow inspection", () => {
   it("recognizes API prompt graphs and exposes only safe scalar controls", () => {
@@ -61,6 +61,29 @@ describe("ComfyUI workflow inspection", () => {
       "3": { class_type: "SaveImage", inputs: { images: ["4", 0] } },
     });
     expect(primaryWorkflowPromptParameter(inspection.parameters, "image")?.id).toBe("1::text");
+  });
+
+  it("traces the LTX 2.5 positive conditioning path instead of overwriting its negative encoder", () => {
+    const graph = {
+      "405:373": { class_type: "CLIPTextEncode", inputs: { text: "bad anatomy, captions, black frames", clip: ["405:350", 1] }, _meta: { title: "CLIP Text Encode (Prompt)" } },
+      "405:376": { class_type: "PrimitiveStringMultiline", inputs: { value: "Arctic hunter demo with a centered LTX-2.5 title" }, _meta: { title: "Prompt" } },
+      "405:380": { class_type: "TextGenerateLTX2Prompt", inputs: { prompt: ["405:376", 0], seed: 1 }, _meta: { title: "LTX prompt enhancer" } },
+      "405:382": { class_type: "ImpactSwitch", inputs: { select: 1, input1: ["405:376", 0], input2: ["405:380", 0] }, _meta: { title: "Prompt mode" } },
+      "405:364": { class_type: "CLIPTextEncode", inputs: { text: ["405:382", 0], clip: ["405:350", 1] }, _meta: { title: "CLIP Text Encode (Prompt)" } },
+      "405:370": { class_type: "LTXVConditioning", inputs: { positive: ["405:364", 0], negative: ["405:373", 0], frame_rate: 24 }, _meta: { title: "LTXV Conditioning" } },
+      "405:400": { class_type: "SaveVideo", inputs: { video: ["405:370", 0] }, _meta: { title: "Save video" } },
+    };
+    const inspection = inspectWorkflowGraph(graph);
+    const positive = inspection.parameters.find((parameter) => parameter.id === "405:376::value");
+    const negative = inspection.parameters.find((parameter) => parameter.id === "405:373::text");
+    expect(positive).toMatchObject({ promptRole: "positive", value: "Arctic hunter demo with a centered LTX-2.5 title" });
+    expect(negative).toMatchObject({ promptRole: "negative", value: "bad anatomy, captions, black frames" });
+    expect(negative?.label).toMatch(/^Negative ·/);
+    expect(generationWorkflowPromptParameters(inspection.parameters).map((parameter) => parameter.id)).toEqual(["405:376::value"]);
+    expect(primaryWorkflowPromptParameter(inspection.parameters, "video")?.id).toBe("405:376::value");
+    const updated = applyWorkflowValues(graph, inspection.parameters, { "405:376::value": "A ceramic body emerging from violet water" }) as typeof graph;
+    expect(updated["405:376"].inputs.value).toBe("A ceramic body emerging from violet water");
+    expect(updated["405:373"].inputs.text).toBe("bad anatomy, captions, black frames");
   });
 
   it("selects different prompt contracts for MiniMax Music 3 and Stable Audio", () => {

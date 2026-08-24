@@ -8,7 +8,7 @@ import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.7.0";
+export const RUNNER_VERSION = "1.8.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -316,11 +316,13 @@ export function normalizeEnhancedSongPrompt(value, options = {}) {
 }
 
 export function musicPromptParameter(parameters) {
-  const candidates = parameters.filter((parameter) => {
+  const structural = parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "positive");
+  const candidates = (structural.length ? structural : parameters).filter((parameter) => {
     if (parameter.kind !== "text") return false;
+    if (["negative", "lyrics", "system"].includes(parameter.promptRole)) return false;
     const bindingName = parameter.binding?.format === "comfyui-api" ? parameter.binding.inputName : "";
     const identity = `${parameter.label || ""} ${parameter.id || ""} ${bindingName}`;
-    return /prompt|caption|description|text/i.test(identity) && !/negative|undesired|avoid|lyrics?/i.test(identity);
+    return /prompt|caption|description|text/i.test(identity) && !/negative|undesired|avoid|lyrics?|system|template/i.test(identity);
   });
   return candidates.find((parameter) => /caption/i.test(`${parameter.label || ""} ${parameter.id || ""}`)) || candidates[0] || null;
 }
@@ -366,6 +368,37 @@ export function applyInputFilenames(graphValue, parameters, filenames) {
     node.inputs[binding.inputName] = filename;
   }
   return graph;
+}
+
+function graphParameterValue(graph, parameter) {
+  const binding = parameter?.binding;
+  if (binding?.format !== "comfyui-api") throw new Error(`generation_prompt_binding_invalid:${parameter?.id || "unknown"}`);
+  const inputs = graph?.[binding.nodeId]?.inputs;
+  if (!inputs || !Object.prototype.hasOwnProperty.call(inputs, binding.inputName)) {
+    throw new Error(`generation_prompt_node_missing:${parameter.id}`);
+  }
+  return String(inputs[binding.inputName] ?? "").trim();
+}
+
+export function validateGenerationPromptGraph(bundle, graph) {
+  if (bundle.job.modality === "music") return;
+  const parameters = bundle.workflow.currentRevision.parameters || [];
+  const positives = parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "positive");
+  const negatives = parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
+  const expected = String(bundle.job.settingsStamp.prompt || "").trim();
+  if (!expected || !positives.length) throw new Error("generation_positive_prompt_missing");
+  for (const parameter of positives) {
+    const stamped = String(bundle.job.settingsStamp.parameters?.[parameter.id] ?? "").trim();
+    if (stamped !== expected || graphParameterValue(graph, parameter) !== expected) {
+      throw new Error(`generation_prompt_integrity_failed:${parameter.id}`);
+    }
+  }
+  for (const parameter of negatives) {
+    const stamped = String(bundle.job.settingsStamp.parameters?.[parameter.id] ?? "").trim();
+    if (stamped === expected || graphParameterValue(graph, parameter) === expected) {
+      throw new Error(`generation_prompt_bound_to_negative:${parameter.id}`);
+    }
+  }
 }
 
 async function prepareGraph(config, bundle) {
@@ -780,6 +813,7 @@ async function executeBundle(config, bundle) {
   try {
     const prepared = await prepareGraph(config, bundle);
     let graph = prepared.graph;
+    validateGenerationPromptGraph(bundle, graph);
     if (bundle.job.modality === "music") {
       const parameters = bundle.workflow.currentRevision.parameters;
       const promptParameter = musicPromptParameter(parameters);
@@ -948,6 +982,29 @@ async function selfTest() {
   const parameters = [{ id: "1::image", kind: "media", binding: { format: "comfyui-api", nodeId: "1", inputName: "image" } }];
   const patched = applyInputFilenames(graph, parameters, { "1::image": "new.png" });
   if (patched["1"].inputs.image !== "new.png" || graph["1"].inputs.image !== "old.png") throw new Error("runner_self_test_patch_failed");
+  const generationGraph = {
+    "positive": { inputs: { value: "A glass figure walking through red rain" } },
+    "negative": { inputs: { text: "titles, captions, black frames" } },
+  };
+  const generationParameters = [
+    { id: "positive::value", kind: "text", promptRole: "positive", binding: { format: "comfyui-api", nodeId: "positive", inputName: "value" } },
+    { id: "negative::text", kind: "text", promptRole: "negative", binding: { format: "comfyui-api", nodeId: "negative", inputName: "text" } },
+  ];
+  const generationBundle = {
+    job: { modality: "video", settingsStamp: { prompt: generationGraph.positive.inputs.value, parameters: { "positive::value": generationGraph.positive.inputs.value, "negative::text": generationGraph.negative.inputs.text } } },
+    workflow: { currentRevision: { parameters: generationParameters } },
+  };
+  validateGenerationPromptGraph(generationBundle, generationGraph);
+  let rejectedDemoPrompt = false;
+  try {
+    validateGenerationPromptGraph({
+      ...generationBundle,
+      job: { ...generationBundle.job, settingsStamp: { prompt: "Authored direction", parameters: { "positive::value": "Arctic demo with title LTX-2.5", "negative::text": "Authored direction" } } },
+    }, { positive: { inputs: { value: "Arctic demo with title LTX-2.5" } }, negative: { inputs: { text: "Authored direction" } } });
+  } catch (error) {
+    rejectedDemoPrompt = /generation_prompt_(?:integrity_failed|bound_to_negative)/.test(error.message);
+  }
+  if (!rejectedDemoPrompt) throw new Error("runner_self_test_prompt_integrity_failed");
   const output = findComfyOutput({ outputs: {
     "2": { images: [{ filename: "preview.png", type: "temp" }] },
     "9": { images: [{ filename: "result.png", type: "output" }] },

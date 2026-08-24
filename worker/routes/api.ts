@@ -1,10 +1,10 @@
 import {
   assessImagePerformance,
   compileCreativeTasteMemory,
-  creativeDnaGenerationPrompt,
   deriveEvolutionStudies,
   deriveProjectProductionLoop,
   deriveProductionCockpit,
+  generationWorkflowPromptParameters,
   normalizeVideoGenerationVariant,
   type AcceptanceDecision,
   type Capability,
@@ -14,6 +14,7 @@ import {
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaTrainingJobRequest,
   type GenerationModality,
+  type Job,
   type RetryJobRequest,
   type SaveWorkflowRevisionRequest,
   type StudioSnapshot,
@@ -138,6 +139,23 @@ function workflowJobModality(value: string): GenerationModality {
   if (value === "audio" || value === "music") return "music";
   if (value === "image" || value === "video") return value;
   throw new Error("workflow_modality_not_supported");
+}
+
+async function assertReusableLocalWorkflowPrompt(env: Env, ownerId: string, job: Job) {
+  if (job.modality === "music") return;
+  const workflow = job.settingsStamp.workflow;
+  if (!workflow) throw new Error("runner_workflow_missing");
+  const plan = await workflowExecutionPlan(env, ownerId, workflow.workflowId, workflow.revisionId);
+  const expected = boundedText(job.settingsStamp.prompt, 4_000);
+  const positives = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
+  const negatives = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
+  if (!expected || !positives.length
+    || positives.some((parameter) => boundedText(parameter.value, 4_000) !== expected
+      || boundedText(job.settingsStamp.parameters[parameter.id], 4_000) !== expected)
+    || negatives.some((parameter) => boundedText(parameter.value, 4_000) === expected
+      || boundedText(job.settingsStamp.parameters[parameter.id], 4_000) === expected)) {
+    throw new Error("workflow_prompt_integrity_failed");
+  }
 }
 
 function requestedVideoOperation(value: SubmitJobRequest["videoOperation"], modality: GenerationModality) {
@@ -497,9 +515,21 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         if (modality === "image" && assessImagePerformance(parameterValues).requiresExplicitCustom && performanceMode !== "explicit-custom") {
           throw new Error("image_custom_mode_required");
         }
+        const promptParameters = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
         const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);
-        const workflowPrompt = workflowPromptParameter ? String(workflowPromptParameter.value).trim() : "";
-        const prompt = boundedText(workflowPrompt, 4_000) || creativeDnaGenerationPrompt(dna, modality === "music" ? "music" : "image");
+        const expectedPrompt = boundedText(input.workflow.expectedPrompt, 4_000);
+        const workflowPrompt = boundedText(workflowPromptParameter?.value, 4_000);
+        const negativePromptParameters = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
+        if (!expectedPrompt) throw new Error("workflow_prompt_confirmation_required");
+        if (!workflowPromptParameter || !workflowPrompt || workflowPromptParameter.promptRole === "negative") throw new Error("workflow_positive_prompt_missing");
+        if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
+        if (!promptParameters.length || promptParameters.some((parameter) => boundedText(parameter.value, 4_000) !== workflowPrompt)) {
+          throw new Error("workflow_positive_prompt_ambiguous");
+        }
+        if (negativePromptParameters.some((parameter) => boundedText(parameter.value, 4_000) === workflowPrompt)) {
+          throw new Error("workflow_prompt_bound_to_negative");
+        }
+        const prompt = workflowPrompt;
         const createdAt = new Date().toISOString();
         const evolution = input.evolution && evolutionSource && evolutionTaste ? {
           schemaVersion: "creative-studio-evolution/1.0" as const,
@@ -595,6 +625,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
       if (localHardwareMode(env) && !localWorkflow) throw new Error("local_comfyui_workflow_required");
+      if (localWorkflow) await assertReusableLocalWorkflowPrompt(env, session.userId, original);
       if (localWorkflow && original.modality === "image" && assessImagePerformance(original.settingsStamp.parameters).requiresExplicitCustom
         && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
       const createdAt = new Date().toISOString();
@@ -637,6 +668,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await assertCreativeDnaReviewed(env, session.userId, dna);
       const localWorkflow = original.settingsStamp.source === "comfyui-workflow" && Boolean(original.settingsStamp.workflow);
       if (localHardwareMode(env) && !localWorkflow) throw new Error("local_comfyui_workflow_required");
+      if (localWorkflow) await assertReusableLocalWorkflowPrompt(env, session.userId, original);
       if (localWorkflow && original.modality === "image" && assessImagePerformance(original.settingsStamp.parameters).requiresExplicitCustom
         && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
