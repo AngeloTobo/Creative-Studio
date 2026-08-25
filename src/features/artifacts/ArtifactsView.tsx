@@ -133,13 +133,16 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
   };
   return (
     <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}`} id={`artifact-card-${artifact.id}`}>
-      <ArtifactThumb artifact={artifact} playable />
+      <div className="artifact-hero">
+        <ArtifactThumb artifact={artifact} playable />
+        {artifact.kind === "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => onInspect(artifact)} /> : null}
+      </div>
       <div className="artifact-body">
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
         <p className={`artifact-prompt${promptExpanded ? " expanded" : ""}`}>{prompt}</p>
         {hasLongPrompt ? <button type="button" className="artifact-prompt-toggle" aria-expanded={promptExpanded} onClick={() => setPromptExpanded((value) => !value)}>{promptExpanded ? "Show less" : "Read full prompt"}</button> : null}
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
-        <ArtifactMediaReview artifact={artifact} onInspect={() => artifact.kind === "image" && onInspect(artifact)} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} />
+        {artifact.kind !== "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => undefined} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} /> : null}
         <div className="artifact-actions artifact-create-actions" aria-label={`Create from ${artifact.name}`}>
           {artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={busy || artifact.status === "retaining"} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Animate</button> : null}
           <button className="btn artifact-evolve" disabled={busy || artifact.status === "retaining"} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>
@@ -164,18 +167,22 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
 type ArtifactCardSharedProps = Omit<Parameters<typeof ArtifactCard>[0], "artifact" | "focused">;
 
 function EvolutionStudyGroup({ study, artifacts, cardProps, focusArtifactId }: { study: EvolutionStudy; artifacts: Artifact[]; cardProps: ArtifactCardSharedProps; focusArtifactId?: string }) {
+  const branches = study.branches.map((branch) => ({ branch, artifact: artifacts.find((item) => item.id === branch.artifactId) }));
+  const mediaBranches = branches.filter((item): item is typeof item & { artifact: Artifact } => Boolean(item.artifact));
+  const activeRuns = branches.filter(({ branch, artifact }) => !artifact && (branch.status === "queued" || branch.status === "running" || branch.status === "retaining"));
+  const runsWithoutMedia = branches.filter(({ branch, artifact }) => !artifact && branch.status !== "queued" && branch.status !== "running" && branch.status !== "retaining");
+  const renderRun = ({ branch }: (typeof branches)[number]) => <li key={branch.jobId}><span className={`state-pill ${branch.status}`}>{branch.status}</span><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)}</strong><small>{branch.modality} · {branch.jobId}</small></li>;
   return <article className="evolution-study glass">
-    <header><span><small>Evolution study · {new Date(study.createdAt).toLocaleString()}</small><h2>{study.sourceName}</h2></span><span className="evolution-study-count">{study.branches.length} {study.branches.length === 1 ? "result" : "results"}</span></header>
-    <div className="evolution-study-context"><span><b>Canon</b>{study.canon.identity || "Not set"}</span><span><b>Current direction</b>{study.canon.currentDirection || "Not set"}</span></div>
+    <header><span><small>Evolution · {new Date(study.createdAt).toLocaleString()}</small><h2>{study.sourceName}</h2></span><span className="evolution-study-count">{mediaBranches.length} media · {study.branches.length} runs</span></header>
+    <details className="evolution-study-context-details"><summary>Study direction</summary><div className="evolution-study-context"><span><b>Canon</b>{study.canon.identity || "Not set"}</span><span><b>Current direction</b>{study.canon.currentDirection || "Not set"}</span></div></details>
+    {activeRuns.length ? <ol className="evolution-active-runs" aria-label="Active evolution runs">{activeRuns.map(renderRun)}</ol> : null}
     <div className="evolution-branch-grid">
-      {study.branches.map((branch) => {
-        const artifact = artifacts.find((item) => item.id === branch.artifactId);
-        return <section className="evolution-branch" key={branch.jobId}>
+      {mediaBranches.map(({ branch, artifact }) => <section className="evolution-branch" key={branch.jobId}>
           <div className="evolution-branch-label"><span className={`state-pill ${branch.status}`}>{branch.status}</span><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)}</strong><small>{branch.modality}</small></div>
-          {artifact ? <ArtifactCard {...cardProps} artifact={artifact} focused={focusArtifactId === artifact.id} /> : <div className="evolution-branch-pending"><Icon name="history" size={22} /><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)} is {branch.status}</strong><small>Job {branch.jobId}</small></div>}
-        </section>;
-      })}
+          <ArtifactCard {...cardProps} artifact={artifact} focused={focusArtifactId === artifact.id} />
+        </section>)}
     </div>
+    {runsWithoutMedia.length ? <details className="evolution-no-media"><summary><span><Icon name="history" size={15} /><strong>{runsWithoutMedia.length} {runsWithoutMedia.length === 1 ? "run" : "runs"} without media</strong></span><small>Cancelled, failed, or superseded</small></summary><ol>{runsWithoutMedia.map(renderRun)}</ol></details> : null}
   </article>;
 }
 

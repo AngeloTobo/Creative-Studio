@@ -66,7 +66,7 @@ const MOBILE_TABS: Array<{ id: StudioView; label: string; icon: IconName }> = [
   { id: "system", label: "System", icon: "runtime" },
 ];
 
-const CONTENT_OWNS_MOBILE_HEADING = new Set<StudioView>(["cockpit", "dna", "projects"]);
+const CONTENT_OWNS_MOBILE_HEADING = new Set<StudioView>(["cockpit", "dna", "gallery", "projects"]);
 
 export function MobileShell({ view, navigate, children }: { view: StudioView; navigate: (view: StudioView) => void; children: ReactNode }) {
   const activeView = primaryView(view);

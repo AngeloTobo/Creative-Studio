@@ -149,8 +149,9 @@ test("evolution results stay in one side-by-side study instead of repeating in a
     const roles = ["refine", "correct", "discovery"];
     const stamp = (role: string) => ({ schemaVersion: 1, source: "comfyui-workflow", createdAt: time, reusedFromJobId: null, prompt: `${role} rooftop direction`, provider: "local-comfyui", modality: "image", workflow: null, parameters: { prompt: `${role} rooftop direction` }, models: ["z_image_turbo_bf16.safetensors"], inputAssetIds: [], evolution: { schemaVersion: "creative-studio-evolution/1.0", studyId: "evolve_e2e-study-001", role, sourceId: "artifact_source", source: "artifact", sourceKind: "image", sourceName: "Rebecca rooftop", projectCanon: { identity: project.description, currentDirection: project.note }, personalTasteSignalIds: [], projectTasteSignalIds: [], createdAt: time } });
     const jobs = roles.map((role) => ({ id: `job_${role}`, projectId: project.id, dnaArtifactId: "dna_evolution", capability: "IMAGE_GENERATE", modality: "image", status: "completed", progress: 100, prompt: `${role} rooftop direction`, provider: "local-comfyui", upstreamId: `comfy_${role}`, artifactId: `artifact_${role}`, retryOfJobId: null, error: null, createdAt: time, updatedAt: time, startedAt: time, executionStage: "completed", stageUpdatedAt: time, completedAt: time, settingsStamp: stamp(role) }));
+    const cancelledJob = { ...jobs[0], id: "job_cancelled", status: "cancelled", progress: 44, artifactId: null, upstreamId: null, executionStage: "cancelled", settingsStamp: stamp("correct") };
     const artifacts = roles.map((role, index) => ({ id: `artifact_${role}`, projectId: project.id, jobId: `job_${role}`, dnaArtifactId: "dna_evolution", kind: "image", name: `Rebecca · ${role}`, status: index === 0 ? "accepted" : "ready", provider: "local-comfyui", prompt: `${role} rooftop direction`, preview: { kind: "development-gradient", url: null, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: ["artifact_source"], parentArtifactId: "artifact_source" }, retention: { state: "development-only", size: null }, settingsStamp: stamp(role), createdAt: time, updatedAt: time }));
-    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs, artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [{ id: "accept_evolution", artifactId: "artifact_refine", decision: "accepted", note: "Keep the luminous eyes and controlled silhouette.", actor: "development-user", createdAt: time }], idempotencyKeys: {} }));
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [...jobs, cancelledJob], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [{ id: "accept_evolution", artifactId: "artifact_refine", decision: "accepted", note: "Keep the luminous eyes and controlled silhouette.", actor: "development-user", createdAt: time }], idempotencyKeys: {} }));
   }, { createdAt });
 
   await page.goto("/#/gallery");
@@ -161,7 +162,12 @@ test("evolution results stay in one side-by-side study instead of repeating in a
   await expect(study).toContainText("Refine");
   await expect(study).toContainText("Correct");
   await expect(study).toContainText("Discovery");
-  await expect(study).toContainText("3 results");
+  await expect(study).toContainText("3 media · 4 runs");
+  const noMedia = study.locator(".evolution-no-media");
+  await expect(noMedia).toContainText("1 run without media");
+  await expect(noMedia.getByText("job_cancelled", { exact: false })).toBeHidden();
+  await noMedia.getByText("1 run without media").click();
+  await expect(noMedia.getByText("job_cancelled", { exact: false })).toBeVisible();
   await expect(page.locator(".artifact-grid > .artifact-card")).toHaveCount(0);
 });
 
