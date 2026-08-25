@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkflowValues, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter } from "../../shared/contracts";
+import { applyWorkflowValues, canonicalWorkflowParameterValue, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter, workflowParameterChoices } from "../../shared/contracts";
 
 describe("ComfyUI workflow inspection", () => {
   it("recognizes API prompt graphs and exposes only safe scalar controls", () => {
@@ -39,6 +39,20 @@ describe("ComfyUI workflow inspection", () => {
     ]));
     const updated = applyWorkflowValues(graph, inspection.parameters, { "root:115::megapixels": 0.8 }) as typeof graph;
     expect(updated.nodes[1].widgets_values[1]).toBe(0.8);
+  });
+
+  it("canonicalizes ResolutionSelector shorthand to an exact ComfyUI enum", () => {
+    const graph = {
+      "409": { class_type: "ResolutionSelector", inputs: { aspect_ratio: "9:16", megapixels: 0.9 } },
+      "75": { class_type: "SaveVideo", inputs: { video: ["409", 0] } },
+    };
+    const inspection = inspectWorkflowGraph(graph);
+    const aspectRatio = inspection.parameters.find((parameter) => parameter.id === "409::aspect_ratio")!;
+    expect(workflowParameterChoices(aspectRatio)).toContain("9:16 (Portrait Widescreen)");
+    expect(canonicalWorkflowParameterValue(aspectRatio, "9:16")).toBe("9:16 (Portrait Widescreen)");
+    const updated = applyWorkflowValues(graph, inspection.parameters, { "409::aspect_ratio": "9:16" }) as typeof graph;
+    expect(updated["409"].inputs.aspect_ratio).toBe("9:16 (Portrait Widescreen)");
+    expect(() => applyWorkflowValues(graph, inspection.parameters, { "409::aspect_ratio": "portrait-ish" })).toThrow("invalid_workflow_parameter_choice");
   });
 
   it("detects retained audio and video file inputs in API graphs", () => {

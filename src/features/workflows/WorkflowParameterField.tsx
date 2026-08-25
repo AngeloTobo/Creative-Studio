@@ -1,4 +1,4 @@
-import type { WorkflowParameter, WorkflowScalar } from "../../../shared/contracts";
+import { canonicalWorkflowParameterValue, workflowParameterChoices, type WorkflowParameter, type WorkflowScalar } from "../../../shared/contracts";
 
 export function WorkflowParameterField({ parameter, value, onChange, showBinding = true }: {
   parameter: WorkflowParameter;
@@ -11,6 +11,11 @@ export function WorkflowParameterField({ parameter, value, onChange, showBinding
   }
   if (parameter.kind === "number") {
     return <label className="field workflow-field"><span>{parameter.label}</span><input type="number" value={Number(value)} onChange={(event) => onChange(Number(event.target.value))} />{showBinding ? <small>{parameter.id}</small> : null}</label>;
+  }
+  const choices = workflowParameterChoices(parameter);
+  if (choices.length) {
+    const selected = canonicalWorkflowParameterValue(parameter, value);
+    return <label className="field workflow-field"><span>{parameter.label}</span><select value={String(selected)} onChange={(event) => onChange(event.target.value)}>{choices.map((choice) => <option key={String(choice)} value={String(choice)}>{String(choice)}</option>)}</select>{showBinding ? <small>{parameter.id}</small> : null}</label>;
   }
   const text = String(value);
   const multiline = text.length > 100 || /prompt|lyrics|caption/i.test(parameter.label);

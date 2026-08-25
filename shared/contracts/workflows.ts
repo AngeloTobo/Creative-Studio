@@ -57,6 +57,34 @@ export type WorkflowGraphInspection = {
   models: string[];
 };
 
+const RESOLUTION_SELECTOR_ASPECT_RATIOS: WorkflowScalar[] = [
+  "1:1 (Square)",
+  "2:3 (Portrait Photo)",
+  "3:2 (Photo)",
+  "3:4 (Portrait Standard)",
+  "4:3 (Standard)",
+  "9:16 (Portrait Widescreen)",
+  "16:9 (Widescreen)",
+  "21:9 (Ultrawide)",
+];
+
+export function workflowParameterChoices(parameter: WorkflowParameter): WorkflowScalar[] {
+  const inputName = parameter.binding.format === "comfyui-api"
+    ? parameter.binding.inputName
+    : parameter.id.split("::").at(-1) ?? "";
+  if (parameter.kind === "choice" && inputName === "aspect_ratio") return RESOLUTION_SELECTOR_ASPECT_RATIOS;
+  return [];
+}
+
+export function canonicalWorkflowParameterValue(parameter: WorkflowParameter, value: WorkflowScalar): WorkflowScalar {
+  const choices = workflowParameterChoices(parameter);
+  if (!choices.length || choices.includes(value) || typeof value !== "string") return value;
+  const shorthand = value.trim().toLowerCase();
+  const matches = choices.filter((choice) => typeof choice === "string"
+    && (choice.toLowerCase() === shorthand || choice.toLowerCase().startsWith(`${shorthand} (`)));
+  return matches.length === 1 ? matches[0] : value;
+}
+
 export type MusicPromptProfile = {
   id: import("./domain").SongPromptProfileId;
   label: string;
@@ -406,13 +434,16 @@ export function applyWorkflowValues(graph: unknown, parameters: WorkflowParamete
   for (const [parameterId, value] of Object.entries(values)) {
     const parameter = byId.get(parameterId);
     if (!parameter) throw new Error("unknown_workflow_parameter");
-    if (!compatibleValue(parameter.value, value)) throw new Error("invalid_workflow_parameter_value");
-    if (typeof value === "string" && value.length > 20_000) throw new Error("workflow_parameter_too_large");
+    const canonicalValue = canonicalWorkflowParameterValue(parameter, value);
+    if (!compatibleValue(parameter.value, canonicalValue)) throw new Error("invalid_workflow_parameter_value");
+    const choices = workflowParameterChoices(parameter);
+    if (choices.length && !choices.includes(canonicalValue)) throw new Error("invalid_workflow_parameter_choice");
+    if (typeof canonicalValue === "string" && canonicalValue.length > 20_000) throw new Error("workflow_parameter_too_large");
     const binding = parameter.binding;
     if (binding.format === "comfyui-api") {
       const node = copy[binding.nodeId];
       if (!record(node) || !record(node.inputs)) throw new Error("workflow_parameter_binding_missing");
-      node.inputs[binding.inputName] = value;
+      node.inputs[binding.inputName] = canonicalValue;
       continue;
     }
     const container = binding.subgraphId
@@ -423,7 +454,7 @@ export function applyWorkflowValues(graph: unknown, parameters: WorkflowParamete
     if (!record(container) || !Array.isArray(container.nodes)) throw new Error("workflow_parameter_binding_missing");
     const node = container.nodes.find((item) => record(item) && String(item.id) === binding.nodeId);
     if (!record(node) || !Array.isArray(node.widgets_values)) throw new Error("workflow_parameter_binding_missing");
-    node.widgets_values[binding.widgetIndex] = value;
+    node.widgets_values[binding.widgetIndex] = canonicalValue;
   }
   return copy;
 }

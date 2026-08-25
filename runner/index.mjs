@@ -8,7 +8,7 @@ import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.8.1";
+export const RUNNER_VERSION = "1.8.2";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -426,11 +426,16 @@ async function prepareGraph(config, bundle) {
   return { graph: applyInputFilenames(bundle.graph, bundle.workflow.currentRevision.parameters, filenames), downloadedInputs };
 }
 
-async function submitPrompt(config, graph, jobId) {
+async function submitPrompt(config, graph, jobId, outputsToExecute = null) {
   const response = await fetch(`${config.comfyUrl}/prompt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ prompt: graph, client_id: `creative-studio-${jobId}`, extra_data: { creative_studio_job_id: jobId } }),
+    body: JSON.stringify({
+      prompt: graph,
+      client_id: `creative-studio-${jobId}`,
+      extra_data: { creative_studio_job_id: jobId },
+      ...(outputsToExecute?.length ? { outputs_to_execute: outputsToExecute } : {}),
+    }),
     signal: AbortSignal.timeout(30_000),
   });
   const payload = await response.json().catch(() => ({}));
@@ -893,8 +898,8 @@ async function executeBundle(config, bundle) {
       method: "POST",
       body: JSON.stringify({ progress: 7, stage: "submitting" }),
     });
-    validateComfyMediaOutputGraph(graph, bundle.job.modality);
-    const promptId = bundle.job.upstreamId || await submitPrompt(config, graph, bundle.job.id);
+    const mediaOutputIds = validateComfyMediaOutputGraph(graph, bundle.job.modality);
+    const promptId = bundle.job.upstreamId || await submitPrompt(config, graph, bundle.job.id, mediaOutputIds);
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ progress: 8, upstreamId: promptId, stage: "rendering" }),

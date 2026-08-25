@@ -9,6 +9,7 @@ import {
   analyzeGenerationWorkload,
   createVideoGenerationVersions,
   createSongPromptRecommendations,
+  canonicalWorkflowParameterValue,
   evolutionBranchPrompt,
   creativeDnaDescriptionSummaries,
   creativeDnaGenerationPrompt,
@@ -282,11 +283,11 @@ export function GenerationView({
   const workflowSeedParameter = generationIntent === "video"
     ? scalarParameters.find((parameter) => parameter.kind === "number" && /(?:^|\b|::)(?:noise_)?seed(?:\b|$)/i.test(`${parameter.id} ${parameter.label} ${parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : ""}`)) ?? null
     : null;
-  const rawParameterValue = (parameter: WorkflowParameter) => parameter.id === workflowLyricsParameter?.id
+  const rawParameterValue = (parameter: WorkflowParameter) => canonicalWorkflowParameterValue(parameter, parameter.id === workflowLyricsParameter?.id
     ? lyrics
     : workflowPromptParameterIds.has(parameter.id)
       ? direction.trim()
-      : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues);
+      : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues));
   const fastImageOverrides = generationIntent === "image" && imagePerformanceMode === "fast-default"
     ? fastImageParameterOverrides(scalarParameters.map((parameter) => ({ ...parameter, value: rawParameterValue(parameter) })))
     : {};
