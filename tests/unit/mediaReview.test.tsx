@@ -71,6 +71,12 @@ describe("real artifact media review", () => {
       action: "Retry creates a new durable image job from the same CreativeDNA; this failed job remains in history.",
       raw: "artifact_retention_verification_failed",
     });
+    expect(jobIssuePresentation("failed", "comfyui_media_output_not_scheduled", "video")).toEqual({
+      title: "Job failed",
+      summary: "ComfyUI accepted the graph but did not schedule its saved-media output. The job stopped immediately instead of blocking the runner; repair or re-export the workflow before retrying.",
+      action: "Retry creates a new durable video job from the same CreativeDNA; this failed job remains in history.",
+      raw: "comfyui_media_output_not_scheduled",
+    });
     expect(jobIssuePresentation("running", null, "music")).toBeNull();
   });
 });

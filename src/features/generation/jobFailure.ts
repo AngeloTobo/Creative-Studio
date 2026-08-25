@@ -18,6 +18,9 @@ const FAILURE_SUMMARIES: Record<string, string> = {
   generation_in_progress: "The provider already has an active generation for this capability. Let it finish or cancel it upstream before retrying.",
   generation_timed_out: "The remote AFDFW generation did not finish inside its 30-minute durable tracking window. Its timing and settings remain in history; inspect the stamped workload before retrying.",
   comfyui_execution_timed_out: "Local ComfyUI did not return an output inside the 24-hour safety window. The prompt ID and settings remain recorded so the machine and workflow can be inspected before retrying.",
+  comfyui_workflow_media_output_missing: "The selected ComfyUI workflow has no executable saved-media output for this generation type. Add or repair its Save Image, Save Audio, or Save Video node before retrying.",
+  comfyui_media_output_not_scheduled: "ComfyUI accepted the graph but did not schedule its saved-media output. The job stopped immediately instead of blocking the runner; repair or re-export the workflow before retrying.",
+  comfyui_completed_without_media_output: "ComfyUI completed without returning a saved media file. The job stopped immediately instead of occupying the runner; inspect the workflow output node before retrying.",
   runner_input_source_not_found: "A bound upload or generated artifact is no longer retained. Choose a current retained input and queue a new run.",
   runner_input_media_mismatch: "A bound workflow input has the wrong media type. Choose an image, audio file, or video that matches the workflow control.",
 };

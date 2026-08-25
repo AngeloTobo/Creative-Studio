@@ -8,7 +8,7 @@ import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.8.0";
+export const RUNNER_VERSION = "1.8.1";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -441,6 +441,28 @@ async function submitPrompt(config, graph, jobId) {
   return payload.prompt_id;
 }
 
+async function assertPromptSchedulesMediaOutput(config, promptId, graph, modality) {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const queueResponse = await fetch(`${config.comfyUrl}/queue`, { signal: AbortSignal.timeout(10_000) });
+    if (!queueResponse.ok) throw new Error(`comfyui_queue_${queueResponse.status}`);
+    const queue = await queueResponse.json();
+    const queued = [...(queue.queue_running || []), ...(queue.queue_pending || [])]
+      .find((record) => Array.isArray(record) && record[1] === promptId);
+    if (queued) {
+      if (!comfyPromptSchedulesMediaOutput(queued, graph, modality)) throw new Error("comfyui_media_output_not_scheduled");
+      return;
+    }
+    const historyResponse = await fetch(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, { signal: AbortSignal.timeout(10_000) });
+    if (!historyResponse.ok) throw new Error(`comfyui_history_${historyResponse.status}`);
+    const history = await historyResponse.json();
+    if (history[promptId]) {
+      if (!comfyPromptSchedulesMediaOutput(history[promptId], graph, modality)) throw new Error("comfyui_media_output_not_scheduled");
+      return;
+    }
+    await sleep(200);
+  }
+}
+
 function allFileObjects(value, result = []) {
   if (Array.isArray(value)) {
     for (const item of value) allFileObjects(item, result);
@@ -462,6 +484,35 @@ const OUTPUT_NODE_PATTERNS = {
   music: /save.*audio|audio.*save/i,
   video: /save.*video|video.*save|video.*combine|combine.*video|saveanimatedwebp/i,
 };
+
+export function mediaOutputNodeIds(graph, modality) {
+  if (!graph || typeof graph !== "object") return [];
+  return Object.entries(graph)
+    .filter(([, node]) => OUTPUT_NODE_PATTERNS[modality]?.test(String(node?.class_type || "")))
+    .map(([nodeId]) => nodeId);
+}
+
+export function validateComfyMediaOutputGraph(graph, modality) {
+  const nodeIds = mediaOutputNodeIds(graph, modality);
+  if (!nodeIds.length) throw new Error("comfyui_workflow_media_output_missing");
+  return nodeIds;
+}
+
+function scheduledOutputNodeIds(record) {
+  const promptRecord = Array.isArray(record) ? record : record?.prompt;
+  return Array.isArray(promptRecord?.[4]) ? promptRecord[4].map(String) : [];
+}
+
+export function comfyPromptSchedulesMediaOutput(record, graph, modality) {
+  const expected = new Set(validateComfyMediaOutputGraph(graph, modality));
+  return scheduledOutputNodeIds(record).some((nodeId) => expected.has(nodeId));
+}
+
+export function comfyHistoryCompleted(entry) {
+  const status = entry?.status || {};
+  if (status.completed === true || status.status_str === "success") return true;
+  return Array.isArray(status.messages) && status.messages.some((item) => Array.isArray(item) && item[0] === "execution_success");
+}
 
 function matchingOutput(files, extensions, nodeId = null) {
   const file = files.find((item) => extensions.some((extension) => item.filename.toLowerCase().endsWith(extension)));
@@ -554,6 +605,7 @@ async function waitForOutput(config, bundle, promptId) {
     if (error) throw new Error(`comfyui_execution_failed:${error}`);
     const output = findComfyOutput(entry, bundle.job.modality, bundle.graph);
     if (output) return output;
+    if (comfyHistoryCompleted(entry)) throw new Error("comfyui_completed_without_media_output");
     await sleep(2_000);
   }
   throw new Error("comfyui_execution_timed_out");
@@ -841,11 +893,13 @@ async function executeBundle(config, bundle) {
       method: "POST",
       body: JSON.stringify({ progress: 7, stage: "submitting" }),
     });
+    validateComfyMediaOutputGraph(graph, bundle.job.modality);
     const promptId = bundle.job.upstreamId || await submitPrompt(config, graph, bundle.job.id);
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ progress: 8, upstreamId: promptId, stage: "rendering" }),
     });
+    await assertPromptSchedulesMediaOutput(config, promptId, graph, bundle.job.modality);
     const output = await waitForOutput(config, { ...bundle, graph }, promptId);
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
       method: "POST",
@@ -1013,6 +1067,26 @@ async function selfTest() {
     "9": { class_type: "SaveImage" },
   });
   if (output?.filename !== "result.png") throw new Error("runner_self_test_output_failed");
+  const videoOutputGraph = { "75": { class_type: "SaveVideo" } };
+  if (validateComfyMediaOutputGraph(videoOutputGraph, "video")[0] !== "75") {
+    throw new Error("runner_self_test_media_output_graph_failed");
+  }
+  let missingMediaOutputRejected = false;
+  try {
+    validateComfyMediaOutputGraph({ "381": { class_type: "PreviewAny" } }, "video");
+  } catch (error) {
+    missingMediaOutputRejected = error.message === "comfyui_workflow_media_output_missing";
+  }
+  if (!missingMediaOutputRejected) throw new Error("runner_self_test_missing_media_output_failed");
+  if (comfyPromptSchedulesMediaOutput([48, "prompt", {}, {}, ["381"]], videoOutputGraph, "video")) {
+    throw new Error("runner_self_test_unscheduled_media_output_failed");
+  }
+  if (!comfyPromptSchedulesMediaOutput([48, "prompt", {}, {}, ["75"]], videoOutputGraph, "video")) {
+    throw new Error("runner_self_test_scheduled_media_output_failed");
+  }
+  if (!comfyHistoryCompleted({ status: { status_str: "success", completed: true, messages: [] } })) {
+    throw new Error("runner_self_test_terminal_history_failed");
+  }
   const descriptionGraph = buildGemmaDescriptionGraph("video", "source.mp4", "Self-test video");
   if (descriptionGraph["1"].inputs.video?.[0] !== "7" || descriptionGraph["1"].inputs.audio?.[0] !== "7" || descriptionGraph["2"] || descriptionGraph["5"]) {
     throw new Error("runner_self_test_description_graph_failed");
