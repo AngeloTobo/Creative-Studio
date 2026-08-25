@@ -85,6 +85,15 @@ export function canonicalWorkflowParameterValue(parameter: WorkflowParameter, va
   return matches.length === 1 ? matches[0] : value;
 }
 
+export function recoverWorkflowPromptRoles(graph: unknown, storedParameters: WorkflowParameter[]): WorkflowParameter[] {
+  const inspectedById = new Map(inspectWorkflowGraph(graph).parameters.map((parameter) => [parameter.id, parameter]));
+  return storedParameters.map((parameter) => {
+    if (parameter.kind !== "text") return parameter;
+    const inspected = inspectedById.get(parameter.id);
+    return inspected ? { ...parameter, label: inspected.label, promptRole: inspected.promptRole } : parameter;
+  });
+}
+
 export type MusicPromptProfile = {
   id: import("./domain").SongPromptProfileId;
   label: string;

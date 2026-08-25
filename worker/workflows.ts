@@ -1,6 +1,7 @@
 import {
   applyWorkflowValues,
   inspectWorkflowGraph,
+  recoverWorkflowPromptRoles,
   type SaveWorkflowRevisionRequest,
   type WorkflowDefinition,
   type WorkflowRevision,
@@ -48,12 +49,14 @@ const REVISION_COLUMNS = `id, workflow_id as workflowId, version, parent_revisio
 
 function parseRevision(row: RevisionRow): WorkflowRevision {
   const storedParameters = JSON.parse(row.parametersJson) as WorkflowRevision["parameters"];
-  const needsPromptRoleRecovery = storedParameters.some((parameter) => parameter.kind === "text")
-    && storedParameters.filter((parameter) => parameter.kind === "text").every((parameter) => parameter.promptRole === undefined);
+  const textParameters = storedParameters.filter((parameter) => parameter.kind === "text");
+  const needsPromptRoleRecovery = textParameters.some((parameter) => parameter.promptRole === undefined)
+    || (!textParameters.some((parameter) => parameter.promptRole === "negative")
+      && textParameters.filter((parameter) => parameter.promptRole === "positive").length > 1);
   let parameters = storedParameters;
   if (needsPromptRoleRecovery) {
     try {
-      parameters = inspectWorkflowGraph(JSON.parse(row.graphJson)).parameters;
+      parameters = recoverWorkflowPromptRoles(JSON.parse(row.graphJson), storedParameters);
     } catch {
       parameters = storedParameters;
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkflowValues, canonicalWorkflowParameterValue, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter, workflowParameterChoices } from "../../shared/contracts";
+import { applyWorkflowValues, canonicalWorkflowParameterValue, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter, recoverWorkflowPromptRoles, workflowParameterChoices } from "../../shared/contracts";
 
 describe("ComfyUI workflow inspection", () => {
   it("recognizes API prompt graphs and exposes only safe scalar controls", () => {
@@ -98,6 +98,22 @@ describe("ComfyUI workflow inspection", () => {
     const updated = applyWorkflowValues(graph, inspection.parameters, { "405:376::value": "A ceramic body emerging from violet water" }) as typeof graph;
     expect(updated["405:376"].inputs.value).toBe("A ceramic body emerging from violet water");
     expect(updated["405:373"].inputs.text).toBe("bad anatomy, captions, black frames");
+  });
+
+  it("recovers contaminated legacy prompt-role metadata from the retained graph", () => {
+    const graph = {
+      "405:373": { class_type: "CLIPTextEncode", inputs: { text: "captions, black frames", clip: ["405:350", 1] }, _meta: { title: "CLIP Text Encode (Prompt)" } },
+      "405:376": { class_type: "PrimitiveStringMultiline", inputs: { value: "A ceramic body entering violet water" }, _meta: { title: "Prompt" } },
+      "405:364": { class_type: "CLIPTextEncode", inputs: { text: ["405:376", 0], clip: ["405:350", 1] } },
+      "405:370": { class_type: "LTXVConditioning", inputs: { positive: ["405:364", 0], negative: ["405:373", 0] } },
+      "75": { class_type: "SaveVideo", inputs: { video: ["405:370", 0] } },
+    };
+    const stored = inspectWorkflowGraph(graph).parameters.map((parameter) => parameter.kind === "text"
+      ? { ...parameter, promptRole: "positive" as const }
+      : parameter);
+    const recovered = recoverWorkflowPromptRoles(graph, stored);
+    expect(recovered.find((parameter) => parameter.id === "405:373::text")?.promptRole).toBe("negative");
+    expect(generationWorkflowPromptParameters(recovered).map((parameter) => parameter.id)).toEqual(["405:376::value"]);
   });
 
   it("selects different prompt contracts for MiniMax Music 3 and Stable Audio", () => {
