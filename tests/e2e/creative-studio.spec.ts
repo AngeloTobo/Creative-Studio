@@ -165,6 +165,43 @@ test("evolution results stay in one side-by-side study instead of repeating in a
   await expect(page.locator(".artifact-grid > .artifact-card")).toHaveCount(0);
 });
 
+test("artifact history keeps active work compact and archived work available on demand", async ({ page }) => {
+  const createdAt = "2026-08-24T01:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    const project = { id: "project_artifacts", activeDnaArtifactId: null, name: "Artifact review", type: "Mixed media", status: "active", description: "", note: "", hue: "#d946ef", initials: "AR", createdAt: time, updatedAt: time };
+    const stamp = (prompt: string) => ({ schemaVersion: 1, source: "development-adapter", createdAt: time, reusedFromJobId: null, prompt, provider: "development-adapter", modality: "image", workflow: null, parameters: { prompt }, models: [], inputAssetIds: [] });
+    const artifact = (id: string, name: string, status: string, hour: number) => {
+      const prompt = `${name} with a precise illuminated focal form, deep violet atmosphere, controlled negative space, fine tactile detail, and a deliberate edge that carries through the entire frame without explanatory text or title cards.`;
+      const date = `2026-08-24T${String(hour).padStart(2, "0")}:00:00.000Z`;
+      return { id, projectId: project.id, jobId: `job_${id}`, dnaArtifactId: "dna_artifacts", kind: "image", name, status, provider: "development-adapter", prompt, preview: { kind: "development-gradient", url: null, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: [], parentArtifactId: null }, retention: { state: "development-only", size: null }, settingsStamp: stamp(prompt), createdAt: date, updatedAt: date };
+    };
+    const artifacts = [artifact("artifact_ready", "Newest active frame", "ready", 3), artifact("artifact_accepted", "Accepted frame", "accepted", 2), artifact("artifact_archived", "Archived frame", "archived", 1)];
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [{ id: "accept_artifacts", artifactId: "artifact_accepted", decision: "accepted", note: "Keep the controlled violet depth.", actor: "development-user", createdAt: time }], idempotencyKeys: {} }));
+  }, { createdAt });
+
+  await page.goto("/#/gallery");
+  const activeFeed = page.getByRole("feed", { name: "Artifact history, newest first" });
+  await expect(activeFeed.locator(".artifact-card")).toHaveCount(2);
+  await expect(activeFeed.getByRole("heading", { name: "Newest active frame" })).toBeVisible();
+  await expect(activeFeed.getByRole("heading", { name: "Archived frame" })).toHaveCount(0);
+  await expect(page.getByText("1 archived", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "accepted 1" }).click();
+  await expect(activeFeed.getByRole("heading", { name: "Accepted frame" })).toBeVisible();
+  await expect(activeFeed.getByRole("heading", { name: "Newest active frame" })).toHaveCount(0);
+  const acceptedCard = activeFeed.locator(".artifact-card");
+  await expect(acceptedCard.getByText("Keep the controlled violet depth.")).toBeHidden();
+  await acceptedCard.getByText("Details & history").click();
+  await expect(acceptedCard.getByText("Keep the controlled violet depth.")).toBeVisible();
+
+  const archive = page.locator(".archived-artifacts");
+  await expect(archive).not.toHaveAttribute("open", "");
+  await archive.getByText("Archived history").click();
+  await expect(page.getByRole("feed", { name: "Archived artifact history, newest first" }).getByRole("heading", { name: "Archived frame" })).toBeVisible();
+  await page.getByRole("button", { name: "Create new" }).click();
+  await expect(page).toHaveURL(/#\/dna$/);
+});
+
 test("Projects opens the exact pending trained-DNA review instead of the default Create panel", async ({ page }) => {
   const createdAt = "2026-08-23T22:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
@@ -232,6 +269,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(page.getByRole("status")).toContainText("preserve · Keep the cyan reflections and spacious focal hierarchy");
   await expect(page.getByText(/1 project signals · 1 personal signals/)).toBeVisible();
   await expect(artifact.locator(".artifact-title").getByText("accepted", { exact: true })).toBeVisible();
+  await artifact.getByText("Details & history").click();
   await expect(artifact.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
   await expect(artifact.getByText("Reviewed by Development user")).toBeVisible();
   await artifact.getByRole("button", { name: "Evolve this" }).click();
@@ -245,6 +283,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.reload();
   const persisted = page.locator("article", { has: page.getByRole("heading", { name: "E2E Luminous Study" }) });
   await expect(persisted.locator(".artifact-title").getByText("accepted", { exact: true })).toBeVisible();
+  await persisted.getByText("Details & history").click();
   await expect(persisted.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
 
   await page.goto("/#/cockpit");
