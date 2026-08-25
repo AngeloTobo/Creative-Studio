@@ -1395,7 +1395,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .artifact-filters button, .artifact-filters select { min-height: 27px; padding: 0 9px; }
   .taste-memory-summary { margin-bottom: 7px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .taste-memory-summary > summary { min-height: 28px; padding: 3px 0; }
-  .taste-memory-summary > summary small { display: none; }
+  .taste-memory-summary > summary small { min-width: 0; overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
   .taste-memory-summary > div { padding: 5px 0 8px; }
   .artifact-grid { gap: 8px; }
   .evolution-study { padding: 7px 0 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; background: transparent; box-shadow: none; }
