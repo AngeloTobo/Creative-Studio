@@ -8,7 +8,7 @@ import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
 
-export const RUNNER_VERSION = "1.8.2";
+export const RUNNER_VERSION = "1.8.3";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -468,6 +468,14 @@ async function assertPromptSchedulesMediaOutput(config, promptId, graph, modalit
   }
 }
 
+async function cancelComfyPrompt(config, promptId) {
+  const response = await fetch(`${config.comfyUrl}/api/jobs/${encodeURIComponent(promptId)}/cancel`, {
+    method: "POST",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`comfyui_cancel_${response.status}`);
+}
+
 function allFileObjects(value, result = []) {
   if (Array.isArray(value)) {
     for (const item of value) allFileObjects(item, result);
@@ -588,7 +596,10 @@ async function waitForOutput(config, bundle, promptId) {
         method: "POST",
         body: JSON.stringify({ progress, stage: "rendering" }),
       });
-      if (!heartbeat.continue) throw new Error("creative_studio_job_cancelled");
+      if (!heartbeat.continue) {
+        await cancelComfyPrompt(config, promptId).catch(() => undefined);
+        throw new Error("creative_studio_job_cancelled");
+      }
       lastHeartbeat = Date.now();
     }
     let history;
@@ -900,10 +911,14 @@ async function executeBundle(config, bundle) {
     });
     const mediaOutputIds = validateComfyMediaOutputGraph(graph, bundle.job.modality);
     const promptId = bundle.job.upstreamId || await submitPrompt(config, graph, bundle.job.id, mediaOutputIds);
-    await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
+    const renderingHeartbeat = await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ progress: 8, upstreamId: promptId, stage: "rendering" }),
     });
+    if (!renderingHeartbeat.continue) {
+      await cancelComfyPrompt(config, promptId).catch(() => undefined);
+      throw new Error("creative_studio_job_cancelled");
+    }
     await assertPromptSchedulesMediaOutput(config, promptId, graph, bundle.job.modality);
     const output = await waitForOutput(config, { ...bundle, graph }, promptId);
     await runnerRequest(config, `/api/creative-studio/runner/jobs/${bundle.job.id}/heartbeat`, {
