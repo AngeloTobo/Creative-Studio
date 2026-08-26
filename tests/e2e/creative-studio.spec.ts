@@ -60,6 +60,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
             { id: "13::width", label: "Width", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "width" } },
             { id: "13::height", label: "Height", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "height" } },
             { id: "3::steps", label: "Steps", kind: "number", value: 8, mediaKind: null, binding: { format: "comfyui-api", nodeId: "3", inputName: "steps" } },
+            { id: "3::seed", label: "Seed", kind: "number", value: 42, mediaKind: null, binding: { format: "comfyui-api", nodeId: "3", inputName: "seed" } },
             { id: "2::text", label: "Prompt", kind: "text", value: "A quiet portrait", mediaKind: null, binding: { format: "comfyui-api", nodeId: "2", inputName: "text" } },
           ],
         },
@@ -81,6 +82,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
             { id: "398:350::image", label: "Load Image", kind: "media", value: "source.png", mediaKind: "image", binding: { format: "comfyui-api", nodeId: "398:350", inputName: "image" } },
             { id: "398:376::prompt", label: "LTX Positive Prompt", kind: "text", value: "Imported LTX prompt", mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:376", inputName: "prompt" } },
             { id: "398:362::value", label: "Duration", kind: "number", value: 5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:362", inputName: "value" } },
+            { id: "398:361::value", label: "Frame Rate", kind: "number", value: 24, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:361", inputName: "value" } },
           ],
         },
       }],
@@ -97,11 +99,24 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   const speed = page.getByRole("group", { name: "Image speed" });
   await expect(speed.getByRole("button", { name: /^Fast/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Save & generate image · fast/ })).toBeVisible();
+  const renderSetup = page.getByRole("region", { name: "Canvas and render settings" });
+  const canvasShape = page.getByRole("group", { name: "Canvas shape" });
+  const renderDetail = page.getByRole("group", { name: "Render detail" });
+  await expect(renderSetup).toBeVisible();
+  await expect(canvasShape.getByRole("button", { name: "9:16 Portrait" })).toBeVisible();
+  await canvasShape.getByRole("button", { name: "9:16 Portrait" }).click();
+  await expect(canvasShape.getByRole("button", { name: "9:16 Portrait" })).toHaveAttribute("aria-pressed", "true");
+  await renderDetail.getByRole("button", { name: /Balanced/ }).click();
+  await expect(renderDetail.getByRole("button", { name: /Balanced/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(speed.getByRole("button", { name: /Custom · can be slow/ })).toHaveAttribute("aria-pressed", "true");
+  await renderSetup.getByText("Fine tune", { exact: true }).click();
+  await expect(page.getByRole("group", { name: "Sampling steps" }).getByRole("button", { name: "8", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.locator(".quick-create-advanced > summary").click();
-  await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("512");
-  await expect(page.getByRole("spinbutton", { name: "Height" })).toHaveValue("512");
-  await speed.getByRole("button", { name: /Custom · can be slow/ }).click();
-  await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("1024");
+  await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveCount(0);
+  await expect(page.getByRole("spinbutton", { name: "Height" })).toHaveCount(0);
+  await expect(page.getByRole("spinbutton", { name: "Steps" })).toHaveCount(0);
+  await expect(page.getByRole("spinbutton", { name: "Seed" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
   const videoDuration = page.getByRole("group", { name: "Video duration" });
@@ -113,17 +128,18 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByLabel("Video length")).toContainText("Each of 2 versions");
   await expect(page.getByLabel("Video length")).toContainText("Aligned follows your direction; Discovery uses 70% random DNA.");
   const videoDirection = page.getByRole("textbox", { name: "Describe the video" });
-  const exactVideoPrompt = page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax H3 Image to Video: Prompt" });
   await expect(page.getByRole("spinbutton", { name: "Float (duration)" })).toHaveCount(0);
   await expect(videoDirection).toHaveValue("");
-  await expect(exactVideoPrompt).toHaveValue("");
+  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax H3 Image to Video: Prompt" })).toHaveCount(0);
   await videoDirection.fill("The subject turns toward the sunrise while the camera slowly pulls back.");
-  await expect(exactVideoPrompt).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
+  await expect(videoDirection).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
   await videoDuration.getByRole("button", { name: "30s", exact: true }).click();
   await expect(page.getByRole("button", { name: /LTX 2.5 Image to Video/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /MiniMax Video H3/ })).toBeDisabled();
   await expect(page.getByLabel("Video length")).toContainText("30s is an LTX long render");
-  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "LTX Positive Prompt" })).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
+  await page.getByRole("region", { name: "Canvas and render settings" }).getByText("Fine tune", { exact: true }).click();
+  await expect(page.getByRole("group", { name: "Frames per second" }).getByRole("button", { name: /24/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "LTX Positive Prompt" })).toHaveCount(0);
 });
 
 test("song creation recommends MiniMax Music captions from analyzed art and DNA without imported lyrics", async ({ page }) => {
@@ -174,7 +190,7 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
   await page.locator(".quick-song-lyrics > summary").click();
   await expect(page.getByRole("textbox", { name: "Song lyrics" })).toHaveValue("");
   await page.locator(".quick-create-advanced > summary").click();
-  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax Music3 Text Encode: Lyrics" })).toHaveValue("");
+  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax Music3 Text Encode: Lyrics" })).toHaveCount(0);
 });
 
 test("evolution results stay in one side-by-side study instead of repeating in artifact history", async ({ page }) => {

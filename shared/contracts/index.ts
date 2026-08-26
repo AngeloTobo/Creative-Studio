@@ -3,6 +3,7 @@ export * from "./creativeDna";
 export * from "./domain";
 export * from "./evolution";
 export * from "./generationPerformance";
+export * from "./generationControls";
 export * from "./productionLoop";
 export * from "./productionCockpit";
 export * from "./songPrompts";
