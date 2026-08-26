@@ -6,4 +6,5 @@ export * from "./generationPerformance";
 export * from "./productionLoop";
 export * from "./productionCockpit";
 export * from "./songPrompts";
+export * from "./videoDuration";
 export * from "./workflows";

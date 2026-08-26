@@ -66,6 +66,17 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
           parameters: [
             { id: "114::image", label: "Load Image", kind: "media", value: "source.png", mediaKind: "image", binding: { format: "comfyui-api", nodeId: "114", inputName: "image" } },
             { id: "105:104::prompt", label: "MiniMax H3 Image to Video: Prompt", kind: "text", value: "Imported cybernetic prompt that must not be reused", mediaKind: null, binding: { format: "comfyui-api", nodeId: "105:104", inputName: "prompt" } },
+            { id: "105:111::value", label: "Float (duration)", kind: "number", value: 10, mediaKind: null, binding: { format: "comfyui-api", nodeId: "105:111", inputName: "value" } },
+          ],
+        },
+      }, {
+        id: "workflow_ltx", projectId: "project_fast", name: "LTX 2.5 Image to Video", description: "", sourceFileName: "ltx-2.5-i2v.json", modality: "video", executionState: "ready", createdAt: time, updatedAt: time,
+        currentRevision: {
+          id: "workflowrev_ltx", workflowId: "workflow_ltx", version: 3, parentRevisionId: "workflowrev_ltx_2", format: "comfyui-api", contentHash: "ghi789", nodeCount: 3, models: ["ltx-2.5-22b.safetensors"], createdAt: time,
+          parameters: [
+            { id: "398:350::image", label: "Load Image", kind: "media", value: "source.png", mediaKind: "image", binding: { format: "comfyui-api", nodeId: "398:350", inputName: "image" } },
+            { id: "398:376::prompt", label: "LTX Positive Prompt", kind: "text", value: "Imported LTX prompt", mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:376", inputName: "prompt" } },
+            { id: "398:362::value", label: "Duration", kind: "number", value: 5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:362", inputName: "value" } },
           ],
         },
       }],
@@ -82,13 +93,26 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("1024");
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
-  await expect(page.getByLabel("Two video versions per request")).toContainText("Aligned: your exact direction · Discovery: 70% random DNA");
+  const videoDuration = page.getByRole("group", { name: "Video duration" });
+  await expect(videoDuration.getByRole("button", { name: "5s", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(videoDuration.getByRole("button", { name: "10s", exact: true })).toBeVisible();
+  await expect(videoDuration.getByRole("button", { name: "15s", exact: true })).toBeVisible();
+  await expect(videoDuration.getByRole("button", { name: "30s", exact: true })).toBeVisible();
+  await expect(videoDuration.getByRole("button", { name: "1m", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Video length")).toContainText("Each of 2 versions");
+  await expect(page.getByLabel("Video length")).toContainText("Aligned follows your direction; Discovery uses 70% random DNA.");
   const videoDirection = page.getByRole("textbox", { name: "Describe the video" });
   const exactVideoPrompt = page.locator(".workflow-run-parameters").getByRole("textbox", { name: "MiniMax H3 Image to Video: Prompt" });
+  await expect(page.getByRole("spinbutton", { name: "Float (duration)" })).toHaveCount(0);
   await expect(videoDirection).toHaveValue("");
   await expect(exactVideoPrompt).toHaveValue("");
   await videoDirection.fill("The subject turns toward the sunrise while the camera slowly pulls back.");
   await expect(exactVideoPrompt).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
+  await videoDuration.getByRole("button", { name: "30s", exact: true }).click();
+  await expect(page.getByRole("button", { name: /LTX 2.5 Image to Video/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /MiniMax Video H3/ })).toBeDisabled();
+  await expect(page.getByLabel("Video length")).toContainText("30s is an LTX long render");
+  await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "LTX Positive Prompt" })).toHaveValue("The subject turns toward the sunrise while the camera slowly pulls back.");
 });
 
 test("song creation recommends MiniMax Music captions from analyzed art and DNA without imported lyrics", async ({ page }) => {

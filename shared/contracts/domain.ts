@@ -86,6 +86,7 @@ export type GenerationSettingsStamp = {
   provider: string;
   modality: string;
   performanceMode?: ImagePerformanceMode;
+  videoDurationSeconds?: import("./videoDuration").VideoDurationSeconds;
   workflow: null | {
     workflowId: string;
     revisionId: string;

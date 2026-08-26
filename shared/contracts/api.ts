@@ -25,6 +25,7 @@ import type {
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis, VideoGenerationVariant } from "./creativeDna";
 import type { ProjectProductionLoop } from "./productionLoop";
 import type { ProductionCockpit } from "./productionCockpit";
+import type { VideoDurationSeconds } from "./videoDuration";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
 
 export const CREATIVE_STUDIO_API_PREFIX = "/api/creative-studio" as const;
@@ -154,6 +155,7 @@ export type SubmitJobRequest = {
     expectedPrompt: string;
   };
   performanceMode?: ImagePerformanceMode;
+  videoDurationSeconds?: VideoDurationSeconds;
   videoVariant?: VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
   evolution?: EvolutionJobContext;

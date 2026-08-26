@@ -20,6 +20,11 @@ import {
   musicWorkflowLyricsParameter,
   musicWorkflowPromptProfile,
   primaryWorkflowPromptParameter,
+  VIDEO_DURATION_OPTIONS,
+  videoDurationLabel,
+  videoWorkflowDurationParameters,
+  videoWorkflowDurationProfile,
+  workflowSupportsVideoDuration,
   workflowRuntimeHistory,
   type Artifact,
   type MediaAsset,
@@ -28,6 +33,7 @@ import {
   type WorkflowParameter,
   type WorkflowScalar,
   type VideoGenerationOperation,
+  type VideoDurationSeconds,
   type EvolutionJobContext,
   type EvolutionRole,
 } from "../../../shared/contracts";
@@ -189,6 +195,7 @@ export function GenerationView({
   const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
+  const [videoDurationSeconds, setVideoDurationSeconds] = useState<VideoDurationSeconds>(5);
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
   const [notice, setNotice] = useState(autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected as the source.` : "");
@@ -215,6 +222,7 @@ export function GenerationView({
       setWorkflowValues({});
       setValuesRevisionId("");
       setImagePerformanceMode("fast-default");
+      setVideoDurationSeconds(5);
       setNotice("");
       setVideoOperation(null);
       setEvolutionEnabled(false);
@@ -255,6 +263,9 @@ export function GenerationView({
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
+  const durationCompatibleWorkflows = generationIntent === "video"
+    ? intentWorkflows.filter((item) => workflowSupportsVideoDuration(item, videoDurationSeconds))
+    : intentWorkflows;
   const runtimeMsByWorkflowId = Object.fromEntries(intentWorkflows.map((item) => {
     const durations = (snapshot?.jobs ?? [])
       .filter((job) => job.status === "completed" && job.settingsStamp.workflow?.workflowId === item.id && job.startedAt && job.completedAt)
@@ -265,11 +276,20 @@ export function GenerationView({
     const median = !durations.length ? null : durations.length % 2 ? durations[middle] : (durations[middle - 1] + durations[middle]) / 2;
     return [item.id, median];
   }));
-  const preferredWorkflow = preferredQuickWorkflow(intentWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null, runtimeMsByWorkflowId);
-  const workflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? preferredWorkflow;
+  const requestedWorkflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? null;
+  const preferredWorkflow = preferredQuickWorkflow(durationCompatibleWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null, runtimeMsByWorkflowId);
+  const workflow = requestedWorkflow && (generationIntent !== "video" || workflowSupportsVideoDuration(requestedWorkflow, videoDurationSeconds))
+    ? requestedWorkflow
+    : preferredWorkflow;
+  const durationFallback = generationIntent === "video" && requestedWorkflow && workflow && requestedWorkflow.id !== workflow.id
+    ? `${videoWorkflowDurationProfile(requestedWorkflow).label} supports up to ${videoDurationLabel(videoWorkflowDurationProfile(requestedWorkflow).maxSeconds)}; ${workflow.name} is selected for this length.`
+    : null;
   const musicPromptProfile = generationIntent === "music" && workflow ? musicWorkflowPromptProfile(workflow) : null;
   const mediaParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind === "media") ?? [];
   const scalarParameters = workflow?.currentRevision.parameters.filter((parameter) => parameter.kind !== "media") ?? [];
+  const durationParameters = generationIntent === "video" ? videoWorkflowDurationParameters(scalarParameters) : [];
+  const durationParameterIds = new Set(durationParameters.map((parameter) => parameter.id));
+  const advancedScalarParameters = scalarParameters.filter((parameter) => !durationParameterIds.has(parameter.id));
   const bindingSource = videoOperation && quickSource ? { ...quickSource, kind: "image" as const } : quickSource;
   const effectiveInputBindings = quickInputBindings(mediaParameters, inputBindings, bindingSource);
   const effectiveVideoOperation = videoOperation && quickSource?.kind === "video"
@@ -283,11 +303,13 @@ export function GenerationView({
   const workflowSeedParameter = generationIntent === "video"
     ? scalarParameters.find((parameter) => parameter.kind === "number" && /(?:^|\b|::)(?:noise_)?seed(?:\b|$)/i.test(`${parameter.id} ${parameter.label} ${parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : ""}`)) ?? null
     : null;
-  const rawParameterValue = (parameter: WorkflowParameter) => canonicalWorkflowParameterValue(parameter, parameter.id === workflowLyricsParameter?.id
-    ? lyrics
-    : workflowPromptParameterIds.has(parameter.id)
-      ? direction.trim()
-      : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues));
+  const rawParameterValue = (parameter: WorkflowParameter) => canonicalWorkflowParameterValue(parameter, durationParameterIds.has(parameter.id)
+    ? videoDurationSeconds
+    : parameter.id === workflowLyricsParameter?.id
+      ? lyrics
+      : workflowPromptParameterIds.has(parameter.id)
+        ? direction.trim()
+        : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues));
   const fastImageOverrides = generationIntent === "image" && imagePerformanceMode === "fast-default"
     ? fastImageParameterOverrides(scalarParameters.map((parameter) => ({ ...parameter, value: rawParameterValue(parameter) })))
     : {};
@@ -295,6 +317,7 @@ export function GenerationView({
     ? fastImageOverrides[parameter.id]
     : rawParameterValue(parameter);
   const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)));
+  const advancedSettingsChanged = advancedScalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)));
   const runnerOnline = snapshot?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
   const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
   const developmentPreviewAvailable = Boolean(uiOnlyDevelopment && snapshot?.adapter.development);
@@ -312,6 +335,7 @@ export function GenerationView({
     inputAssetIds: Object.values(effectiveInputBindings),
     inputArtifactIds: [],
     prompt: workflowPromptParameter ? String(parameterValue(workflowPromptParameter)).trim() : direction.trim(),
+    videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
   }) : null;
   const workflowHistory = workflow && !settingsChanged ? workflowRuntimeHistory(snapshot?.jobs ?? [], workflow.currentRevision.id) : null;
   const afdfwCapability = generationIntent === "music"
@@ -353,6 +377,29 @@ export function GenerationView({
     setImagePerformanceMode("fast-default");
     setLyrics("");
     setNotice("");
+  };
+
+  const chooseVideoDuration = (seconds: VideoDurationSeconds) => {
+    setVideoDurationSeconds(seconds);
+    setLocalError("");
+    if (!workflow || workflowSupportsVideoDuration(workflow, seconds)) {
+      setNotice("");
+      return;
+    }
+    const replacement = preferredQuickWorkflow(
+      intentWorkflows.filter((item) => workflowSupportsVideoDuration(item, seconds)),
+      "video",
+      videoOperation ? "image" : quickSource?.kind ?? null,
+      runtimeMsByWorkflowId,
+    );
+    setWorkflowId(replacement?.id ?? "");
+    setInputBindings({});
+    setWorkflowValues({});
+    setValuesRevisionId("");
+    const profile = videoWorkflowDurationProfile(workflow);
+    setNotice(replacement
+      ? `${profile.label} supports up to ${videoDurationLabel(profile.maxSeconds)}. ${replacement.name} selected for ${videoDurationLabel(seconds)}.`
+      : `No ready video model exposes a supported ${videoDurationLabel(seconds)} duration control.`);
   };
 
   const uploadAndUseMedia = async (file: File | null) => {
@@ -485,6 +532,7 @@ export function GenerationView({
             generationIntent === "image" ? imagePerformanceMode : undefined,
             variant,
             evolution,
+            generationIntent === "video" ? videoDurationSeconds : undefined,
           );
         }
         setValuesRevisionId(branchWorkflow.currentRevision.id);
@@ -512,6 +560,8 @@ export function GenerationView({
           effectiveVideoOperation ?? undefined,
           undefined,
           aligned.variant,
+          undefined,
+          videoDurationSeconds,
         );
         await submitWorkflowJob(
           discoveryWorkflow,
@@ -521,6 +571,8 @@ export function GenerationView({
           effectiveVideoOperation ?? undefined,
           undefined,
           discovery.variant,
+          undefined,
+          videoDurationSeconds,
         );
         setNotice("Aligned and Discovery queued as 2 durable video jobs. They will render one after the other on the Local Runner.");
         if (openQueueAfter) onQueued();
@@ -535,6 +587,9 @@ export function GenerationView({
         dna.artifactId,
         effectiveVideoOperation ?? undefined,
         generationIntent === "image" ? imagePerformanceMode : undefined,
+        undefined,
+        undefined,
+        generationIntent === "video" ? videoDurationSeconds : undefined,
       );
       setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
       if (openQueueAfter) onQueued();
@@ -620,6 +675,8 @@ export function GenerationView({
     ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
     : generationIntent === "music" && workflow
       ? `${basePrimaryLabel} · model-tuned`
+      : generationIntent === "video" && workflow
+        ? `${basePrimaryLabel} · ${videoDurationLabel(videoDurationSeconds)} each`
       : basePrimaryLabel;
 
   return (
@@ -644,10 +701,24 @@ export function GenerationView({
           <footer><span>{projectTasteMemory?.taste.signalCount ?? 0} project signals</span><span>{personalTaste?.signalCount ?? 0} personal signals</span><span>{projectTasteMemory?.canon.identity ? "Canon attached" : "Add canon in Projects"}</span></footer>
         </section> : null}
 
+        {generationIntent === "video" ? <div className="quick-video-duration" aria-label="Video length">
+          <header><span><Icon name="video" size={16} /><strong>Length</strong></span><small>{evolutionEnabled ? "Each of 3 branches" : "Each of 2 versions"}</small></header>
+          <div role="group" aria-label="Video duration">
+            {VIDEO_DURATION_OPTIONS.map((seconds) => <button type="button" key={seconds} className={videoDurationSeconds === seconds ? "on" : ""} aria-pressed={videoDurationSeconds === seconds} disabled={busy} onClick={() => chooseVideoDuration(seconds)}>{videoDurationLabel(seconds)}</button>)}
+          </div>
+          <p>{durationFallback ?? (videoDurationSeconds >= 30
+            ? `${videoDurationLabel(videoDurationSeconds)} is an LTX long render and can take substantially longer on local hardware.`
+            : evolutionEnabled ? "Refine, Correct, and Discovery use the same selected length." : "Aligned follows your direction; Discovery uses 70% random DNA.")}</p>
+        </div> : null}
+
         {intent !== "train" ? <div className="quick-model-picker">
           <div className="quick-model-head"><span>Model</span><button className="link-btn" onClick={onWorkflows}>Manage models</button></div>
           {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
-            {intentWorkflows.map((item) => <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}</small></span></button>)}
+            {intentWorkflows.map((item) => {
+              const durationUnsupported = generationIntent === "video" && !workflowSupportsVideoDuration(item, videoDurationSeconds);
+              const durationProfile = generationIntent === "video" ? videoWorkflowDurationProfile(item) : null;
+              return <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy || durationUnsupported} title={durationUnsupported && durationProfile ? `${durationProfile.label} supports up to ${videoDurationLabel(durationProfile.maxSeconds)}` : undefined} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}{durationProfile ? ` · max ${videoDurationLabel(durationProfile.maxSeconds)}` : ""}</small></span></button>;
+            })}
           </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
           {musicPromptProfile ? <small className="quick-model-prompt-profile">Gemma formats this for {musicPromptProfile.targetModel}: {musicPromptProfile.outputFormat === "structured-caption" ? "Global Metadata + Vocal Details + section-by-section Arrangement" : "one concise natural-language audio prompt"}.</small> : null}
         </div> : null}
@@ -664,11 +735,6 @@ export function GenerationView({
               : imagePerformance?.requiresExplicitCustom
                 ? `Long-run factors: ${imagePerformance.reasons.join("; ")}.`
                 : "Custom mode is explicit, but these exact controls are still within the fast limits."}</small>
-        </div> : null}
-
-        {generationIntent === "video" && workflow && !evolutionEnabled ? <div className="quick-video-pair" aria-label="Two video versions per request">
-          <Icon name="video" size={16} />
-          <span><strong>2 versions per run</strong><small>Aligned: your exact direction · Discovery: 70% random DNA</small></span>
         </div> : null}
 
         <div className={`quick-source-row${videoOperation ? " video-extension-source" : ""}`}>
@@ -729,7 +795,7 @@ export function GenerationView({
             return <label className="field" key={parameter.id}><span>{parameter.label}</span><select value={effectiveInputBindings[parameter.id] ?? ""} onChange={(event) => setInputBindings((current) => ({ ...current, [parameter.id]: event.target.value }))}><option value="">Choose {parameter.mediaKind ?? "media"}</option>{[...artifactChoices, ...uploadChoices].map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}</select></label>;
           })}</div></section> : null}
 
-          {scalarParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Exact settings</strong><small>{settingsChanged ? `Will save workflow v${(workflow?.currentRevision.version ?? 0) + 1}` : `Workflow v${workflow?.currentRevision.version}`}</small></header><div className="workflow-run-parameters">{scalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} onChange={(value) => {
+          {advancedScalarParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Exact settings</strong><small>{settingsChanged ? `Will save workflow v${(workflow?.currentRevision.version ?? 0) + 1}` : `Workflow v${workflow?.currentRevision.version}`}</small></header><div className="workflow-run-parameters">{advancedScalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} onChange={(value) => {
             if (!workflow) return;
             if (parameter.id === workflowPromptParameter?.id) {
               setDirection(String(value));
@@ -743,7 +809,7 @@ export function GenerationView({
             setImagePerformanceMode("explicit-custom");
             setValuesRevisionId(workflow.currentRevision.id);
             setWorkflowValues({ ...displayedValues, [parameter.id]: value });
-          }} />)}</div>{settingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setImagePerformanceMode("fast-default"); setLyrics(""); setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Return to fast defaults</button> : null}</section> : null}
+          }} />)}</div>{advancedSettingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setImagePerformanceMode("fast-default"); setLyrics(""); setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Return to workflow defaults</button> : null}</section> : null}
 
           {workflowWorkload ? <details className="workflow-performance create-performance quick-advanced-wide"><summary><span><Icon name="analytics" size={15} /><strong>Speed & quality evidence</strong><small>{settingsChanged ? "New settings" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} runs` : "No exact-revision history"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m alert</em></summary><div className="workflow-performance-body">{workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No workload controls are exposed by this workflow.</p>}{workflow.currentRevision.models.length ? <div className="job-performance-models"><small>Models</small><div>{workflow.currentRevision.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}<p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No high-cost setting stands out."}</p><small>{workflowWorkload.promptAssessment}</small></div></details> : null}
 

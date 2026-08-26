@@ -50,7 +50,7 @@ export type ImagePerformanceAssessment = {
   reasons: string[];
 };
 
-type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt">;
+type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt" | "videoDurationSeconds">;
 
 const AFDFW_Z_IMAGE_PROFILE: GenerationProviderWorkloadProfile = {
   profileId: "afdfw-z-image-bridge-v1",
@@ -203,7 +203,7 @@ export function analyzeGenerationWorkload(source: WorkloadSource): GenerationWor
   const megapixels = width && height ? width * height / 1_000_000 : declaredMegapixels;
   const steps = maximumParameter(source.parameters, ["steps", "sampling_steps"]);
   const frames = maximumParameter(source.parameters, ["frames", "frame_count", "num_frames"]);
-  const durationSeconds = maximumParameter(source.parameters, ["seconds", "duration", "max_duration"]);
+  const durationSeconds = source.videoDurationSeconds ?? maximumParameter(source.parameters, ["seconds", "duration", "max_duration"]);
   const fps = maximumParameter(source.parameters, ["fps", "frame_rate"]);
   const batchSize = maximumParameter(source.parameters, ["batch_size", "batch"]);
   const modelCount = new Set(source.models.filter(Boolean)).size;

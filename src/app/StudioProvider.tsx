@@ -23,6 +23,7 @@ import type {
   VideoGenerationOperation,
   ImagePerformanceMode,
   VideoGenerationVariant,
+  VideoDurationSeconds,
   EvolutionJobContext,
   ReviewArtifactResponse,
 } from "../../shared/contracts";
@@ -43,7 +44,7 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPrompt: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPrompt: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds) => Promise<void>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -66,6 +67,9 @@ function message(error: unknown) {
   if (error.message === "image_custom_mode_required") {
     return "This image setup exceeds the fast limits. Open Create and choose Custom · can be slow only when you want that longer render.";
   }
+  if (error.message === "video_duration_not_supported_by_model") return "That model cannot create the selected length. Choose a shorter length or an available LTX model.";
+  if (error.message === "video_duration_control_missing") return "This workflow does not expose a duration control. Update its model workflow before generating.";
+  if (error.message === "video_duration_revision_mismatch") return "The saved workflow duration does not match your selected length. Choose the length again and retry.";
   return error.message.replaceAll("_", " ");
 }
 
@@ -213,7 +217,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPromptValue: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext) => {
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPromptValue: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -231,6 +235,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       idempotencyKey: operationKey("workflow"),
       workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings, expectedPrompt },
       performanceMode,
+      videoDurationSeconds,
       videoVariant,
       videoOperation,
       evolution,

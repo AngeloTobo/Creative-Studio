@@ -1239,7 +1239,7 @@ describe("Creative Studio Worker API", () => {
     }), local)) as { asset: { id: string } };
     const graph = JSON.stringify({
       "1": { class_type: "LoadImage", inputs: { image: "source.png" } },
-      "2": { class_type: "MiniMaxH3I2V", inputs: { prompt: "Original H3 motion prompt", image: ["1", 0], seed: 42 } },
+      "2": { class_type: "MiniMaxH3I2V", inputs: { prompt: "Original H3 motion prompt", image: ["1", 0], seed: 42, duration: 10 } },
       "3": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
     });
     const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
@@ -1283,6 +1283,7 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "video",
+        videoDurationSeconds: 10,
         idempotencyKey: "runner_video_submit_001",
         workflow: {
           workflowId: imported.workflow.id,
@@ -1299,8 +1300,8 @@ describe("Creative Studio Worker API", () => {
           source: "upload",
         },
       }),
-    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant; evolution: { studyId: string; role: string; sourceId: string; sourceKind: string; projectCanon: { identity: string; currentDirection: string } } } } };
-    expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash } } });
+    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; videoDurationSeconds: number; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant; evolution: { studyId: string; role: string; sourceId: string; sourceKind: string; projectCanon: { identity: string; currentDirection: string } } } } };
+    expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash }, videoDurationSeconds: 10 } });
     expect(created.job.settingsStamp.workloadEvidence).toEqual({ source: "workflow-revision", profileId: imported.workflow.currentRevision.id, label: "MiniMax H3 I2V v1" });
     expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
     expect(created.job.settingsStamp.videoVariant).toEqual(alignedVideoVariant);

@@ -10,6 +10,7 @@ import {
   type Capability,
   type CreateProjectRequest,
   matchCreativeStudioRoute,
+  normalizeVideoDurationSeconds,
   primaryWorkflowPromptParameter,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaTrainingJobRequest,
@@ -27,6 +28,8 @@ import {
   type RunnerTrainingHeartbeatRequest,
   type RunnerCompleteTrainingRequest,
   type ReviewCreativeDnaTrainingRequest,
+  videoWorkflowDurationParameters,
+  workflowSupportsVideoDuration,
 } from "../../shared/contracts";
 import { afdfwMedia, afdfwSession } from "../adapters/afdfw";
 import { backendMode } from "../config";
@@ -456,6 +459,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         evolutionTaste = compileCreativeTasteMemory({ projects: allProjects, artifacts: reviewArtifacts, acceptances: reviews, trainingReviews: dnaReviews, dnaArtifacts });
       }
       const modality = input.modality as GenerationModality;
+      const normalizedVideoDuration = input.videoDurationSeconds === undefined ? undefined : normalizeVideoDurationSeconds(input.videoDurationSeconds);
+      if (input.videoDurationSeconds !== undefined && normalizedVideoDuration === null) throw new Error("invalid_video_duration");
+      const videoDurationSeconds = normalizedVideoDuration ?? undefined;
+      if (videoDurationSeconds !== undefined && modality !== "video") throw new Error("invalid_video_duration");
       const videoOperation = requestedVideoOperation(input.videoOperation, modality);
       const videoVariant = input.videoVariant === undefined ? undefined : normalizeVideoGenerationVariant(input.videoVariant);
       if (videoVariant && modality !== "video") throw new Error("invalid_video_generation_variant");
@@ -474,6 +481,14 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         const plan = await workflowExecutionPlan(env, session.userId, boundedText(input.workflow.workflowId, 100), boundedText(input.workflow.revisionId, 100));
         const expectedModality = workflowJobModality(plan.workflow.modality);
         if (expectedModality !== modality) throw new Error("workflow_modality_mismatch");
+        if (videoDurationSeconds !== undefined) {
+          const durationParameters = videoWorkflowDurationParameters(plan.workflow.currentRevision.parameters);
+          if (!durationParameters.length) throw new Error("video_duration_control_missing");
+          if (!workflowSupportsVideoDuration(plan.workflow, videoDurationSeconds)) throw new Error("video_duration_not_supported_by_model");
+          if (durationParameters.some((parameter) => Number(parameter.value) !== videoDurationSeconds)) {
+            throw new Error("video_duration_revision_mismatch");
+          }
+        }
         const mediaParameters = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "media");
         const allowedParameters = new Map(mediaParameters.map((parameter) => [parameter.id, parameter]));
         const inputBindings = Object.fromEntries(Object.entries(input.workflow.inputBindings)
@@ -564,6 +579,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             provider: "local-comfyui",
             modality,
             performanceMode,
+            videoDurationSeconds,
             workflow: {
               workflowId: plan.workflow.id,
               revisionId: plan.workflow.currentRevision.id,
