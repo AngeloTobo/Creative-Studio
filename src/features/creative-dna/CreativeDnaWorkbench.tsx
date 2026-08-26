@@ -155,7 +155,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
         <div className="workspace-head-actions"><button className="btn btn-ghost" onClick={() => setWorkspace("create")}><Icon name="chevron" size={16} /> Back to Create</button><button className="btn btn-ghost" onClick={startNew}><Icon name="plus" size={16} /> New DNA</button></div>
       </div> : null}
 
-      {productionLoop && workspace !== "create" ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} compact /> : null}
+      {productionLoop && workspace === "design" ? <ProductionLoopPanel loop={productionLoop} onAction={productionAction} compact /> : null}
 
       {workspace === "design" ? <><div className="dna-layout">
         <div className="form-card glass dna-compose" id="creative-dna-authoring">

@@ -114,6 +114,7 @@ export type GenerationSettingsStamp = {
   videoOperation?: VideoGenerationOperation;
   evolution?: GenerationEvolutionStamp;
   promptEnhancement?: SongPromptEnhancementStamp;
+  modelAdapters?: import("./modelTraining").GenerationModelAdapterBinding[];
 };
 
 export type SongPromptProfileId =
@@ -355,7 +356,8 @@ export type CapabilityKey =
   | "afdfw-session"
   | "workflow-library"
   | "creative-dna-training-data"
-  | "creative-dna-training";
+  | "creative-dna-training"
+  | "model-adapter-training";
 
 export type CapabilityState = "available" | "degraded" | "unavailable";
 
@@ -392,6 +394,7 @@ export type LocalRunner = {
   comfyVersion: string | null;
   device: string | null;
   activeJobId: string | null;
+  modelTrainingProviders: import("./modelTraining").ModelTrainingProvider[];
   lastError: string | null;
   lastHeartbeatAt: IsoDateString | null;
   createdAt: IsoDateString;

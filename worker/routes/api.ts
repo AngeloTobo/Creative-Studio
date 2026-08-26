@@ -28,6 +28,13 @@ import {
   type RunnerTrainingHeartbeatRequest,
   type RunnerCompleteTrainingRequest,
   type ReviewCreativeDnaTrainingRequest,
+  type CreateModelTrainingJobRequest,
+  type ReviewModelTrainingDatasetRequest,
+  type ReviewModelAdapterRequest,
+  type RunnerModelTrainingHeartbeatRequest,
+  type RunnerCompleteModelTrainingDatasetRequest,
+  type RunnerCompleteModelTrainingRequest,
+  type RunnerFailModelTrainingRequest,
   videoWorkflowDurationParameters,
   workflowSupportsVideoDuration,
 } from "../../shared/contracts";
@@ -93,6 +100,21 @@ import {
   listCreativeDnaTrainingReviews,
   reviewCreativeDnaTrainingJob,
 } from "../training";
+import {
+  cancelModelTrainingJob,
+  claimModelTrainingJob,
+  completeModelTrainingDataset,
+  completeModelTrainingJob,
+  createModelTrainingJob,
+  failModelTrainingJob,
+  heartbeatModelTrainingJob,
+  listModelAdapterReviews,
+  listModelAdapters,
+  listModelTrainingJobs,
+  reviewModelAdapter,
+  reviewModelTrainingDataset,
+  activeMusicAdapterBindings,
+} from "../modelTraining";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -121,7 +143,9 @@ function statusFor(error: string) {
   if (error === "invalid_media_range") return 416;
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable"
     || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable"
-    || error === "training_review_required" || error === "training_review_not_ready" || error === "training_evidence_already_reserved") return 409;
+    || error === "training_review_required" || error === "training_review_not_ready" || error === "training_evidence_already_reserved"
+    || error === "model_training_job_not_cancellable" || error === "model_training_dataset_not_ready"
+    || error === "model_adapter_already_reviewed") return 409;
   if (error === "runner_job_not_completable" || error === "image_custom_mode_required") return 409;
   return 400;
 }
@@ -178,6 +202,23 @@ function requestedVideoOperation(value: SubmitJobRequest["videoOperation"], moda
   return { ...value, sourceId, transitionSeconds } as NonNullable<SubmitJobRequest["videoOperation"]>;
 }
 
+function aceStepWorkflowIdentity(workflow: Awaited<ReturnType<typeof workflowExecutionPlan>>["workflow"]) {
+  return [workflow.name, workflow.description, workflow.sourceFileName, ...workflow.currentRevision.models]
+    .filter(Boolean).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+}
+
+function aceStepAdapterParameterIds(workflow: Awaited<ReturnType<typeof workflowExecutionPlan>>["workflow"]) {
+  let fileId: string | null = null;
+  let strengthId: string | null = null;
+  for (const parameter of workflow.currentRevision.parameters) {
+    const bindingName = parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : "";
+    const identity = `${parameter.id} ${parameter.label} ${bindingName}`.toLowerCase();
+    if (!fileId && /(lora|adapter).*(name|file|path)|(name|file|path).*(lora|adapter)/.test(identity)) fileId = parameter.id;
+    if (!strengthId && /(lora|adapter).*(strength|weight|scale)|(strength|weight|scale).*(lora|adapter)/.test(identity)) strengthId = parameter.id;
+  }
+  return { fileId, strengthId };
+}
+
 async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awaited<ReturnType<typeof listLocalRunners>>): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
   if (developmentMode(env)) {
@@ -185,12 +226,15 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
     const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
     const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
+    const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
+      && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
     if (localHardwareMode(env)) return [
       { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Local Creative Studio D1", detail: "Versioned DNA stays in the Wrangler-local database on this machine.", checkedAt },
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Local Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploads and generated results stay in Wrangler-local object storage." : "A local R2 binding is required for real media.", checkedAt },
       { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Local Creative Studio D1", detail: "Uploaded workflow JSON and immutable revisions stay on this machine.", checkedAt },
       { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Local Creative Studio D1", detail: "Accepted prompts, settings, and consented uploads remain local training evidence.", checkedAt },
-      { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "RTX hardware + Gemma 4", detail: trainingRunnerAvailable ? "The local runner can analyze image, audio, and video on this machine." : "Start the local stack and ComfyUI to process durable training jobs.", checkedAt },
+      { key: "creative-dna-training", label: "Analyze CreativeDNA", state: trainingRunnerAvailable ? "available" : "degraded", provider: "RTX hardware + Gemma 4", detail: trainingRunnerAvailable ? "The local runner can analyze image, audio, and video on this machine." : "Start the local stack and ComfyUI to process durable analysis jobs.", checkedAt },
+      { key: "model-adapter-training", label: "ACE-Step music LoRA", state: aceStepTrainingAvailable ? "available" : "degraded", provider: "Local ACE-Step 1.5 + RTX 3090", detail: aceStepTrainingAvailable ? "This runner can prepare, train, retain, and review ACE-Step music LoRA adapters." : "Install the ACE-Step 1.5 runtime and Base checkpoints on the paired machine; Creative Studio will not simulate model training.", checkedAt },
       { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "This Windows machine", detail: runnerAvailable ? "ComfyUI work is executing directly against localhost hardware." : "Start the local stack and ComfyUI to execute imported API-format workflows.", checkedAt },
       { key: "music-generation", label: "Music generation", state: musicRunnerAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: musicRunnerAvailable ? "Gemma 4 compiles each direction with the selected music model's prompt profile before rendering." : "Start Local Runner 1.7 or newer so song prompts are compiled for the selected model.", checkedAt },
       { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable image workflow is required; no development media is generated.", checkedAt },
@@ -206,7 +250,8 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Owner uploads are size-verified and retained under project scope." : "An R2 binding is required for real uploads.", checkedAt },
       { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Uploaded graphs and custom settings are stored as immutable, content-hashed revisions.", checkedAt },
       { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Generated results enter a candidate set; explicit acceptance promotes prompt and settings evidence to training-ready.", checkedAt },
-      { key: "creative-dna-training", label: "CreativeDNA training", state: "unavailable", provider: "local runner required", detail: "Real upload-based training jobs require the Creative Studio Worker and an authenticated local trainer.", checkedAt },
+      { key: "creative-dna-training", label: "Analyze CreativeDNA", state: "unavailable", provider: "local runner required", detail: "Real upload analysis jobs require the Creative Studio Worker and an authenticated local runner.", checkedAt },
+      { key: "model-adapter-training", label: "ACE-Step music LoRA", state: "unavailable", provider: "local ACE-Step runner required", detail: "Model training is never simulated by the development adapter.", checkedAt },
       { key: "local-runner", label: "Local Runner", state: "unavailable", provider: "not paired", detail: "Pair a Windows runner through Settings to execute API-format ComfyUI workflows.", checkedAt },
       { key: "music-generation", label: "Music generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
@@ -223,13 +268,16 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
   const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
   const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
   const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
+  const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
+    && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
   const generationState = session.status === "approved" ? "available" : "unavailable";
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
     { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Workflow JSON, detected controls, models, revisions, and content hashes remain product-owned.", checkedAt },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
-    { key: "creative-dna-training", label: "CreativeDNA training", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + Gemma 4", detail: trainingRunnerAvailable ? "The paired machine measures selected media and uses Gemma 4 to retain a detailed image, audio, or video description with each source." : "Training jobs remain durable until a paired Local Runner 1.2 or newer comes online.", checkedAt },
+    { key: "creative-dna-training", label: "Analyze CreativeDNA", state: trainingRunnerAvailable ? "available" : "degraded", provider: "Creative Studio D1 + Gemma 4", detail: trainingRunnerAvailable ? "The paired machine measures selected media and uses Gemma 4 to retain a detailed image, audio, or video description with each source." : "Analysis jobs remain durable until a paired Local Runner 1.2 or newer comes online.", checkedAt },
+    { key: "model-adapter-training", label: "ACE-Step music LoRA", state: aceStepTrainingAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ACE-Step 1.5", detail: aceStepTrainingAvailable ? "The paired machine can execute reviewed ACE-Step tensor preprocessing and LoRA training locally." : "Install ACE-Step 1.5 Base checkpoints on the paired runner. The job stays durable and no fake checkpoint is produced.", checkedAt },
     { key: "local-runner", label: "Local Runner", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Windows agent", detail: runnerAvailable ? "A paired machine is online and can claim ComfyUI workflow jobs without an open browser." : "Pair and start the Windows agent in Settings to execute imported API-format workflows.", checkedAt },
     { key: "music-generation", label: "Music generation", state: musicRunnerAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: musicRunnerAvailable ? "Gemma 4 compiles the authored music brief with the selected model's prompt profile before ComfyUI runs, including MiniMax Music 3's structured caption." : "Music jobs remain durable until a paired Local Runner 1.7 or newer can compile and render them.", checkedAt },
     { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ComfyUI", detail: runnerAvailable ? "Imported API-format image workflows execute on the paired machine." : "Image jobs remain durable and wait for the paired machine to come online.", checkedAt },
@@ -250,7 +298,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, trainingJobs, trainingReviews, runners] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, runners] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -262,6 +310,9 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listWorkflows(env, session.userId),
     listCreativeDnaTrainingJobs(env, session.userId),
     listCreativeDnaTrainingReviews(env, session.userId),
+    listModelTrainingJobs(env, session.userId),
+    listModelAdapters(env, session.userId),
+    listModelAdapterReviews(env, session.userId),
     listLocalRunners(env, session.userId),
   ]);
   const computedAt = new Date().toISOString();
@@ -289,6 +340,9 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     trainingExamples,
     trainingJobs,
     trainingReviews,
+    modelTrainingJobs,
+    modelAdapters,
+    modelAdapterReviews,
     productionLoops,
     productionCockpit: deriveProductionCockpit({
       projects, dnaArtifacts, jobs, artifacts, mediaAssets, acceptances, trainingJobs, trainingReviews, runners,
@@ -314,6 +368,8 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (generation) return json({ ok: true, kind: "generation", bundle: generation });
     const training = await claimLocalRunnerTrainingJob(env, currentRunner);
     if (training) return json({ ok: true, kind: "training", bundle: training });
+    const modelTraining = await claimModelTrainingJob(env, currentRunner, input.modelTrainingProviders ?? []);
+    if (modelTraining) return json({ ok: true, kind: "model-training", bundle: modelTraining });
     return json({ ok: true, kind: null, bundle: null });
   }
   if (route === "runner-heartbeat") {
@@ -375,6 +431,30 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const input = await body<RunnerFailJobRequest>(request);
     if (!match || !input) throw new Error("invalid_runner_request");
     return json({ ok: true, trainingJob: await failLocalRunnerTrainingJob(env, runner, match[1], input.error) });
+  }
+  if (route === "runner-model-training-dataset") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/model-training\/([a-z0-9_]+)\/dataset$/i);
+    const input = await body<RunnerCompleteModelTrainingDatasetRequest>(request);
+    if (!match || !input?.dataset) throw new Error("invalid_runner_request");
+    return json({ ok: true, modelTrainingJob: await completeModelTrainingDataset(env, runner, match[1], { runnerId: runner.id, dataset: input.dataset }) });
+  }
+  if (route === "runner-model-training-heartbeat") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/model-training\/([a-z0-9_]+)\/heartbeat$/i);
+    const input = await body<RunnerModelTrainingHeartbeatRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, ...await heartbeatModelTrainingJob(env, runner, match[1], input.progress, input.stage, input.upstreamId) });
+  }
+  if (route === "runner-model-training-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/model-training\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<RunnerCompleteModelTrainingRequest>(request);
+    if (!match || !input?.localFile || !input.evaluation) throw new Error("invalid_runner_request");
+    return json({ ok: true, ...await completeModelTrainingJob(env, runner, match[1], { ...input, runnerId: runner.id }) });
+  }
+  if (route === "runner-model-training-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/model-training\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<RunnerFailModelTrainingRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, modelTrainingJob: await failModelTrainingJob(env, runner, match[1], input.error) });
   }
   throw new Error("creative_studio_route_not_found");
 }
@@ -546,6 +626,14 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         }
         const prompt = workflowPrompt;
         const createdAt = new Date().toISOString();
+        const aceStepWorkflow = modality === "music" && /\bace\s*step\b/.test(aceStepWorkflowIdentity(plan.workflow));
+        const modelAdapters = aceStepWorkflow ? await activeMusicAdapterBindings(env, session.userId, input.projectId) : [];
+        if (modelAdapters.length) {
+          const adapterParameters = aceStepAdapterParameterIds(plan.workflow);
+          if (!adapterParameters.fileId || !adapterParameters.strengthId) throw new Error("ace_step_workflow_adapter_controls_missing");
+          parameterValues[adapterParameters.fileId] = modelAdapters[0].relativePath;
+          parameterValues[adapterParameters.strengthId] = modelAdapters[0].strength;
+        }
         const evolution = input.evolution && evolutionSource && evolutionTaste ? {
           schemaVersion: "creative-studio-evolution/1.0" as const,
           studyId: boundedText(input.evolution.studyId, 120),
@@ -590,6 +678,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             },
             parameters: parameterValues,
             models: plan.workflow.currentRevision.models,
+            modelAdapters,
             workloadEvidence: {
               source: "workflow-revision",
               profileId: plan.workflow.currentRevision.id,
@@ -825,6 +914,35 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!match || !input) return json({ ok: false, error: "invalid_training_review" }, { status: 400 });
       const actor = developmentMode(env) ? "development-user" : "angelo";
       return json({ ok: true, ...await reviewCreativeDnaTrainingJob(env, session.userId, match[1], input, actor) }, { status: 201 });
+    }
+    if (route === "model-training-jobs-list") {
+      const [modelTrainingJobs, modelAdapters, modelAdapterReviews] = await Promise.all([
+        listModelTrainingJobs(env, session.userId), listModelAdapters(env, session.userId), listModelAdapterReviews(env, session.userId),
+      ]);
+      return json({ ok: true, modelTrainingJobs, modelAdapters, modelAdapterReviews });
+    }
+    if (route === "model-training-job-create") {
+      const input = await body<CreateModelTrainingJobRequest>(request);
+      if (!input || !Array.isArray(input.assetIds)) return json({ ok: false, error: "invalid_model_training_request" }, { status: 400 });
+      return json({ ok: true, modelTrainingJob: await createModelTrainingJob(env, session.userId, { ...input, idempotencyKey: idempotencyKey(input.idempotencyKey) }) }, { status: 202 });
+    }
+    if (route === "model-training-job-cancel") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/model-training-jobs\/([a-z0-9_]+)\/cancel$/i);
+      if (!match) return json({ ok: false, error: "invalid_model_training_request" }, { status: 400 });
+      return json({ ok: true, modelTrainingJob: await cancelModelTrainingJob(env, session.userId, match[1]) });
+    }
+    if (route === "model-training-dataset-review") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/model-training-jobs\/([a-z0-9_]+)\/dataset-review$/i);
+      const input = await body<ReviewModelTrainingDatasetRequest>(request);
+      if (!match || !input || !Array.isArray(input.items)) return json({ ok: false, error: "invalid_model_training_dataset_review" }, { status: 400 });
+      return json({ ok: true, modelTrainingJob: await reviewModelTrainingDataset(env, session.userId, match[1], input) });
+    }
+    if (route === "model-adapter-review") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/model-adapters\/([a-z0-9_]+)\/review$/i);
+      const input = await body<ReviewModelAdapterRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_model_adapter_review" }, { status: 400 });
+      const actor = developmentMode(env) ? "development-user" : "angelo";
+      return json({ ok: true, ...await reviewModelAdapter(env, session.userId, match[1], input.decision, input.note, actor) }, { status: 201 });
     }
     if (route === "artifact-review") {
       const match = url.pathname.match(/^\/api\/creative-studio\/artifacts\/([a-z0-9_]+)\/(accepted|rejected|archived)$/i);

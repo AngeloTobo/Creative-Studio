@@ -23,6 +23,7 @@ type RunnerRow = {
   comfyVersion: string | null;
   device: string | null;
   activeJobId: string | null;
+  modelTrainingProvidersJson: string;
   lastError: string | null;
   lastHeartbeatAt: string | null;
   createdAt: string;
@@ -49,14 +50,20 @@ export function supportsSongPromptEnhancement(version: string | null) {
 
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
   comfy_version as comfyVersion, device, active_job_id as activeJobId, last_error as lastError,
+  model_training_providers_json as modelTrainingProvidersJson,
   last_heartbeat_at as lastHeartbeatAt, created_at as createdAt, revoked_at as revokedAt`;
 
 function mapRunner(row: RunnerRow): LocalRunner {
   const live = Boolean(row.lastHeartbeatAt && Date.now() - new Date(row.lastHeartbeatAt).getTime() <= 90_000);
   const state: LocalRunner["state"] = row.revokedAt ? "revoked" : !live ? "offline" : row.activeJobId ? "busy" : "online";
-  const { ownerId: _ownerId, ...runner } = row;
+  const { ownerId: _ownerId, modelTrainingProvidersJson, ...runner } = row;
   void _ownerId;
-  return { ...runner, state };
+  let modelTrainingProviders: LocalRunner["modelTrainingProviders"] = [];
+  try {
+    const parsed = JSON.parse(modelTrainingProvidersJson || "[]") as unknown;
+    if (Array.isArray(parsed)) modelTrainingProviders = parsed.filter((value): value is "ace-step-1.5-lora" => value === "ace-step-1.5-lora");
+  } catch { modelTrainingProviders = []; }
+  return { ...runner, modelTrainingProviders, state };
 }
 
 async function hashToken(token: string) {
@@ -111,6 +118,10 @@ export async function revokeLocalRunner(env: Env, ownerId: string, runnerId: str
       runner_id = null, runner_lease_until = null, error = null, updated_at = ?, started_at = null
       where owner_id = ? and runner_id = ? and status = 'running'`)
       .bind(now, ownerId, runnerId),
+    env.DB.prepare(`update creative_model_training_jobs set status = 'waiting-for-runner',
+      runner_id = null, runner_lease_until = null, error = null, updated_at = ?
+      where owner_id = ? and runner_id = ? and status = 'running'`)
+      .bind(now, ownerId, runnerId),
   ]);
   const row = await env.DB.prepare(`select ${RUNNER_COLUMNS} from creative_runners where id = ? and owner_id = ?`)
     .bind(runnerId, ownerId).first<RunnerRow>();
@@ -136,10 +147,11 @@ export async function heartbeatLocalRunner(env: Env, runner: RunnerIdentity, inp
   const device = boundedText(input.device, 160) || null;
   const activeJobId = boundedText(input.activeJobId, 100) || null;
   const error = boundedText(input.error, 500) || null;
+  const modelTrainingProviders = [...new Set((input.modelTrainingProviders ?? []).filter((provider) => provider === "ace-step-1.5-lora"))];
   await env.DB.prepare(`update creative_runners set version = ?, comfy_url = ?, comfy_version = ?, device = ?,
-    active_job_id = ?, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null`)
-    .bind(version, comfyUrl, comfyVersion, device, activeJobId, error, now, runner.id, runner.ownerId).run();
-  return mapRunner({ ...runner, version, comfyUrl, comfyVersion, device, activeJobId, lastError: error, lastHeartbeatAt: now });
+    active_job_id = ?, model_training_providers_json = ?, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null`)
+    .bind(version, comfyUrl, comfyVersion, device, activeJobId, JSON.stringify(modelTrainingProviders), error, now, runner.id, runner.ownerId).run();
+  return mapRunner({ ...runner, version, comfyUrl, comfyVersion, device, activeJobId, modelTrainingProvidersJson: JSON.stringify(modelTrainingProviders), lastError: error, lastHeartbeatAt: now });
 }
 
 export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
@@ -148,18 +160,22 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   const candidate = await env.DB.prepare(`select id from creative_jobs
     where owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
       and (modality != 'music' or ? = 1)
+      and (json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') is null
+        or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
       and (timeout_at is null or timeout_at > ?)
     order by case when runner_id = ? then 0 else 1 end, created_at limit 1`)
-    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, nowValue, runner.id, nowValue, runner.id).first<{ id: string }>();
+    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, runner.id, nowValue, runner.id, nowValue, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();
   const claimed = await env.DB.prepare(`update creative_jobs set status = 'running', progress = max(progress, 5),
     runner_id = ?, runner_lease_until = ?, error = null, started_at = coalesce(started_at, ?),
     execution_stage = 'preparing-inputs', stage_updated_at = ?, updated_at = ?
     where id = ? and owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
+      and (json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') is null
+        or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)`)
-    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, nowValue, runner.id).run();
+    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, runner.id, nowValue, runner.id).run();
   if (!claimed.meta.changes) return null;
   await env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
     .bind(candidate.id, nowValue, runner.id, runner.ownerId).run();
@@ -321,7 +337,9 @@ export function isLocalRunnerRoute(route: string) {
   return route === "runner-work-claim" || route === "runner-heartbeat" || route === "runner-job-claim" || route === "runner-job-heartbeat"
     || route === "runner-job-complete" || route === "runner-job-thumbnail" || route === "runner-job-fail" || route === "runner-media-content"
     || route === "runner-training-claim" || route === "runner-training-heartbeat"
-    || route === "runner-training-complete" || route === "runner-training-fail";
+    || route === "runner-training-complete" || route === "runner-training-fail"
+    || route === "runner-model-training-dataset" || route === "runner-model-training-heartbeat"
+    || route === "runner-model-training-complete" || route === "runner-model-training-fail";
 }
 
 export function localRunnerJobLabel(job: Job) {

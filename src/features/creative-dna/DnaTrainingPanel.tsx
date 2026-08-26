@@ -3,6 +3,7 @@ import type { CreativeDnaTarget } from "../../../shared/contracts";
 import { creativeDnaCanGenerate, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { TrainingReviewPanel } from "./TrainingReviewPanel";
+import { AceStepTrainingPanel } from "./AceStepTrainingPanel";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
@@ -85,9 +86,9 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
   const activeDnaArtifactId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
   const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
 
-  return <section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
+  return <><AceStepTrainingPanel onMedia={onMedia} /><section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
-      <div><span className="eyebrow">Upload-based learning</span><h2 id="dna-training-title">Train CreativeDNA</h2><p>Gemma 4 retains a long analysis and a short generation summary for every selected image, audio file, and video while measured evidence shapes the DNA.</p></div>
+      <div><span className="eyebrow">Evidence synthesis</span><h2 id="dna-training-title">Analyze CreativeDNA</h2><p>Gemma 4 retains a long analysis and a short generation summary for every selected image, audio file, and video while measured evidence shapes the DNA. This changes CreativeDNA evidence, not model weights.</p></div>
       <span className="training-runner-state"><i /> Local runner + Gemma 4</span>
     </header>
 
@@ -115,7 +116,7 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
         <div className="field"><span>Primary output</span><div className="seg">{(["image", "music"] as CreativeDnaTarget[]).map((target) => <button key={target} className={targetModality === target ? "on" : ""} onClick={() => setTargetModality(target)}><Icon name={target} size={15} /> {target}</button>)}</div></div>
         <label className="training-consent training-evidence-toggle"><input type="checkbox" checked={includeExamples} disabled={busy || !trainingExamples.length} onChange={(event) => setIncludeExamples(event.target.checked)} /><span><strong>Include fresh accepted evidence</strong><small>{trainingExamples.length} prompt + exact-settings {trainingExamples.length === 1 ? "example" : "examples"} ready{productionLoop?.counts.evidenceUsed ? ` · ${productionLoop.counts.evidenceUsed} already captured` : ""}</small></span></label>
         <div className="training-base"><span className="eyebrow">Lineage</span><strong>{activeDna ? `Evolve ${activeDna.name} v${activeDna.version}` : "Create a new DNA root"}</strong><small>The completed runner result becomes a new immutable CreativeDNA version.</small></div>
-        <button className="btn btn-primary training-start" disabled={busy || !hasInputs || uiOnlyDevelopment || !activeDnaReviewed} onClick={() => void start()}><Icon name="dna" size={17} /> Start training</button>
+        <button className="btn btn-primary training-start" disabled={busy || !hasInputs || uiOnlyDevelopment || !activeDnaReviewed} onClick={() => void start()}><Icon name="dna" size={17} /> Start analysis</button>
         {uiOnlyDevelopment ? <p className="training-boundary">Real uploads and training runs require the Creative Studio Worker.</p> : !activeDnaReviewed ? <p className="training-boundary">Review the selected trained CreativeDNA before using it as another training baseline.</p> : <p className="training-boundary">The run is durable immediately. It remains visibly waiting until your authenticated local trainer claims it.</p>}
       </div>
     </div>
@@ -143,5 +144,5 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
       onClose={() => { setReviewingJobId(""); onReviewJobHandled?.(); }}
       onDecision={(decision, note) => reviewDnaTraining(reviewingJob.id, decision, note)}
     /> : null}
-  </section>;
+  </section></>;
 }

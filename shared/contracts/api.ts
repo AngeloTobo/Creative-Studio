@@ -23,6 +23,18 @@ import type {
   SongPromptEnhancementStamp,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis, VideoGenerationVariant } from "./creativeDna";
+import type {
+  CompleteModelTrainingJobRequest,
+  CreateModelTrainingJobRequest,
+  ModelAdapter,
+  ModelAdapterEvaluation,
+  ModelAdapterReview,
+  ModelAdapterReviewDecision,
+  ModelTrainingJob,
+  ModelTrainingProvider,
+  ModelTrainingStage,
+  ReviewModelTrainingDatasetRequest,
+} from "./modelTraining";
 import type { ProjectProductionLoop } from "./productionLoop";
 import type { ProductionCockpit } from "./productionCockpit";
 import type { VideoDurationSeconds } from "./videoDuration";
@@ -40,6 +52,8 @@ export const CREATIVE_STUDIO_ROUTES = {
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
   trainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/training-jobs`,
+  modelTrainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/model-training-jobs`,
+  modelAdapters: `${CREATIVE_STUDIO_API_PREFIX}/model-adapters`,
   productionLoops: `${CREATIVE_STUDIO_API_PREFIX}/production-loops`,
   productionCockpit: `${CREATIVE_STUDIO_API_PREFIX}/production-cockpit`,
   runners: `${CREATIVE_STUDIO_API_PREFIX}/runners`,
@@ -54,9 +68,11 @@ export type CreativeStudioRoute =
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
+  | "model-training-jobs-list" | "model-training-job-create" | "model-training-job-cancel" | "model-training-dataset-review" | "model-adapter-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
-  | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail";
+  | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail"
+  | "runner-model-training-dataset" | "runner-model-training-heartbeat" | "runner-model-training-complete" | "runner-model-training-fail";
 
 export function matchCreativeStudioRoute(method: string, pathname: string): CreativeStudioRoute | null {
   if (method === "GET" && pathname === "/api/creative-studio/snapshot") return "snapshot";
@@ -87,6 +103,11 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/training-jobs") return "training-job-create";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "training-job-cancel";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/review$/i.test(pathname)) return "training-job-review";
+  if (method === "GET" && pathname === "/api/creative-studio/model-training-jobs") return "model-training-jobs-list";
+  if (method === "POST" && pathname === "/api/creative-studio/model-training-jobs") return "model-training-job-create";
+  if (method === "POST" && /^\/api\/creative-studio\/model-training-jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "model-training-job-cancel";
+  if (method === "POST" && /^\/api\/creative-studio\/model-training-jobs\/[a-z0-9_]+\/dataset-review$/i.test(pathname)) return "model-training-dataset-review";
+  if (method === "POST" && /^\/api\/creative-studio\/model-adapters\/[a-z0-9_]+\/review$/i.test(pathname)) return "model-adapter-review";
   if (method === "GET" && pathname === "/api/creative-studio/production-loops") return "production-loops";
   if (method === "GET" && pathname === "/api/creative-studio/production-cockpit") return "production-cockpit";
   if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
@@ -104,6 +125,10 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-training-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-training-complete";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-training-fail";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/model-training\/[a-z0-9_]+\/dataset$/i.test(pathname)) return "runner-model-training-dataset";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/model-training\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-model-training-heartbeat";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/model-training\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-model-training-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/model-training\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-model-training-fail";
   if (method === "GET" && pathname === "/api/creative-studio/capabilities") return "capabilities";
   return null;
 }
@@ -120,6 +145,9 @@ export type StudioSnapshot = {
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
+  modelTrainingJobs: ModelTrainingJob[];
+  modelAdapters: ModelAdapter[];
+  modelAdapterReviews: ModelAdapterReview[];
   productionLoops: ProjectProductionLoop[];
   productionCockpit: ProductionCockpit;
   runners: LocalRunner[];
@@ -192,6 +220,15 @@ export type CreateCreativeDnaTrainingJobRequest = {
 export type CompleteCreativeDnaTrainingJobRequest = { runnerId: string; dna: CreativeDnaInput; analysis: CreativeDnaTrainingAnalysis };
 export type FailCreativeDnaTrainingJobRequest = { runnerId: string; error: string };
 export type CreativeDnaTrainingJobResponse = { trainingJob: CreativeDnaTrainingJob };
+export type ModelTrainingJobResponse = { modelTrainingJob: ModelTrainingJob };
+export type ModelTrainingSnapshotResponse = { modelTrainingJobs: ModelTrainingJob[]; modelAdapters: ModelAdapter[]; modelAdapterReviews: ModelAdapterReview[] };
+export type ReviewModelAdapterRequest = { decision: ModelAdapterReviewDecision; note: string };
+export type ReviewModelAdapterResponse = { modelTrainingJob: ModelTrainingJob; adapter: ModelAdapter; review: ModelAdapterReview };
+export type ModelTrainingBundleResponse = {
+  modelTrainingJob: ModelTrainingJob;
+  dna: CreativeDnaArtifact | null;
+  assets: MediaAsset[];
+};
 export type ReviewCreativeDnaTrainingRequest = { decision: CreativeDnaTrainingReviewDecision; note: string };
 export type ReviewCreativeDnaTrainingResponse = {
   trainingJob: CreativeDnaTrainingJob;
@@ -219,6 +256,7 @@ export type RunnerHeartbeatRequest = {
   device?: string | null;
   activeJobId?: string | null;
   error?: string | null;
+  modelTrainingProviders?: ModelTrainingProvider[];
 };
 
 export type RunnerMediaInput = {
@@ -243,6 +281,7 @@ export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
 export type RunnerWorkClaimResponse =
   | { kind: "generation"; bundle: RunnerJobBundle }
   | { kind: "training"; bundle: CreativeDnaTrainingBundleResponse }
+  | { kind: "model-training"; bundle: ModelTrainingBundleResponse }
   | { kind: null; bundle: null };
 export type RunnerJobHeartbeatRequest = {
   progress: number;
@@ -256,6 +295,13 @@ export type RunnerTrainingClaimResponse = { bundle: CreativeDnaTrainingBundleRes
 export type RunnerTrainingHeartbeatRequest = { progress: number };
 export type RunnerTrainingHeartbeatResponse = { continue: boolean; trainingJob: CreativeDnaTrainingJob };
 export type RunnerCompleteTrainingRequest = { dna: CreativeDnaInput; analysis: CreativeDnaTrainingAnalysis };
+export type RunnerModelTrainingHeartbeatRequest = { progress: number; stage: ModelTrainingStage; upstreamId?: string | null };
+export type RunnerModelTrainingHeartbeatResponse = { continue: boolean; modelTrainingJob: ModelTrainingJob };
+export type RunnerCompleteModelTrainingRequest = Omit<CompleteModelTrainingJobRequest, "runnerId">;
+export type RunnerCompleteModelTrainingDatasetRequest = { dataset: import("./modelTraining").ModelTrainingDataset };
+export type RunnerFailModelTrainingRequest = { error: string };
+export type RunnerModelAdapterEvaluation = ModelAdapterEvaluation;
+export type { CreateModelTrainingJobRequest, ModelAdapterReviewDecision, ReviewModelTrainingDatasetRequest };
 export type { SaveWorkflowRevisionRequest };
 
 export type ApiSuccess<T> = { ok: true } & T;

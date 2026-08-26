@@ -21,6 +21,9 @@ const emptySnapshot: StudioSnapshot = {
   trainingExamples: [],
   trainingJobs: [],
   trainingReviews: [],
+  modelTrainingJobs: [],
+  modelAdapters: [],
+  modelAdapterReviews: [],
   productionLoops: [],
   productionCockpit: {
     summary: {

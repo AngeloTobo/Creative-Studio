@@ -107,6 +107,7 @@ function capabilitySnapshot(now: string): Capability[] {
     { key: "workflow-library", label: "ComfyUI workflows", state: "unavailable", provider: "not connected", detail: "Workflow upload and immutable server revisions require the Creative Studio Worker.", checkedAt: now },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "degraded", provider: "development adapter", detail: "Candidate metadata is browser-only; no real media is presented as training-ready output.", checkedAt: now },
     { key: "creative-dna-training", label: "CreativeDNA training", state: "unavailable", provider: "not connected", detail: "Upload-based training requires the Creative Studio Worker and an authenticated local runner.", checkedAt: now },
+    { key: "model-adapter-training", label: "ACE-Step music LoRA", state: "unavailable", provider: "not connected", detail: "Real LoRA training requires the Creative Studio Worker and a configured local ACE-Step 1.5 runtime. This development adapter never simulates a checkpoint.", checkedAt: now },
     { key: "music-generation", label: "Music generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; no real audio is rendered in this mode.", checkedAt: now },
     { key: "image-generation", label: "Image generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; gradients stand in for generated media.", checkedAt: now },
     { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "not connected", detail: "Optional AFDFW remote generation is not available in the development adapter.", checkedAt: now },
@@ -139,6 +140,9 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingReviews,
+    modelTrainingJobs: [],
+    modelAdapters: [],
+    modelAdapterReviews: [],
     productionLoops: projects.map((project) => deriveProjectProductionLoop({
       project,
       dnaArtifacts: state.dnaArtifacts,
@@ -484,6 +488,18 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async reviewCreativeDnaTraining() {
       throw new Error("creative_dna_training_requires_creative_studio_worker");
+    },
+    async startModelTraining() {
+      throw new Error("real_model_training_requires_creative_studio_worker");
+    },
+    async cancelModelTraining() {
+      throw new Error("real_model_training_requires_creative_studio_worker");
+    },
+    async reviewModelTrainingDataset() {
+      throw new Error("real_model_training_requires_creative_studio_worker");
+    },
+    async reviewModelAdapter() {
+      throw new Error("real_model_training_requires_creative_studio_worker");
     },
     async enrollLocalRunner() {
       throw new Error("runner_enrollment_requires_creative_studio_worker");

@@ -6,9 +6,18 @@ import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
+import { parseBuffer } from "music-metadata";
 import { analyzeAudio, analyzeImage, synthesisDirective, synthesizeCreativeDna } from "./training.mjs";
+import {
+  aceStepCaptionPrompt,
+  aceStepGpuPreflight,
+  aceStepProviderList,
+  detectAceStepRuntime,
+  executeAceStepTraining,
+  prepareAceStepWorkspace,
+} from "./aceStepTraining.mjs";
 
-export const RUNNER_VERSION = "1.8.3";
+export const RUNNER_VERSION = "1.9.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -95,7 +104,14 @@ async function machineState(config, activeJobId = null, error = null) {
   } catch (caught) {
     reportedError = reportedError || (caught instanceof Error ? caught.message : "comfyui_unavailable");
   }
-  return { version: RUNNER_VERSION, comfyUrl: config.comfyUrl, ...info, activeJobId, error: reportedError };
+  return {
+    version: RUNNER_VERSION,
+    comfyUrl: config.comfyUrl,
+    ...info,
+    activeJobId,
+    error: reportedError,
+    modelTrainingProviders: aceStepProviderList(detectAceStepRuntime()),
+  };
 }
 
 async function machineHeartbeat(config, activeJobId = null, error = null) {
@@ -188,6 +204,14 @@ export function buildGemmaDescriptionGraph(kind, filename, label = "Untitled med
     delete graph["2"];
     delete graph["5"];
   }
+  return graph;
+}
+
+export function buildAceStepCaptionGraph(filename, label = "Untitled audio") {
+  const graph = buildGemmaDescriptionGraph("audio", filename, label);
+  graph["1"].inputs.prompt = aceStepCaptionPrompt(label);
+  graph["1"].inputs.max_length = 768;
+  graph["1"].inputs.temperature = 0.4;
   return graph;
 }
 
@@ -367,6 +391,38 @@ export function applyInputFilenames(graphValue, parameters, filenames) {
     if (!node?.inputs) throw new Error(`runner_input_node_missing:${binding.nodeId}`);
     node.inputs[binding.inputName] = filename;
   }
+  return graph;
+}
+
+export function applyModelAdapterBindings(graphValue, parameters, settingsStamp) {
+  const adapters = settingsStamp?.modelAdapters || [];
+  if (!adapters.length) return graphValue;
+  if (adapters.length !== 1 || adapters[0].provider !== "ace-step-1.5-lora") throw new Error("model_adapter_binding_invalid");
+  const graph = structuredClone(graphValue);
+  let fileApplied = false;
+  let strengthApplied = false;
+  for (const parameter of parameters) {
+    const binding = parameter.binding;
+    if (binding?.format !== "comfyui-api") continue;
+    const identity = `${parameter.id || ""} ${parameter.label || ""} ${binding.inputName || ""}`.toLowerCase();
+    const isFile = /(lora|adapter).*(name|file|path)|(name|file|path).*(lora|adapter)/.test(identity);
+    const isStrength = /(lora|adapter).*(strength|weight|scale)|(strength|weight|scale).*(lora|adapter)/.test(identity);
+    if (!isFile && !isStrength) continue;
+    const node = graph?.[binding.nodeId];
+    if (!node?.inputs) throw new Error(`model_adapter_node_missing:${binding.nodeId}`);
+    if (isFile) {
+      const path = String(settingsStamp.parameters?.[parameter.id] || "").replaceAll("\\", "/");
+      if (path !== adapters[0].relativePath || path.includes("..") || !path.endsWith("/adapter_model.safetensors")) throw new Error("model_adapter_path_mismatch");
+      node.inputs[binding.inputName] = path;
+      fileApplied = true;
+    } else if (isStrength) {
+      const strength = Number(settingsStamp.parameters?.[parameter.id]);
+      if (!Number.isFinite(strength) || Math.abs(strength - adapters[0].strength) > 0.001) throw new Error("model_adapter_strength_mismatch");
+      node.inputs[binding.inputName] = strength;
+      strengthApplied = true;
+    }
+  }
+  if (!fileApplied || !strengthApplied) throw new Error("model_adapter_workflow_controls_missing");
   return graph;
 }
 
@@ -880,7 +936,7 @@ export async function createFirstFrameThumbnail(bytes, contentTypeValue) {
 async function executeBundle(config, bundle) {
   try {
     const prepared = await prepareGraph(config, bundle);
-    let graph = prepared.graph;
+    let graph = applyModelAdapterBindings(prepared.graph, bundle.workflow.currentRevision.parameters, bundle.job.settingsStamp);
     validateGenerationPromptGraph(bundle, graph);
     if (bundle.job.modality === "music") {
       const parameters = bundle.workflow.currentRevision.parameters;
@@ -1031,6 +1087,128 @@ async function executeTrainingBundle(config, bundle) {
   }
 }
 
+function cleanAceStepCaption(value) {
+  return String(value || "")
+    .replace(/^\s*(?:caption|ace-step(?:\s+1\.5)?\s+caption)\s*:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1_500);
+}
+
+async function prepareAceStepDataset(config, bundle) {
+  const job = bundle.modelTrainingJob;
+  const items = [];
+  for (let index = 0; index < bundle.assets.length; index += 1) {
+    const asset = bundle.assets[index];
+    const progress = 8 + Math.round(((index + 1) / bundle.assets.length) * 16);
+    const media = await downloadTrainingMedia(config, asset.id);
+    const filename = await uploadTrainingComfyInput(config, asset.id, media);
+    const graph = buildAceStepCaptionGraph(filename, asset.originalFileName || asset.name);
+    const promptId = await submitPrompt(config, graph, `${job.id}-${asset.id}-ace-caption`);
+    const output = await waitForTextOutput(config, graph, promptId, async () => {
+      const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ progress, stage: "captioning", upstreamId: promptId }),
+      });
+      if (!response.continue) throw new Error("model_training_cancelled");
+    }, "ace_step_caption");
+    const caption = cleanAceStepCaption(output);
+    const wordCount = caption.split(/\s+/).filter(Boolean).length;
+    if (wordCount < 20 || wordCount > 120) throw new Error(`ace_step_caption_invalid_${asset.id}`);
+    let durationSeconds;
+    try {
+      const metadata = await parseBuffer(media.buffer, { mimeType: media.mimeType, size: media.buffer.byteLength });
+      durationSeconds = Math.max(1, Math.min(240, Math.round(Number(metadata.format.duration || 1) * 100) / 100));
+    } catch {
+      durationSeconds = 1;
+    }
+    items.push({
+      assetId: asset.id,
+      fileName: asset.originalFileName || asset.name,
+      caption,
+      lyrics: job.instrumental ? "[Instrumental]" : "",
+      isInstrumental: job.instrumental,
+      durationSeconds,
+      bpm: null,
+      keyscale: null,
+      captionSource: "gemma4-audio-description",
+    });
+  }
+  await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/dataset`, {
+    method: "POST",
+    body: JSON.stringify({
+      dataset: {
+        schemaVersion: "creative-studio-ace-step-dataset/1.0",
+        items,
+        preparedAt: new Date().toISOString(),
+        reviewedAt: null,
+        reviewNote: null,
+      },
+    }),
+  });
+  process.stdout.write(`[Creative Studio Runner] prepared ${items.length} ACE-Step captions for owner review (${job.id})\n`);
+}
+
+async function freeComfyMemory(config) {
+  try {
+    await fetch(`${config.comfyUrl}/free`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    await sleep(2_000);
+  } catch {
+    // Training can continue when ComfyUI is offline, but the NVIDIA preflight remains authoritative.
+  }
+}
+
+async function executeModelTrainingBundle(config, bundle) {
+  const job = bundle.modelTrainingJob;
+  try {
+    if (!job.dataset || !job.dataset.reviewedAt) {
+      await prepareAceStepDataset(config, bundle);
+      return;
+    }
+    const runtime = detectAceStepRuntime();
+    if (!runtime.available) throw new Error(runtime.reason || "ace_step_runtime_missing");
+    const heartbeat = async (progress, stage, upstreamId = null) => {
+      const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ progress, stage, upstreamId }),
+      });
+      if (!response.continue) throw new Error("model_training_cancelled");
+    };
+    await heartbeat(30, "preflight");
+    await freeComfyMemory(config);
+    const gpu = await aceStepGpuPreflight();
+    await heartbeat(34, "preflight", `${gpu.name}:${gpu.freeMiB}MiB-free`);
+    const workspace = await prepareAceStepWorkspace(job, async (assetId) => (await downloadTrainingMedia(config, assetId)).buffer);
+    const result = await executeAceStepTraining(runtime, job, workspace, heartbeat);
+    await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/complete`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...result,
+        localFile: { ...result.localFile, runnerId: job.runnerId },
+      }),
+    });
+    process.stdout.write(`[Creative Studio Runner] completed ACE-Step LoRA ${job.id}; checkpoint now requires owner review\n`);
+  } catch (caught) {
+    const error = (caught instanceof Error ? caught.message : "ace_step_training_failed").slice(0, 500);
+    try {
+      await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/fail`, {
+        method: "POST",
+        body: JSON.stringify({ error }),
+      });
+    } catch (reportError) {
+      process.stderr.write(`[Creative Studio Runner] could not report ACE-Step training ${job.id}: ${reportError.message}\n`);
+    }
+    process.stderr.write(`[Creative Studio Runner] ACE-Step training failed ${job.id}: ${error}\n`);
+  } finally {
+    await machineHeartbeat(config, null).catch(() => undefined);
+  }
+}
+
 export async function runOnce(config) {
   const work = await runnerRequest(config, "/api/creative-studio/runner/work/claim", {
     method: "POST",
@@ -1041,10 +1219,17 @@ export async function runOnce(config) {
     await executeBundle(config, work.bundle);
     return true;
   }
-  if (work.kind !== "training" || !work.bundle) return false;
-  process.stdout.write(`[Creative Studio Runner] claimed CreativeDNA evidence synthesis ${work.bundle.trainingJob.id}\n`);
-  await executeTrainingBundle(config, work.bundle);
-  return true;
+  if (work.kind === "training" && work.bundle) {
+    process.stdout.write(`[Creative Studio Runner] claimed CreativeDNA evidence synthesis ${work.bundle.trainingJob.id}\n`);
+    await executeTrainingBundle(config, work.bundle);
+    return true;
+  }
+  if (work.kind === "model-training" && work.bundle) {
+    process.stdout.write(`[Creative Studio Runner] claimed ACE-Step music LoRA ${work.bundle.modelTrainingJob.id}\n`);
+    await executeModelTrainingBundle(config, work.bundle);
+    return true;
+  }
+  return false;
 }
 
 async function selfTest() {
@@ -1056,6 +1241,20 @@ async function selfTest() {
   const parameters = [{ id: "1::image", kind: "media", binding: { format: "comfyui-api", nodeId: "1", inputName: "image" } }];
   const patched = applyInputFilenames(graph, parameters, { "1::image": "new.png" });
   if (patched["1"].inputs.image !== "new.png" || graph["1"].inputs.image !== "old.png") throw new Error("runner_self_test_patch_failed");
+  const adapterParameters = [
+    { id: "lora::name", label: "LoRA file", kind: "text", binding: { format: "comfyui-api", nodeId: "lora", inputName: "lora_name" } },
+    { id: "lora::strength", label: "LoRA strength", kind: "number", binding: { format: "comfyui-api", nodeId: "lora", inputName: "strength_model" } },
+  ];
+  const adapterPath = "creative-studio/job_self_test/adapter_model.safetensors";
+  const adapterGraph = { lora: { inputs: { lora_name: "old.safetensors", strength_model: 0 } } };
+  const patchedAdapterGraph = applyModelAdapterBindings(adapterGraph, adapterParameters, {
+    parameters: { "lora::name": adapterPath, "lora::strength": 0.72 },
+    modelAdapters: [{ provider: "ace-step-1.5-lora", relativePath: adapterPath, strength: 0.72 }],
+  });
+  if (patchedAdapterGraph.lora.inputs.lora_name !== adapterPath || patchedAdapterGraph.lora.inputs.strength_model !== 0.72
+    || adapterGraph.lora.inputs.lora_name !== "old.safetensors") {
+    throw new Error("runner_self_test_model_adapter_binding_failed");
+  }
   const generationGraph = {
     "positive": { inputs: { value: "A glass figure walking through red rain" } },
     "negative": { inputs: { text: "titles, captions, black frames" } },

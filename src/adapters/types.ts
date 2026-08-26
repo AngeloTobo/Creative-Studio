@@ -18,6 +18,11 @@ import type {
   ReviewCreativeDnaTrainingResponse,
   EnrollLocalRunnerResponse,
   LocalRunner,
+  CreateModelTrainingJobRequest,
+  ModelTrainingJob,
+  ModelAdapterReviewDecision,
+  ReviewModelTrainingDatasetRequest,
+  ReviewModelAdapterResponse,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -40,6 +45,10 @@ export interface StudioAdapter {
   startCreativeDnaTraining(input: CreateCreativeDnaTrainingJobRequest): Promise<CreativeDnaTrainingJob>;
   cancelCreativeDnaTraining(jobId: string): Promise<CreativeDnaTrainingJob>;
   reviewCreativeDnaTraining(jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string): Promise<ReviewCreativeDnaTrainingResponse>;
+  startModelTraining(input: CreateModelTrainingJobRequest): Promise<ModelTrainingJob>;
+  cancelModelTraining(jobId: string): Promise<ModelTrainingJob>;
+  reviewModelTrainingDataset(jobId: string, input: ReviewModelTrainingDatasetRequest): Promise<ModelTrainingJob>;
+  reviewModelAdapter(adapterId: string, decision: ModelAdapterReviewDecision, note: string): Promise<ReviewModelAdapterResponse>;
   enrollLocalRunner(name: string): Promise<EnrollLocalRunnerResponse>;
   revokeLocalRunner(runnerId: string): Promise<LocalRunner>;
 }

@@ -5,6 +5,7 @@ import { backendMode } from "../../worker/config";
 import { processJobMessage } from "../../worker/jobs";
 import { attachAfdfwGeneration, cancelOwnedJob, createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, createQueuedJob, reconcileDevelopmentJobs } from "../../worker/repository";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
+import { claimLocalRunnerJob } from "../../worker/runner";
 import type { Env } from "../../worker/types";
 
 const BASE = "https://creative-studio.test";
@@ -77,6 +78,9 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_model_adapter_reviews"),
+    env.DB.prepare("delete from creative_model_adapters"),
+    env.DB.prepare("delete from creative_model_training_jobs"),
     env.DB.prepare("delete from creative_runners"),
     env.DB.prepare("delete from creative_dna_training_reviews"),
     env.DB.prepare("delete from creative_dna_training_evidence_reservations"),
@@ -1599,6 +1603,186 @@ describe("Creative Studio Worker API", () => {
     expect(cockpit.productionCockpit.actions).toContainEqual(expect.objectContaining({ kind: "runner-offline" }));
     expect(cockpit.productionCockpit.runs).toContainEqual(expect.objectContaining({ id: generated.job.id, kind: "generation" }));
     expect(cockpit.productionCockpit.runs).toContainEqual(expect.objectContaining({ kind: "training", queuePosition: 1 }));
+  });
+
+  it("runs ACE-Step music LoRA preparation, owner review, completion, and activation as durable state", async () => {
+    const ownerId = "owner-ace-training";
+    const project = await testProject(ownerId, "ACE Music World");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "ACE music DNA",
+      directive: "Cold synthetic detail interrupted by tactile organic rhythm and one controlled harmonic rupture.",
+      targetModality: "music",
+      sourceKind: "original",
+    });
+    const { bucket } = memoryBucket();
+    const production = workerEnv("afdfw", afdfwFor(ownerId), bucket);
+    const assetIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const bytes = new Uint8Array([73, 68, 51, index, 1, 2, 3, 4]);
+      const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+        method: "POST",
+        headers: {
+          "content-type": "audio/mpeg",
+          "x-cs-project-id": project.id,
+          "x-cs-file-name": encodeURIComponent(`Training Track ${index + 1}.mp3`),
+          "x-cs-file-size": String(bytes.byteLength),
+          "x-cs-training-eligible": "true",
+        },
+        body: bytes,
+      }), production)) as { asset: { id: string } };
+      assetIds.push(uploaded.asset.id);
+    }
+
+    const startedResponse = await routeCreativeStudioApi(request("/api/creative-studio/model-training-jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        name: "Nocturnal tactile electronics",
+        target: "music-style",
+        triggerToken: "cs_nocturnal_tactile",
+        description: "Learn the recurring electronic percussion, tactile bass, vocal space, and controlled harmonic friction.",
+        continuityRules: ["Brittle percussion over tactile sub bass"],
+        preset: "proof",
+        assetIds,
+        instrumental: true,
+        idempotencyKey: "ace_training_test_001",
+      }),
+    }), production);
+    expect(startedResponse.status).toBe(202);
+    const started = await result(startedResponse) as { modelTrainingJob: { id: string; status: string; stage: string } };
+    expect(started.modelTrainingJob).toMatchObject({ status: "waiting-for-runner", stage: "queued" });
+
+    const enrolled = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "ACE test runner" }),
+    }), production)) as { runner: { id: string }; token: string };
+    const runnerPost = (path: string, body: object) => routeCreativeStudioApi(request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${enrolled.token}` },
+      body: JSON.stringify(body),
+    }), production);
+    const state = {
+      version: "1.9.0", comfyUrl: "http://127.0.0.1:8188", comfyVersion: "0.33.0", device: "RTX 3090",
+      activeJobId: null, error: null, modelTrainingProviders: ["ace-step-1.5-lora"],
+    };
+    const claimed = await result(await runnerPost("/api/creative-studio/runner/work/claim", state)) as {
+      kind: string; bundle: { modelTrainingJob: { id: string; stage: string } };
+    };
+    expect(claimed).toMatchObject({ kind: "model-training", bundle: { modelTrainingJob: { id: started.modelTrainingJob.id, stage: "captioning" } } });
+
+    const datasetItems = assetIds.map((assetId, index) => ({
+      assetId,
+      fileName: `Training Track ${index + 1}.mp3`,
+      caption: "Measured electronic pulse with brittle hybrid percussion, tactile sub bass, processed keys, close stereo space, short decays, and a single suspended harmonic rupture before the groove returns.",
+      lyrics: "[Instrumental]",
+      isInstrumental: true,
+      durationSeconds: 90,
+      bpm: null,
+      keyscale: null,
+      captionSource: "gemma4-audio-description",
+    }));
+    const prepared = await runnerPost(`/api/creative-studio/runner/model-training/${started.modelTrainingJob.id}/dataset`, {
+      dataset: { schemaVersion: "creative-studio-ace-step-dataset/1.0", items: datasetItems, preparedAt: new Date().toISOString(), reviewedAt: null, reviewNote: null },
+    });
+    expect(prepared.status).toBe(200);
+
+    const reviewed = await routeCreativeStudioApi(request(`/api/creative-studio/model-training-jobs/${started.modelTrainingJob.id}/dataset-review`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: datasetItems.map(({ assetId, caption, lyrics, isInstrumental }) => ({ assetId, caption, lyrics, isInstrumental })),
+        note: "All three captions were checked against the source recordings.",
+      }),
+    }), production);
+    expect(reviewed.status).toBe(200);
+    expect(await result(reviewed)).toMatchObject({ modelTrainingJob: { status: "waiting-for-runner", stage: "preflight" } });
+
+    const trainingClaim = await result(await runnerPost("/api/creative-studio/runner/work/claim", state)) as {
+      bundle: { modelTrainingJob: { id: string; runnerId: string; dataset: { reviewedAt: string } } };
+    };
+    expect(trainingClaim.bundle.modelTrainingJob.dataset.reviewedAt).toBeTruthy();
+    const completed = await runnerPost(`/api/creative-studio/runner/model-training/${started.modelTrainingJob.id}/complete`, {
+      upstreamId: `ace-step:${started.modelTrainingJob.id}`,
+      localFile: {
+        runnerId: enrolled.runner.id,
+        relativePath: `creative-studio/${started.modelTrainingJob.id}/adapter_model.safetensors`,
+        format: "safetensors",
+        sha256: "a".repeat(64),
+        size: 4096,
+      },
+      evaluation: {
+        schemaVersion: "creative-studio-model-adapter-evaluation/1.0",
+        datasetItems: 3,
+        captionedItems: 3,
+        validationPromptCount: 0,
+        notes: ["Corrected ACE-Step LoRA training completed."],
+      },
+    });
+    expect(completed.status).toBe(200);
+    const completedBody = await result(completed) as { adapter: { id: string; status: string } };
+    expect(completedBody.adapter.status).toBe("review-required");
+
+    const activated = await routeCreativeStudioApi(request(`/api/creative-studio/model-adapters/${completedBody.adapter.id}/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approved", note: "Checkpoint lineage is valid; activate it for controlled ACE-Step comparison renders." }),
+    }), production);
+    expect(activated.status).toBe(201);
+    expect(await result(activated)).toMatchObject({ adapter: { id: completedBody.adapter.id, status: "active", dnaArtifactId: dna.artifactId }, review: { decision: "approved", actor: "angelo" } });
+  });
+
+  it("keeps LoRA-backed song jobs on the runner that owns the local checkpoint", async () => {
+    const ownerId = "owner-adapter-affinity";
+    const project = await testProject(ownerId, "Adapter Affinity");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Adapter affinity DNA",
+      directive: "A controlled electronic music system with tactile percussion and sharply bounded harmonic contrast.",
+      targetModality: "music",
+      sourceKind: "original",
+    });
+    const queued = await createQueuedJob(env, ownerId, {
+      projectId: project.id,
+      dna,
+      modality: "music",
+      idempotencyKey: "adapter_affinity_0001",
+      provider: "local-comfyui",
+      reconcileEmail: null,
+      executionTarget: "local-comfyui",
+    });
+    await env.DB.prepare("update creative_jobs set settings_stamp_json = ? where id = ? and owner_id = ?")
+      .bind(JSON.stringify({ ...queued.job.settingsStamp, modelAdapters: [{
+        schemaVersion: "creative-studio-generation-adapter/1.0",
+        adapterId: "adapter_affinity",
+        name: "Affinity LoRA",
+        target: "music-style",
+        provider: "ace-step-1.5-lora",
+        baseModelId: "ace-step-1.5-base",
+        triggerToken: "cs_affinity",
+        relativePath: "creative-studio/modeltrain_affinity/adapter_model.safetensors",
+        runnerId: "runner_checkpoint_owner",
+        strength: 0.8,
+      }] }), queued.job.id, ownerId).run();
+    const claimed = await claimLocalRunnerJob(env, {
+      id: "runner_without_checkpoint",
+      ownerId,
+      name: "Wrong machine",
+      version: "1.9.0",
+      comfyUrl: "http://127.0.0.1:8188",
+      comfyVersion: "0.33.0",
+      device: "RTX 3090",
+      activeJobId: null,
+      modelTrainingProvidersJson: "[]",
+      lastError: null,
+      lastHeartbeatAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      revokedAt: null,
+    });
+    expect(claimed).toBeNull();
   });
 
   it("does not expose a generic proxy route", async () => {

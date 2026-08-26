@@ -4,6 +4,7 @@ export * from "./domain";
 export * from "./evolution";
 export * from "./generationPerformance";
 export * from "./generationControls";
+export * from "./modelTraining";
 export * from "./productionLoop";
 export * from "./productionCockpit";
 export * from "./songPrompts";

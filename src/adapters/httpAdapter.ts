@@ -23,6 +23,11 @@ import {
   type ReviewCreativeDnaTrainingResponse,
   type EnrollLocalRunnerResponse,
   type RevokeLocalRunnerResponse,
+  type CreateModelTrainingJobRequest,
+  type ModelTrainingJobResponse,
+  type ModelAdapterReviewDecision,
+  type ReviewModelAdapterResponse,
+  type ReviewModelTrainingDatasetRequest,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -186,6 +191,34 @@ export function createHttpAdapter(): StudioAdapter {
     async reviewCreativeDnaTraining(jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string) {
       if (!note.trim()) throw new Error("training_review_note_required");
       return request<ReviewCreativeDnaTrainingResponse>(`${CREATIVE_STUDIO_ROUTES.trainingJobs}/${encodeURIComponent(jobId)}/review`, {
+        method: "POST",
+        body: JSON.stringify({ decision, note }),
+      });
+    },
+    async startModelTraining(input: CreateModelTrainingJobRequest) {
+      const result = await request<ModelTrainingJobResponse>(CREATIVE_STUDIO_ROUTES.modelTrainingJobs, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.modelTrainingJob;
+    },
+    async cancelModelTraining(jobId: string) {
+      const result = await request<ModelTrainingJobResponse>(`${CREATIVE_STUDIO_ROUTES.modelTrainingJobs}/${encodeURIComponent(jobId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.modelTrainingJob;
+    },
+    async reviewModelTrainingDataset(jobId: string, input: ReviewModelTrainingDatasetRequest) {
+      const result = await request<ModelTrainingJobResponse>(`${CREATIVE_STUDIO_ROUTES.modelTrainingJobs}/${encodeURIComponent(jobId)}/dataset-review`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.modelTrainingJob;
+    },
+    async reviewModelAdapter(adapterId: string, decision: ModelAdapterReviewDecision, note: string) {
+      if (!note.trim()) throw new Error("model_adapter_review_note_required");
+      return request<ReviewModelAdapterResponse>(`${CREATIVE_STUDIO_ROUTES.modelAdapters}/${encodeURIComponent(adapterId)}/review`, {
         method: "POST",
         body: JSON.stringify({ decision, note }),
       });

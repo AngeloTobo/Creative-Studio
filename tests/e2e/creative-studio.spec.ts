@@ -39,7 +39,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
 
   await page.goto("/#/portal");
   await page.getByRole("button", { name: /Train DNA/ }).click();
-  await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Analyze CreativeDNA" })).toBeVisible();
 });
 
 test("creation keeps image speed safe and never reuses an imported video prompt", async ({ page }) => {
@@ -303,7 +303,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("button", { name: "Back to Create" }).click();
   await page.getByRole("button", { name: "Train", exact: true }).click();
   await page.getByRole("button", { name: "Open training" }).click();
-  await expect(page.getByRole("heading", { name: "Train CreativeDNA" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Analyze CreativeDNA" })).toBeVisible();
   await expect(page.getByText(/retains a long analysis and a short generation summary for every selected image, audio file, and video/)).toBeVisible();
   await page.getByRole("button", { name: "Back to Create" }).click();
   await expect(page.getByRole("region", { name: "Create with Creative Studio" })).toBeVisible();

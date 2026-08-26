@@ -11,7 +11,7 @@ npm install
 npm run local
 ```
 
-Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default). This one command runs the UI, Wrangler-local BFF, local D1/R2 stores, and Local Runner 1.4. Image, audio/music, video, and multimodal CreativeDNA work goes directly to ComfyUI and this machine's GPU. Cloudflare and AFDFW are not used by the local process.
+Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default). This one command runs the UI, Wrangler-local BFF, local D1/R2 stores, and Local Runner 1.9. Image, audio/music, video, multimodal CreativeDNA analysis, and reviewed ACE-Step music LoRA jobs use this machine's GPU. Cloudflare and AFDFW are not used by the local process.
 
 Local mode requires a real imported ComfyUI API-format workflow for generation and never substitutes the development renderer. It automatically creates or reuses an ACL-protected localhost runner credential outside the repository. Local data remains local and is not silently synchronized to the remote site. See [docs/LOCAL_FIRST.md](docs/LOCAL_FIRST.md) for the exact ownership and shutdown boundaries.
 
@@ -38,15 +38,23 @@ npm run dev
 
 The Vite client calls only `http://127.0.0.1:8787/api/creative-studio/*` through its same-origin development proxy.
 
-## Local Runner 1.4
+## Local Runner 1.9
 
-Local Runner 1.4 executes imported ComfyUI API-format workflows and CreativeDNA evidence synthesis on this Windows machine without keeping Creative Studio open. In the deployed app, open **Settings**, create a one-time machine token, then run from this repository:
+Local Runner 1.9 executes imported ComfyUI API-format workflows, CreativeDNA evidence synthesis, and reviewed ACE-Step 1.5 music LoRA jobs on this Windows machine without keeping Creative Studio open. In the deployed app, open **Settings**, create a one-time machine token, then run from this repository:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-runner.ps1
 ```
 
 The installer prompts for the one-time token, writes it to `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers an at-logon task, and starts it. ComfyUI must be available at `http://127.0.0.1:8188`. Runner credentials are hashed in D1 and can be revoked in Settings. The machine agent talks only to the token-authenticated `runner.cs.angelotoborg.com` API; that hostname serves no application shell or owner-session routes.
+
+Install the pinned official ACE-Step 1.5 runtime and Base checkpoints once. The script uses `D:\AI\ACE-Step-1.5` by default, keeps Python and model files outside this repository, and sets only user-level non-secret runtime paths:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-ace-step-training.ps1
+```
+
+The runner advertises `ace-step-1.5-lora` only after the Python environment, Base model, VAE, and text encoder all have real weight and config files. A training run unloads idle ComfyUI models, requires at least 18 GB free VRAM, runs the official corrected preprocessing/training CLI, retains the checkpoint locally, and waits for a noted owner approval before activation. Gemma captions and any lyrics are reviewable before GPU training; BPM and key are left blank unless the owner verifies them.
 
 For a foreground diagnostic run with the installed configuration:
 
@@ -57,7 +65,7 @@ npm run runner:once
 
 For an isolated local-BFF diagnostic, `CS_RUNNER_API_BASE`, `CS_RUNNER_TOKEN`, `CS_COMFY_URL`, and `CS_RUNNER_POLL_MS` override the installed configuration for that process only. Do not save or print a one-time runner token.
 
-The runner makes one unified claim at most once per minute while idle, one combined job/machine heartbeat per minute while active, and bounded heartbeats when execution changes stage. UI-format ComfyUI files remain editable and versioned, but must be exported in API format before execution. Image, music/audio, and video workflows are supported; 3D execution is deliberately outside Local Runner 1.4.
+The runner makes one unified claim at most once per minute while idle, one combined job/machine heartbeat per minute while active, and bounded heartbeats when execution changes stage. UI-format ComfyUI files remain editable and versioned, but must be exported in API format before execution. Image, music/audio, and video workflows plus ACE-Step music LoRA are supported; image/video model training and 3D execution are deliberately outside this release.
 
 ## Verify
 

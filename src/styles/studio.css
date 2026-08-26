@@ -210,6 +210,75 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .dna-history-item small { color: var(--text-muted); }
 
 /* CreativeDNA training */
+.ace-training { margin-bottom: 16px; padding: 20px; border: 1px solid rgba(34,211,238,.22); }
+.ace-training-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.ace-training-head h2 { margin-top: 5px; font-family: var(--font-display); font-size: clamp(25px,3vw,36px); letter-spacing: -.035em; }
+.ace-training-head p { max-width: 680px; margin-top: 6px; color: var(--text-muted); font-size: 10px; line-height: 1.55; }
+.ace-runtime { display: inline-flex; flex: none; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 999px; color: #fde68a; background: rgba(251,191,36,.1); font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.ace-runtime i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.ace-runtime.available { color: #6ee7b7; background: rgba(52,211,153,.1); }
+.ace-runtime.available i { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.ace-runtime-callout { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid rgba(251,191,36,.18); border-radius: 12px; color: #fde68a; background: rgba(251,191,36,.055); }
+.ace-runtime-callout > span { display: flex; flex-direction: column; gap: 2px; }
+.ace-runtime-callout strong { font-size: 10px; }
+.ace-runtime-callout small { color: var(--text-muted); font-size: 8px; line-height: 1.4; }
+.ace-builder { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(300px,.85fr); gap: 14px; margin-top: 14px; }
+.ace-audio-picker, .ace-config { min-width: 0; padding: 14px; border: 1px solid var(--border-soft); border-radius: 15px; background: rgba(8,8,24,.24); }
+.ace-audio-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
+.ace-audio-grid article { min-width: 0; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 12px; background: rgba(255,255,255,.025); }
+.ace-audio-grid article.selected { border-color: rgba(34,211,238,.4); background: rgba(34,211,238,.07); }
+.ace-audio-select { display: grid; width: 100%; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 9px; color: inherit; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.ace-audio-select > span { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 9px; color: var(--cyan); background: rgba(34,211,238,.09); }
+.ace-audio-select strong, .ace-audio-select small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ace-audio-select strong { font-size: 9px; }
+.ace-audio-select small { color: var(--text-faint); font-size: 7px; }
+.ace-audio-grid audio { display: block; width: 100%; height: 30px; opacity: .78; }
+.ace-config { display: flex; flex-direction: column; gap: 10px; }
+.ace-config .field > span, .ace-dataset-review .field > span, .ace-adapter-review .field > span { display: block; margin-bottom: 5px; color: var(--text-muted); font-size: 9px; font-weight: 750; }
+.ace-config textarea { min-height: 75px; resize: vertical; }
+.ace-config textarea.compact { min-height: 54px; }
+.ace-instrumental { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 9px; }
+.ace-instrumental input { accent-color: var(--cyan); }
+.ace-presets { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; }
+.ace-presets button { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 9px; color: var(--text-soft); border: 1px solid var(--border-soft); border-radius: 10px; background: rgba(255,255,255,.02); text-align: left; cursor: pointer; }
+.ace-presets button.selected { border-color: rgba(217,70,239,.45); background: rgba(217,70,239,.09); }
+.ace-presets strong { font-size: 9px; text-transform: capitalize; }
+.ace-presets span, .ace-presets small { overflow: hidden; color: var(--text-muted); font-size: 7px; line-height: 1.35; text-overflow: ellipsis; }
+.ace-start-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ace-start-summary > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 8px; border-radius: 9px; background: rgba(255,255,255,.025); }
+.ace-start-summary small { color: var(--text-faint); font-size: 7px; text-transform: uppercase; }
+.ace-start-summary code, .ace-start-summary b { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.ace-dataset-review, .ace-adapter-review { margin-top: 14px; padding: 14px; border: 1px solid rgba(34,211,238,.22); border-radius: 15px; background: rgba(34,211,238,.035); }
+.ace-dataset-review > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ace-dataset-review > header > span { display: flex; flex-direction: column; gap: 3px; }
+.ace-dataset-review > header strong { font-family: var(--font-display); font-size: 15px; }
+.ace-dataset-review > header small { color: var(--text-muted); font-size: 8px; }
+.ace-dataset-review > header b { padding: 5px 8px; border-radius: 999px; color: var(--cyan); background: rgba(34,211,238,.09); font-size: 8px; }
+.ace-dataset-items { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
+.ace-dataset-items article { min-width: 0; padding: 11px; border: 1px solid var(--border-soft); border-radius: 11px; background: rgba(0,0,0,.12); }
+.ace-dataset-title { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 7px; margin-bottom: 8px; }
+.ace-dataset-title span { font-family: var(--font-mono); color: var(--cyan); font-size: 8px; }
+.ace-dataset-title strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ace-dataset-title small, .ace-grounding-note { color: var(--text-faint); font-size: 7px; }
+.ace-dataset-items textarea { min-height: 78px; resize: vertical; }
+.ace-dataset-items .ace-instrumental { margin: 8px 0; }
+.ace-grounding-note { display: block; margin-top: 7px; line-height: 1.4; }
+.ace-review-action { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px; margin-top: 10px; }
+.ace-adapter-review { display: grid; grid-template-columns: minmax(0,1fr) minmax(220px,.65fr); gap: 12px; }
+.ace-adapter-review h3 { margin-top: 4px; font-family: var(--font-display); font-size: 19px; }
+.ace-adapter-review p { margin-top: 5px; color: var(--text-muted); font-size: 8px; line-height: 1.45; }
+.ace-adapter-review dl { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.ace-adapter-review dl div { padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,.03); }
+.ace-adapter-review dt { color: var(--text-faint); font-size: 6px; text-transform: uppercase; }
+.ace-adapter-review dd { margin-top: 2px; font-size: 8px; }
+.ace-adapter-review textarea { min-height: 78px; }
+.ace-adapter-review > div:last-child { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 7px; }
+.ace-jobs { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.ace-jobs article { display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; align-items: center; gap: 9px; margin-top: 6px; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.022); }
+.ace-jobs article > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.ace-jobs strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ace-jobs small { color: var(--text-faint); font-size: 7px; }
+.ace-jobs b { font-family: var(--font-mono); font-size: 9px; }
 .dna-training { padding: 22px; border-radius: var(--r-xl); }
 .dna-training-head, .generation-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .dna-training-head h2, .generation-section-head h2 { margin-top: 5px; font-family: var(--font-display); font-size: clamp(25px,3vw,36px); letter-spacing: -.035em; }
@@ -1316,6 +1385,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .production-loop-compact-counts { display: none; }
   .dna-layout { grid-template-columns: 1fr; }
   .dna-compose, .dna-shape { padding: 16px; }
+  .ace-training { padding: 16px; }
+  .ace-training-head { flex-direction: column; }
+  .ace-builder, .ace-adapter-review { grid-template-columns: 1fr; }
+  .ace-adapter-review > div:last-child { grid-column: auto; }
   .dna-training { padding: 16px; }
   .dna-training-head { flex-direction: column; }
   .training-run { grid-template-columns: 1fr; align-items: flex-start; }
@@ -1374,6 +1447,19 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 }
 
 @media (max-width: 520px) {
+  .ace-training { padding: 12px; border-radius: 16px; }
+  .ace-training-head h2 { font-size: 25px; }
+  .ace-audio-picker, .ace-config, .ace-dataset-review, .ace-adapter-review { padding: 10px; }
+  .ace-audio-grid, .ace-dataset-items { grid-template-columns: 1fr; }
+  .ace-presets { grid-template-columns: 1fr; }
+  .ace-presets button { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; }
+  .ace-presets small { grid-column: 2; }
+  .ace-review-action { grid-template-columns: 1fr; }
+  .ace-review-action .btn { width: 100%; }
+  .ace-adapter-review > div:last-child { align-items: stretch; flex-direction: column; }
+  .ace-adapter-review > div:last-child .btn { width: 100%; }
+  .ace-jobs article { grid-template-columns: auto minmax(0,1fr) auto; }
+  .ace-jobs article > :last-child { grid-column: 2 / -1; justify-self: start; }
   .cockpit-view { gap: 9px; }
   .cockpit-head h2 { font-size: 27px; }
   .cockpit-head p { font-size: 9px; }

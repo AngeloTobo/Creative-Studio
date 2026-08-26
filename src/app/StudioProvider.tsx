@@ -26,6 +26,11 @@ import type {
   VideoDurationSeconds,
   EvolutionJobContext,
   ReviewArtifactResponse,
+  CreateModelTrainingJobRequest,
+  ModelTrainingJob,
+  ModelAdapterReviewDecision,
+  ReviewModelTrainingDatasetRequest,
+  ReviewModelAdapterResponse,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -55,6 +60,10 @@ type StudioContextValue = {
   startDnaTraining: (input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => Promise<CreativeDnaTrainingJob>;
   cancelDnaTraining: (jobId: string) => Promise<void>;
   reviewDnaTraining: (jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string) => Promise<void>;
+  startModelTraining: (input: Omit<CreateModelTrainingJobRequest, "projectId" | "idempotencyKey">) => Promise<ModelTrainingJob>;
+  cancelModelTraining: (jobId: string) => Promise<void>;
+  reviewModelTrainingDataset: (jobId: string, input: ReviewModelTrainingDatasetRequest) => Promise<ModelTrainingJob>;
+  reviewModelAdapter: (adapterId: string, decision: ModelAdapterReviewDecision, note: string) => Promise<ReviewModelAdapterResponse>;
   enrollLocalRunner: (name: string) => Promise<EnrollLocalRunnerResponse>;
   revokeLocalRunner: (runnerId: string) => Promise<LocalRunner>;
   refresh: () => Promise<void>;
@@ -70,6 +79,21 @@ function message(error: unknown) {
   if (error.message === "video_duration_not_supported_by_model") return "That model cannot create the selected length. Choose a shorter length or an available LTX model.";
   if (error.message === "video_duration_control_missing") return "This workflow does not expose a duration control. Update its model workflow before generating.";
   if (error.message === "video_duration_revision_mismatch") return "The saved workflow duration does not match your selected length. Choose the length again and retry.";
+  if (error.message === "model_training_provider_unavailable") return "ACE-Step 1.5 training is not ready on the paired machine yet. Install its runtime and Base checkpoints, then restart the Local Runner.";
+  if (error.message === "ace_step_requires_3_audio_files") return "Select at least three consented audio uploads before preparing the LoRA dataset.";
+  if (error.message === "model_training_audio_consent_required") return "Every selected song must have CreativeDNA training consent enabled.";
+  if (error.message === "ace_step_dataset_review_required") return "Review every caption and lyric field before starting LoRA training.";
+  if (error.message.startsWith("ace_step_gpu_busy_free_")) {
+    const freeMiB = Number(error.message.match(/^ace_step_gpu_busy_free_(\d+)_mib$/)?.[1] ?? 0);
+    const freeGiB = freeMiB > 0 ? `${Math.round(freeMiB / 1024)} GB` : "too little memory";
+    return `The RTX 3090 is still busy (${freeGiB} free). Stop or unload other GPU work, then retry ACE-Step training.`;
+  }
+  if (error.message.startsWith("ace_step_gpu_vram_unsupported_")) {
+    const totalMiB = Number(error.message.match(/^ace_step_gpu_vram_unsupported_(\d+)_mib$/)?.[1] ?? 0);
+    const totalGiB = totalMiB > 0 ? `${Math.round(totalMiB / 1024)} GB` : "less than 20 GB";
+    return `ACE-Step LoRA training needs a larger GPU (${totalGiB} detected; 20 GB minimum).`;
+  }
+  if (error.message === "ace_step_runtime_missing") return "The official ACE-Step 1.5 runtime or Base checkpoints are missing. Run the local setup script, then restart the Local Runner.";
   return error.message.replaceAll("_", " ");
 }
 
@@ -151,7 +175,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, applySnapshot]);
 
   const hasActiveWork = Boolean(snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
-    || snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running"));
+    || snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")
+    || snapshot?.modelTrainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running"));
 
   useEffect(() => {
     if (!hasActiveWork) return;
@@ -297,6 +322,27 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     }
   }, [adapter, snapshot?.dnaArtifacts, transact]);
 
+  const startModelTraining = useCallback((input: Omit<CreateModelTrainingJobRequest, "projectId" | "idempotencyKey">) => {
+    if (!activeProjectId) throw new Error("project_required");
+    return transact(() => adapter.startModelTraining({
+      ...input,
+      projectId: activeProjectId,
+      idempotencyKey: operationKey("ace_train"),
+    }));
+  }, [activeProjectId, adapter, transact]);
+
+  const cancelModelTraining = useCallback(async (jobId: string) => {
+    await transact(() => adapter.cancelModelTraining(jobId));
+  }, [adapter, transact]);
+
+  const reviewModelTrainingDataset = useCallback((jobId: string, input: ReviewModelTrainingDatasetRequest) => (
+    transact(() => adapter.reviewModelTrainingDataset(jobId, input))
+  ), [adapter, transact]);
+
+  const reviewModelAdapter = useCallback((adapterId: string, decision: ModelAdapterReviewDecision, note: string) => (
+    transact(() => adapter.reviewModelAdapter(adapterId, decision, note))
+  ), [adapter, transact]);
+
   const enrollLocalRunner = useCallback((name: string) => transact(() => adapter.enrollLocalRunner(name)), [adapter, transact]);
   const revokeLocalRunner = useCallback((runnerId: string) => transact(() => adapter.revokeLocalRunner(runnerId)), [adapter, transact]);
 
@@ -351,10 +397,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     startDnaTraining,
     cancelDnaTraining,
     reviewDnaTraining,
+    startModelTraining,
+    cancelModelTraining,
+    reviewModelTrainingDataset,
+    reviewModelAdapter,
     enrollLocalRunner,
     revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, reviewDnaTraining, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
