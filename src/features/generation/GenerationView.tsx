@@ -59,7 +59,13 @@ type QuickSource = {
   name: string;
   source: "upload" | "artifact";
   trainingEligible: boolean;
+  createdAt: string;
+  previewUrl: string | null;
+  posterUrl: string | null;
+  colors: [string, string];
 };
+
+const SOURCE_GALLERY_LIMIT = 6;
 
 const INTENTS: Array<{ id: CreateIntent; label: string; icon: "image" | "video" | "music" | "dna" }> = [
   { id: "image", label: "Image", icon: "image" },
@@ -69,7 +75,17 @@ const INTENTS: Array<{ id: CreateIntent; label: string; icon: "image" | "video" 
 ];
 
 function sourceFromAsset(asset: MediaAsset): QuickSource {
-  return { id: asset.id, kind: asset.kind, name: asset.name, source: "upload", trainingEligible: asset.trainingEligible };
+  return {
+    id: asset.id,
+    kind: asset.kind,
+    name: asset.name,
+    source: "upload",
+    trainingEligible: asset.trainingEligible,
+    createdAt: asset.createdAt,
+    previewUrl: asset.contentUrl,
+    posterUrl: null,
+    colors: asset.kind === "image" ? ["#312e81", "#c026d3"] : asset.kind === "video" ? ["#172554", "#7c3aed"] : ["#164e63", "#db2777"],
+  };
 }
 
 function sourceFromArtifact(artifact: Artifact): QuickSource {
@@ -79,7 +95,27 @@ function sourceFromArtifact(artifact: Artifact): QuickSource {
     name: artifact.name,
     source: "artifact",
     trainingEligible: false,
+    createdAt: artifact.createdAt,
+    previewUrl: artifact.preview.url,
+    posterUrl: artifact.preview.posterUrl ?? null,
+    colors: artifact.preview.colors,
   };
+}
+
+function newestQuickSources(sources: QuickSource[]) {
+  return [...new Map(sources.map((source) => [source.id, source])).values()]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.name.localeCompare(right.name));
+}
+
+function QuickSourceVisual({ source }: { source: QuickSource }) {
+  if (source.kind === "image" && source.previewUrl) return <img src={source.previewUrl} alt="" loading="lazy" />;
+  if (source.kind === "video" && source.posterUrl) return <img src={source.posterUrl} alt="" loading="lazy" />;
+  if (source.kind === "video" && source.previewUrl) return <video src={`${source.previewUrl}#t=0.001`} muted playsInline preload="metadata" aria-hidden="true" onLoadedMetadata={(event) => {
+    const video = event.currentTarget;
+    if (video.duration > 0 && video.currentTime === 0) video.currentTime = Math.min(0.001, video.duration / 2);
+  }} />;
+  if (source.kind === "audio") return <span className="quick-source-wave" aria-hidden="true">{Array.from({ length: 11 }, (_, index) => <i key={index} />)}</span>;
+  return <span className="quick-source-fallback"><Icon name={source.kind} size={21} /></span>;
 }
 
 function shortDnaName(direction: string, intent: Exclude<CreateIntent, "train">) {
@@ -196,6 +232,7 @@ export function GenerationView({
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [videoDurationSeconds, setVideoDurationSeconds] = useState<VideoDurationSeconds>(5);
+  const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [localError, setLocalError] = useState("");
   const [notice, setNotice] = useState(autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected as the source.` : "");
@@ -223,6 +260,7 @@ export function GenerationView({
       setValuesRevisionId("");
       setImagePerformanceMode("fast-default");
       setVideoDurationSeconds(5);
+      setSourceGalleryExpanded(false);
       setNotice("");
       setVideoOperation(null);
       setEvolutionEnabled(false);
@@ -233,20 +271,35 @@ export function GenerationView({
     setIntent(selected.targetModality);
   }, [activeProjectId, selected]);
 
-  const sourceChoices = evolutionEnabled
+  const sourceIntent = intent === "train" ? "image" : intent;
+  const compatibleSourceKinds = new Set<QuickSourceKind>(workflows
+    .filter((item) => workflowCreateIntent(item.modality) === sourceIntent)
+    .flatMap((item) => item.currentRevision.parameters
+      .filter((parameter) => parameter.kind === "media" && parameter.mediaKind)
+      .map((parameter) => parameter.mediaKind as QuickSourceKind)));
+  if (!compatibleSourceKinds.size && intent !== "train") compatibleSourceKinds.add("image");
+  const compatibleArtifacts = projectArtifacts.filter((artifact) => compatibleSourceKinds.has(artifact.kind === "music" ? "audio" : artifact.kind));
+  const compatibleMedia = projectMedia.filter((asset) => compatibleSourceKinds.has(asset.kind));
+  const sourceChoices = newestQuickSources(evolutionEnabled
     ? [
       ...(initialEvolutionArtifact && !projectArtifacts.some((artifact) => artifact.id === initialEvolutionArtifact.id) ? [sourceFromArtifact(initialEvolutionArtifact)] : []),
       ...projectArtifacts.map(sourceFromArtifact),
       ...projectMedia.map(sourceFromAsset),
     ]
     : videoOperation
-    ? [...projectArtifacts.filter((artifact) => artifact.kind === "video").map(sourceFromArtifact), ...projectMedia.filter((asset) => asset.kind === "video").map(sourceFromAsset)]
-    : intent === "train"
-    ? projectMedia.map(sourceFromAsset)
-    : intent === "music"
-      ? projectMedia.filter((asset) => asset.kind === "image").map(sourceFromAsset)
-    : [...projectArtifacts.map(sourceFromArtifact), ...projectMedia.map(sourceFromAsset)];
+      ? [...projectArtifacts.filter((artifact) => artifact.kind === "video").map(sourceFromArtifact), ...projectMedia.filter((asset) => asset.kind === "video").map(sourceFromAsset)]
+      : intent === "train"
+        ? projectMedia.map(sourceFromAsset)
+        : intent === "music"
+          ? projectMedia.filter((asset) => asset.kind === "image").map(sourceFromAsset)
+          : [...compatibleArtifacts.map(sourceFromArtifact), ...compatibleMedia.map(sourceFromAsset)]);
   const quickSource = sourceChoices.find((source) => source.id === quickSourceId) ?? null;
+  const compactSourceChoices = sourceChoices.slice(0, SOURCE_GALLERY_LIMIT);
+  const visibleSourceChoices = sourceGalleryExpanded
+    ? sourceChoices
+    : quickSource && !compactSourceChoices.some((source) => source.id === quickSource.id)
+      ? [quickSource, ...compactSourceChoices.slice(0, SOURCE_GALLERY_LIMIT - 1)]
+      : compactSourceChoices;
   const songArtAnalysis = intent === "music" && quickSource?.source === "upload"
     ? [...projectDna]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
@@ -366,6 +419,7 @@ export function GenerationView({
     if (nextIntent !== intent && !evolutionEnabled) setDirection("");
     setIntent(nextIntent);
     setVideoOperation(null);
+    setSourceGalleryExpanded(false);
     resetWorkflowOverrides();
   };
 
@@ -421,6 +475,7 @@ export function GenerationView({
         return;
       }
       setQuickSourceId(asset.id);
+      setSourceGalleryExpanded(false);
       if (mediaInputRef.current) mediaInputRef.current.value = "";
       if (intent === "train") {
         onTrain([asset.id]);
@@ -678,6 +733,8 @@ export function GenerationView({
       : generationIntent === "video" && workflow
         ? `${basePrimaryLabel} · ${videoDurationLabel(videoDurationSeconds)} each`
       : basePrimaryLabel;
+  const sourcePickerLabel = videoOperation ? "Video to extend" : intent === "music" ? "Artwork inspiration" : intent === "train" ? "Training source" : "Use retained work";
+  const uploadSourceLabel = intent === "train" ? "Upload training media" : videoOperation ? "Upload video" : intent === "music" ? "Upload artwork" : "Upload new";
 
   return (
     <section className={`generation-section create-surface quick-create${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-label="Create with Creative Studio">
@@ -737,14 +794,26 @@ export function GenerationView({
                 : "Custom mode is explicit, but these exact controls are still within the fast limits."}</small>
         </div> : null}
 
-        <div className={`quick-source-row${videoOperation ? " video-extension-source" : ""}`}>
-          <label className={`quick-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
-            <input ref={mediaInputRef} type="file" accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : intent === "music" ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
-            <Icon name="plus" size={16} />
-            <span><strong>{busy ? "Working…" : intent === "train" ? "Upload training media" : videoOperation ? "Upload video to extend" : intent === "music" ? "Upload art for the song" : "Upload a source"}</strong><small>{videoOperation ? "MP4, WebM, or MOV" : intent === "music" ? "JPG, PNG, WebP, or GIF" : "Image, audio, or video"}</small></span>
-          </label>
-          {sourceChoices.length ? <label className="quick-source-select"><span>{videoOperation ? "video to extend" : intent === "music" ? "artwork inspiration" : "or use retained work"}</span><select aria-label={videoOperation ? "Video to extend" : intent === "music" ? "Artwork inspiration" : "Retained source"} value={quickSource?.id ?? ""} disabled={busy} onChange={(event) => { setQuickSourceId(event.target.value); setInputBindings({}); }}><option value="">No source</option>{sourceChoices.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.source === "upload" ? "upload" : "generated"}</option>)}</select></label> : null}
-        </div>
+        <section className={`quick-source-gallery${sourceGalleryExpanded ? " expanded" : ""}`} aria-label={sourcePickerLabel}>
+          <header><span><strong>{sourcePickerLabel}</strong><small>{quickSource ? quickSource.name : `${sourceChoices.length} compatible retained`}</small></span>{sourceChoices.length > SOURCE_GALLERY_LIMIT ? <button type="button" className="link-btn" disabled={busy} onClick={() => setSourceGalleryExpanded((current) => !current)}>{sourceGalleryExpanded ? "Show newest" : `View all ${sourceChoices.length}`}</button> : null}</header>
+          <div className="quick-source-gallery-grid" role="group" aria-label={`${sourcePickerLabel} gallery`}>
+            <label className={`quick-source-card quick-source-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
+              <input ref={mediaInputRef} type="file" aria-label={uploadSourceLabel} accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : intent === "music" ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
+              <span className="quick-source-visual"><Icon name="plus" size={22} /></span>
+              <span className="quick-source-copy"><strong>{busy ? "Working…" : uploadSourceLabel}</strong><small>{uiOnlyDevelopment ? "Worker required" : "From this device"}</small></span>
+            </label>
+            {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); }}>
+              <span className="quick-source-visual"><Icon name="generate" size={22} /></span>
+              <span className="quick-source-copy"><strong>No source</strong><small>Start from prompt</small></span>
+              {!quickSource ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
+            </button> : null}
+            {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); }}>
+              <span className={`quick-source-visual ${source.kind}`} style={{ background: `linear-gradient(135deg, ${source.colors[0]}, ${source.colors[1]})` }}><QuickSourceVisual source={source} /><span className="quick-source-kind"><Icon name={source.kind === "audio" ? "music" : source.kind} size={11} /></span></span>
+              <span className="quick-source-copy"><strong>{source.name}</strong><small>{source.source === "upload" ? "Upload" : "Generated"} · {source.kind}</small></span>
+              {quickSource?.id === source.id ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
+            </button>)}
+          </div>
+        </section>
 
         {intent === "music" && songPromptRecommendations.length ? <section className="quick-song-prompts" aria-label="Recommended song prompts">
           <header><span><Icon name="star" size={15} /><strong>Prompt ideas</strong></span><small>{songArtDescription ? "Uploaded art + CreativeDNA" : "CreativeDNA"}</small></header>

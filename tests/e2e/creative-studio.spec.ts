@@ -32,7 +32,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await page.getByRole("button", { name: /Animate/ }).click();
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByLabel("Retained source")).toHaveValue("media_home");
+  await expect(page.getByRole("button", { name: "Use Rebecca embryo upload" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
   await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
   await expect(page.getByRole("alert")).toContainText("development adapter cannot submit simulated video");
@@ -47,7 +47,11 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await page.addInitScript(({ createdAt: time }) => {
     localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
       projects: [{ id: "project_fast", activeDnaArtifactId: null, name: "Fast Images", type: "Image", status: "active", description: "", note: "", hue: "#d946ef", initials: "FI", createdAt: time, updatedAt: time }],
-      dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
+      dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: Array.from({ length: 7 }, (_, index) => {
+        const date = new Date(new Date(time).getTime() + index * 1_000).toISOString();
+        const name = index === 6 ? "Newest retained source" : index === 0 ? "Oldest retained source" : `Retained source ${index + 1}`;
+        return { id: `media_fast_${index}`, projectId: "project_fast", kind: "image", name, originalFileName: `source-${index}.png`, mimeType: "image/png", size: 68, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: date, parentAssetIds: [] }, createdAt: date, updatedAt: date };
+      }), acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
       workflows: [{
         id: "workflow_z_image", projectId: "project_fast", name: "Z-Image Turbo", description: "", sourceFileName: "z-image.json", modality: "image", executionState: "ready", createdAt: time, updatedAt: time,
         currentRevision: {
@@ -83,6 +87,13 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
     }));
   }, { createdAt });
   await page.goto("/#/dna");
+  const sourceGallery = page.getByRole("region", { name: "Use retained work" });
+  await expect(sourceGallery.getByRole("button", { name: "Use Newest retained source upload" })).toBeVisible();
+  await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toHaveCount(0);
+  await sourceGallery.getByRole("button", { name: "View all 7" }).click();
+  await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toBeVisible();
+  await sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" }).click();
+  await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toHaveAttribute("aria-pressed", "true");
   const speed = page.getByRole("group", { name: "Image speed" });
   await expect(speed.getByRole("button", { name: /^Fast/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Save & generate image · fast/ })).toBeVisible();
@@ -153,7 +164,7 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
 
   await page.goto("/#/dna");
   await page.getByRole("button", { name: "Song", exact: true }).click();
-  await page.getByLabel("Artwork inspiration").selectOption("media_embryo");
+  await page.getByRole("button", { name: "Use Embryo artwork upload" }).click();
   await expect(page.getByRole("region", { name: "Recommended song prompts" })).toContainText("Uploaded art + CreativeDNA");
   await page.getByRole("button", { name: "Use Art + DNA song prompt" }).click();
   const direction = page.getByRole("textbox", { name: "Describe the song" });
