@@ -223,7 +223,12 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .ace-runtime-callout strong { font-size: 10px; }
 .ace-runtime-callout small { color: var(--text-muted); font-size: 8px; line-height: 1.4; }
 .ace-builder { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(300px,.85fr); gap: 14px; margin-top: 14px; }
+.ace-primary-action { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; margin-top: 12px; }
+.ace-primary-action > .btn { height: 48px; min-width: 190px; }
 .ace-audio-picker, .ace-config { min-width: 0; padding: 14px; border: 1px solid var(--border-soft); border-radius: 15px; background: rgba(8,8,24,.24); }
+.ace-audio-actions { display: flex; align-items: center; gap: 7px; }
+.ace-audio-actions > input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ace-audio-actions .btn { height: 32px; padding-inline: 10px; font-size: 8px; }
 .ace-audio-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 10px; }
 .ace-audio-grid article { min-width: 0; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 12px; background: rgba(255,255,255,.025); }
 .ace-audio-grid article.selected { border-color: rgba(34,211,238,.4); background: rgba(34,211,238,.07); }
@@ -234,6 +239,17 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .ace-audio-select small { color: var(--text-faint); font-size: 7px; }
 .ace-audio-grid audio { display: block; width: 100%; height: 30px; opacity: .78; }
 .ace-config { display: flex; flex-direction: column; gap: 10px; }
+.ace-proof-ready { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; padding: 12px; border: 1px solid rgba(34,211,238,.2); border-radius: 12px; background: rgba(34,211,238,.055); }
+.ace-proof-ready > span { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; color: var(--cyan); background: rgba(34,211,238,.1); }
+.ace-proof-ready > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.ace-proof-ready strong { font-family: var(--font-display); font-size: 15px; }
+.ace-proof-ready small { overflow: hidden; color: var(--text-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.ace-training-options { overflow: hidden; border: 1px solid var(--border-soft); border-radius: 11px; background: rgba(255,255,255,.018); }
+.ace-training-options > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; cursor: pointer; list-style: none; }
+.ace-training-options > summary::-webkit-details-marker { display: none; }
+.ace-training-options > summary span { font-size: 9px; font-weight: 800; }
+.ace-training-options > summary small { color: var(--text-faint); font-size: 7px; }
+.ace-training-options > div { display: flex; flex-direction: column; gap: 10px; padding: 0 10px 10px; }
 .ace-config .field > span, .ace-dataset-review .field > span, .ace-adapter-review .field > span { display: block; margin-bottom: 5px; color: var(--text-muted); font-size: 9px; font-weight: 750; }
 .ace-config textarea { min-height: 75px; resize: vertical; }
 .ace-config textarea.compact { min-height: 54px; }
@@ -280,6 +296,14 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .ace-jobs small { color: var(--text-faint); font-size: 7px; }
 .ace-jobs b { font-family: var(--font-mono); font-size: 9px; }
 .dna-training { padding: 22px; border-radius: var(--r-xl); }
+.dna-analysis-disclosure { overflow: hidden; border-radius: var(--r-xl); }
+.dna-analysis-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; cursor: pointer; list-style: none; }
+.dna-analysis-disclosure > summary::-webkit-details-marker { display: none; }
+.dna-analysis-disclosure > summary > span { display: flex; align-items: center; gap: 8px; color: var(--text-soft); }
+.dna-analysis-disclosure > summary > span svg { color: var(--cyan); }
+.dna-analysis-disclosure > summary strong { font-family: var(--font-display); font-size: 15px; }
+.dna-analysis-disclosure > summary small { color: var(--text-muted); font-size: 8px; }
+.dna-analysis-disclosure[open] > summary { border-bottom: 1px solid var(--border-soft); }
 .dna-training-head, .generation-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .dna-training-head h2, .generation-section-head h2 { margin-top: 5px; font-family: var(--font-display); font-size: clamp(25px,3vw,36px); letter-spacing: -.035em; }
 .dna-training-head p, .generation-section-head p { max-width: 720px; margin-top: 7px; color: var(--text-muted); font-size: 11px; line-height: 1.55; }
@@ -1450,6 +1474,11 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .ace-training { padding: 12px; border-radius: 16px; }
   .ace-training-head h2 { font-size: 25px; }
   .ace-audio-picker, .ace-config, .ace-dataset-review, .ace-adapter-review { padding: 10px; }
+  .ace-audio-picker > .training-section-head { align-items: stretch; flex-direction: column; }
+  .ace-audio-actions { justify-content: space-between; }
+  .ace-audio-actions .btn { flex: 1; }
+  .ace-primary-action { grid-template-columns: 1fr; }
+  .ace-primary-action > .btn { width: 100%; min-width: 0; }
   .ace-audio-grid, .ace-dataset-items { grid-template-columns: 1fr; }
   .ace-presets { grid-template-columns: 1fr; }
   .ace-presets button { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; }
@@ -1460,6 +1489,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .ace-adapter-review > div:last-child .btn { width: 100%; }
   .ace-jobs article { grid-template-columns: auto minmax(0,1fr) auto; }
   .ace-jobs article > :last-child { grid-column: 2 / -1; justify-self: start; }
+  .dna-analysis-disclosure > summary { align-items: flex-start; flex-direction: column; gap: 4px; padding: 12px; }
   .cockpit-view { gap: 9px; }
   .cockpit-head h2 { font-size: 27px; }
   .cockpit-head p { font-size: 9px; }

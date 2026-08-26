@@ -303,6 +303,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await page.getByRole("button", { name: "Back to Create" }).click();
   await page.getByRole("button", { name: "Train", exact: true }).click();
   await page.getByRole("button", { name: "Open training" }).click();
+  await page.locator(".dna-analysis-disclosure > summary").click();
   await expect(page.getByRole("heading", { name: "Analyze CreativeDNA" })).toBeVisible();
   await expect(page.getByText(/retains a long analysis and a short generation summary for every selected image, audio file, and video/)).toBeVisible();
   await page.getByRole("button", { name: "Back to Create" }).click();

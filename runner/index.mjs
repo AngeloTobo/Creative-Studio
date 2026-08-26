@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import ffmpegPath from "ffmpeg-static";
@@ -17,7 +17,7 @@ import {
   prepareAceStepWorkspace,
 } from "./aceStepTraining.mjs";
 
-export const RUNNER_VERSION = "1.9.0";
+export const RUNNER_VERSION = "1.9.1";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -146,8 +146,8 @@ async function downloadTrainingMedia(config, mediaId) {
 }
 
 async function uploadTrainingComfyInput(config, sourceId, media) {
-  const original = basename(media.name || sourceId).replace(/[^a-z0-9._-]/gi, "_");
-  const fileName = `cs_training_${sourceId}_${original}`;
+  const extension = extname(media.name || "").toLowerCase().replace(/[^a-z0-9.]/g, "");
+  const fileName = `cs_training_${sourceId}${extension || ".bin"}`;
   const form = new FormData();
   form.set("image", new Blob([media.buffer], { type: media.mimeType }), fileName);
   form.set("type", "input");
@@ -1095,6 +1095,97 @@ function cleanAceStepCaption(value) {
     .slice(0, 1_500);
 }
 
+export function detectLyricsTranscriber(environment = process.env) {
+  const executable = [
+    environment.CS_WHISPER_EXE,
+    join(homedir(), "miniconda3", "Scripts", "whisper.exe"),
+    join(homedir(), "Miniconda3", "Scripts", "whisper.exe"),
+  ].find((candidate) => candidate && existsSync(candidate)) || null;
+  const requestedModel = String(environment.CS_WHISPER_MODEL || "small.en").trim();
+  const model = /^(?:tiny|base|small|medium)\.en$|^large-v3-turbo$/.test(requestedModel) ? requestedModel : "small.en";
+  return { available: Boolean(executable), executable, model };
+}
+
+function normalizeWhisperLyrics(value) {
+  const text = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 12_000);
+  return text ? `[Verse]\n${text}` : "";
+}
+
+async function transcribeAceStepLyrics(media, assetId, heartbeat) {
+  const transcriber = detectLyricsTranscriber();
+  if (!transcriber.available) throw new Error("ace_step_lyrics_transcriber_missing");
+  const directory = await mkdtemp(join(tmpdir(), `creative-studio-whisper-${assetId.slice(-8)}-`));
+  const localData = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+  const modelDirectory = join(localData, "Creative Studio Runner", "models", "whisper");
+  await mkdir(modelDirectory, { recursive: true });
+  const sourceExtension = extname(media.name || "").toLowerCase();
+  const extension = [".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus"].includes(sourceExtension) ? sourceExtension : ".mp3";
+  const sourcePath = join(directory, `training-track${extension}`);
+  try {
+    await writeFile(sourcePath, media.buffer);
+    await new Promise((resolve, reject) => {
+      const child = spawn(transcriber.executable, [
+        sourcePath,
+        "--model", transcriber.model,
+        "--model_dir", modelDirectory,
+        "--device", "cuda",
+        "--language", "en",
+        "--output_dir", directory,
+        "--output_format", "txt",
+        "--verbose", "False",
+        "--fp16", "True",
+      ], {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          PYTHONUTF8: "1",
+          PATH: `${dirname(ffmpegPath)};${process.env.PATH || ""}`,
+        },
+      });
+      let tail = "";
+      let cancelled = false;
+      const onChunk = (chunk) => { tail = `${tail}${String(chunk)}`.slice(-4_000); };
+      child.stdout.on("data", onChunk);
+      child.stderr.on("data", onChunk);
+      const leaseTimer = setInterval(async () => {
+        try {
+          await heartbeat();
+        } catch {
+          cancelled = true;
+          child.kill();
+        }
+      }, 30_000);
+      const timeout = setTimeout(() => child.kill(), 10 * 60_000);
+      child.on("error", (error) => {
+        clearInterval(leaseTimer);
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.on("close", (code) => {
+        clearInterval(leaseTimer);
+        clearTimeout(timeout);
+        if (cancelled) reject(new Error("model_training_cancelled"));
+        else if (code !== 0) reject(new Error(`ace_step_lyrics_transcription_failed: ${tail.replace(/\s+/g, " ").trim().slice(-500)}`));
+        else resolve();
+      });
+    });
+    const transcriptName = (await readdir(directory)).find((name) => name.toLowerCase().endsWith(".txt"));
+    if (!transcriptName) throw new Error("ace_step_lyrics_transcription_empty");
+    const lyrics = normalizeWhisperLyrics(await readFile(join(directory, transcriptName), "utf8"));
+    if (lyrics.length < 20) throw new Error("ace_step_lyrics_transcription_empty");
+    return lyrics;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function prepareAceStepDataset(config, bundle) {
   const job = bundle.modelTrainingJob;
   const items = [];
@@ -1103,7 +1194,7 @@ async function prepareAceStepDataset(config, bundle) {
     const progress = 8 + Math.round(((index + 1) / bundle.assets.length) * 16);
     const media = await downloadTrainingMedia(config, asset.id);
     const filename = await uploadTrainingComfyInput(config, asset.id, media);
-    const graph = buildAceStepCaptionGraph(filename, asset.originalFileName || asset.name);
+    const graph = buildAceStepCaptionGraph(filename, `Training track ${index + 1}`);
     const promptId = await submitPrompt(config, graph, `${job.id}-${asset.id}-ace-caption`);
     const output = await waitForTextOutput(config, graph, promptId, async () => {
       const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
@@ -1122,11 +1213,18 @@ async function prepareAceStepDataset(config, bundle) {
     } catch {
       durationSeconds = 1;
     }
+    const lyrics = job.instrumental ? "[Instrumental]" : await transcribeAceStepLyrics(media, asset.id, async () => {
+      const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ progress, stage: "captioning", upstreamId: `whisper:${asset.id}` }),
+      });
+      if (!response.continue) throw new Error("model_training_cancelled");
+    });
     items.push({
       assetId: asset.id,
       fileName: asset.originalFileName || asset.name,
       caption,
-      lyrics: job.instrumental ? "[Instrumental]" : "",
+      lyrics,
       isInstrumental: job.instrumental,
       durationSeconds,
       bpm: null,
@@ -1183,7 +1281,11 @@ async function executeModelTrainingBundle(config, bundle) {
     await freeComfyMemory(config);
     const gpu = await aceStepGpuPreflight();
     await heartbeat(34, "preflight", `${gpu.name}:${gpu.freeMiB}MiB-free`);
-    const workspace = await prepareAceStepWorkspace(job, async (assetId) => (await downloadTrainingMedia(config, assetId)).buffer);
+    const workspace = await prepareAceStepWorkspace(
+      job,
+      async (assetId) => (await downloadTrainingMedia(config, assetId)).buffer,
+      join(runtime.home, ".creative-studio", "training", job.id),
+    );
     const result = await executeAceStepTraining(runtime, job, workspace, heartbeat);
     await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/complete`, {
       method: "POST",

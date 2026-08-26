@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { extname, join } from "node:path";
 
 const PROVIDER = "ace-step-1.5-lora";
 
@@ -92,17 +92,16 @@ export function validateAceStepDataset(job) {
 function safeAudioName(item, index) {
   const extension = extname(item.fileName || "").toLowerCase();
   const safeExtension = [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"].includes(extension) ? extension : ".wav";
-  const stem = basename(item.fileName || `track_${index + 1}`, extension).replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 70) || `track_${index + 1}`;
-  return `${String(index + 1).padStart(2, "0")}_${stem}_${item.assetId.slice(-8)}${safeExtension}`;
+  return `track_${String(index + 1).padStart(2, "0")}_${item.assetId.slice(-8)}${safeExtension}`;
 }
 
-export async function prepareAceStepWorkspace(job, download) {
+export async function prepareAceStepWorkspace(job, download, jobRoot = join(localDataRoot(), "Creative Studio Runner", "training", job.id)) {
   const items = validateAceStepDataset(job);
-  const jobRoot = join(localDataRoot(), "Creative Studio Runner", "training", job.id);
   const audioDir = join(jobRoot, "audio");
   const tensorDir = join(jobRoot, "tensors");
   const outputDir = join(jobRoot, "output");
   await Promise.all([mkdir(audioDir, { recursive: true }), mkdir(tensorDir, { recursive: true }), mkdir(outputDir, { recursive: true })]);
+  const datasetSamples = [];
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     const name = safeAudioName(item, index);
@@ -118,8 +117,24 @@ export async function prepareAceStepWorkspace(job, download) {
       custom_tag: job.concept.triggerToken,
       instrumental: item.isInstrumental,
     }, null, 2), "utf8");
+    datasetSamples.push({
+      audio_path: join(audioDir, name),
+      filename: name,
+      caption: `${job.concept.triggerToken}, ${String(item.caption).trim()}`,
+      lyrics: item.isInstrumental ? "[Instrumental]" : String(item.lyrics).trim(),
+      bpm: item.bpm ?? null,
+      keyscale: item.keyscale || "",
+      duration: item.durationSeconds,
+      custom_tag: job.concept.triggerToken,
+      is_instrumental: item.isInstrumental,
+    });
   }
-  return { jobRoot, audioDir, tensorDir, outputDir };
+  const datasetJson = join(jobRoot, "dataset.json");
+  await writeFile(datasetJson, JSON.stringify({
+    metadata: { tag_position: "prepend", genre_ratio: 0, custom_tag: job.concept.triggerToken },
+    samples: datasetSamples,
+  }, null, 2), "utf8");
+  return { jobRoot, audioDir, tensorDir, outputDir, datasetJson };
 }
 
 function runProcess(command, args, options) {
@@ -149,7 +164,9 @@ function runProcess(command, args, options) {
     child.on("close", (code) => {
       clearInterval(timer);
       if (cancelled) reject(new Error("model_training_cancelled"));
-      else if (code !== 0) reject(new Error(`${options.errorCode}: ${tail.replace(/\s+/g, " ").trim().slice(-900)}`));
+      else if (code !== 0 || /TRAINING FAILED|PREPROCESSING FAILED|\[FAIL\]\s+(?:Training|Preprocessing) failed/i.test(tail)) {
+        reject(new Error(`${options.errorCode}: ${tail.replace(/\s+/g, " ").trim().slice(-900)}`));
+      }
       else resolve({ tail });
     });
   });
@@ -170,7 +187,7 @@ export async function executeAceStepTraining(runtime, job, workspace, heartbeat)
     "--checkpoint-dir", runtime.checkpointDir,
     "--model-variant", "base",
     "--preprocess",
-    "--audio-dir", workspace.audioDir,
+    "--dataset-json", workspace.datasetJson,
     "--tensor-output", workspace.tensorDir,
     "--device", "cuda:0",
     "--precision", job.recipe.optimization.precision,
@@ -253,7 +270,7 @@ export async function executeAceStepTraining(runtime, job, workspace, heartbeat)
       captionedItems: job.dataset.items.filter((item) => String(item.caption || "").trim()).length,
       validationPromptCount: 0,
       notes: [
-        "ACE-Step 1.5 corrected LoRA training completed from owner-reviewed captions and lyrics.",
+        "ACE-Step 1.5 corrected LoRA training completed from review-authorized captions and lyrics.",
         "Checkpoint requires explicit Creative Studio approval before it can become the active project music adapter.",
         "No validation generation has been scored yet; run a controlled song comparison before production use.",
       ],

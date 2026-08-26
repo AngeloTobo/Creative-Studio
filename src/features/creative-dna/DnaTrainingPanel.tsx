@@ -86,7 +86,7 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
   const activeDnaArtifactId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
   const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
 
-  return <><AceStepTrainingPanel onMedia={onMedia} /><section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
+  return <><AceStepTrainingPanel onMedia={onMedia} /><details className="dna-analysis-disclosure glass" open={initialAssetIds.length > 0 || Boolean(reviewJobId)}><summary><span><Icon name="image" size={17} /><strong>Analyze CreativeDNA</strong></span><small>Images, audio, and video · does not change model weights</small></summary><section className="dna-training" id="creative-dna-training" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
       <div><span className="eyebrow">Evidence synthesis</span><h2 id="dna-training-title">Analyze CreativeDNA</h2><p>Gemma 4 retains a long analysis and a short generation summary for every selected image, audio file, and video while measured evidence shapes the DNA. This changes CreativeDNA evidence, not model weights.</p></div>
       <span className="training-runner-state"><i /> Local runner + Gemma 4</span>
@@ -144,5 +144,5 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
       onClose={() => { setReviewingJobId(""); onReviewJobHandled?.(); }}
       onDecision={(decision, note) => reviewDnaTraining(reviewingJob.id, decision, note)}
     /> : null}
-  </section></>;
+  </section></details></>;
 }
