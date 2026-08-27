@@ -7,8 +7,13 @@ import {
   generationWorkflowPromptParameters,
   normalizeVideoGenerationVariant,
   type AcceptanceDecision,
+  type ArtifactHistoryQuery,
   type Capability,
+  type CreateCanonReferenceRequest,
+  type CreateContinuityRuleRequest,
   type CreateProjectRequest,
+  type CreateWorldEntityRequest,
+  type CreateWorldRequest,
   matchCreativeStudioRoute,
   normalizeVideoDurationSeconds,
   primaryWorkflowPromptParameter,
@@ -21,6 +26,12 @@ import {
   type StudioSnapshot,
   type SubmitJobRequest,
   type UpdateProjectRequest,
+  type UpdateCanonReferenceRequest,
+  type UpdateContinuityRuleRequest,
+  type UpdateWorldEntityRequest,
+  type UpdateWorldRequest,
+  type PromoteArtifactToCanonRequest,
+  type PromoteToCanonRequest,
   type EnrollLocalRunnerRequest,
   type RunnerHeartbeatRequest,
   type RunnerJobHeartbeatRequest,
@@ -61,6 +72,7 @@ import {
   jobById,
   listAcceptances,
   listArtifacts,
+  listArtifactHistoryPage,
   listJobs,
   listGenerationRecipes,
   listJobRuntime,
@@ -76,6 +88,21 @@ import {
   updateGenerationRecipe,
   updateProject,
 } from "../repository";
+import {
+  createCanonReference,
+  createContinuityRule,
+  createWorld,
+  createWorldEntity,
+  generationContinuityStamp,
+  listWorldRecords,
+  promoteArtifactToCanon,
+  promoteReferenceToCanon,
+  updateCanonReference,
+  updateContinuityRule,
+  updateWorld,
+  updateWorldEntity,
+  worldById,
+} from "../worlds";
 import { retainCompletedArtifact } from "../retention";
 import type { Env, OwnerSession } from "../types";
 import { createWorkflowRevision, importWorkflow, listWorkflows, workflowContent } from "../workflows";
@@ -157,6 +184,9 @@ function statusFor(error: string) {
     || error === "model_adapter_already_reviewed" || error === "recipe_evidence_settings_immutable"
     || error === "generation_recipe_archived") return 409;
   if (error === "runner_job_not_completable" || error === "image_custom_mode_required") return 409;
+  if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
+    || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
+    || error === "artifact_already_canonical") return 409;
   return 400;
 }
 
@@ -164,6 +194,24 @@ function idempotencyKey(value: unknown) {
   const key = String(value ?? "").trim();
   if (!/^[a-z0-9_-]{16,100}$/i.test(key)) throw new Error("invalid_idempotency_key");
   return key;
+}
+
+function artifactHistoryQuery(url: URL): ArtifactHistoryQuery {
+  const limitValue = url.searchParams.get("limit");
+  const createdAt = boundedText(url.searchParams.get("cursorCreatedAt"), 40);
+  const artifactId = boundedText(url.searchParams.get("cursorArtifactId"), 100);
+  if (Boolean(createdAt) !== Boolean(artifactId)) throw new Error("invalid_artifact_history_cursor");
+  const kinds = url.searchParams.getAll("kind").flatMap((value) => value.split(",")).filter(Boolean) as ArtifactHistoryQuery["kinds"];
+  const statuses = url.searchParams.getAll("status").flatMap((value) => value.split(",")).filter(Boolean) as ArtifactHistoryQuery["statuses"];
+  return {
+    projectId: boundedText(url.searchParams.get("projectId"), 100) || null,
+    cursor: createdAt && artifactId ? { createdAt, artifactId } : null,
+    limit: limitValue === null ? undefined : Number(limitValue),
+    kinds,
+    statuses,
+    includeArchived: url.searchParams.get("includeArchived") === "true",
+    search: boundedText(url.searchParams.get("q"), 120),
+  };
 }
 
 function reconciliationEmail(request: Request) {
@@ -240,6 +288,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
     if (localHardwareMode(env)) return [
       { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Local Creative Studio D1", detail: "Versioned DNA stays in the Wrangler-local database on this machine.", checkedAt },
+      { key: "creative-worlds", label: "Creative Worlds", state: "available", provider: "Local Creative Studio D1", detail: "Versioned worlds, elements, rules, candidates, and explicit canon promotions stay on this machine.", checkedAt },
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Local Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploads and generated results stay in Wrangler-local object storage." : "A local R2 binding is required for real media.", checkedAt },
       { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Local Creative Studio D1", detail: "Uploaded workflow JSON and immutable revisions stay on this machine.", checkedAt },
       { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Local Creative Studio D1", detail: "Accepted prompts, settings, and consented uploads remain local training evidence.", checkedAt },
@@ -257,6 +306,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     ];
     return [
       { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned DNA is stored in the standalone Worker database.", checkedAt },
+      { key: "creative-worlds", label: "Creative Worlds", state: "available", provider: "Creative Studio D1", detail: "World continuity and explicit canon decisions are real product-owned records; development media is never promoted automatically.", checkedAt },
       { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Owner uploads are size-verified and retained under project scope." : "An R2 binding is required for real uploads.", checkedAt },
       { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Uploaded graphs and custom settings are stored as immutable, content-hashed revisions.", checkedAt },
       { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Generated results enter a candidate set; explicit acceptance promotes prompt and settings evidence to training-ready.", checkedAt },
@@ -283,6 +333,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
   const generationState = session.status === "approved" ? "available" : "unavailable";
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "Creative Studio D1", detail: "Versioned CreativeDNA remains owned by the standalone product.", checkedAt },
+    { key: "creative-worlds", label: "Creative Worlds", state: "available", provider: "Creative Studio D1", detail: "Versioned world continuity and explicit canon promotions remain Creative Studio-owned; artifact acceptance never changes canon.", checkedAt },
     { key: "media-library", label: "Media library", state: env.ARTIFACTS ? "available" : "unavailable", provider: env.ARTIFACTS ? "Creative Studio R2" : "not configured", detail: env.ARTIFACTS ? "Uploaded image, audio, and video are retained with owner, project, consent, and provenance metadata." : "An R2 binding is required for real uploads.", checkedAt },
     { key: "workflow-library", label: "ComfyUI workflows", state: "available", provider: "Creative Studio D1", detail: "Workflow JSON, detected controls, models, revisions, and content hashes remain product-owned.", checkedAt },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "available", provider: "Creative Studio D1", detail: "Prompts and exact generation settings are candidates until artifact review makes them training-ready or excluded.", checkedAt },
@@ -308,7 +359,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, runners] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, runners, worldRecords] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -325,6 +376,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listModelAdapters(env, session.userId),
     listModelAdapterReviews(env, session.userId),
     listLocalRunners(env, session.userId),
+    listWorldRecords(env, session.userId),
   ]);
   const computedAt = new Date().toISOString();
   const tasteMemory = compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts });
@@ -363,6 +415,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     runners,
     capabilities: await capabilities(env, session, runners),
     acceptances,
+    ...worldRecords,
     tasteMemory,
     evolutionStudies: deriveEvolutionStudies(jobs, artifacts),
     refreshedAt: computedAt,
@@ -499,6 +552,93 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const match = url.pathname.match(/^\/api\/creative-studio\/projects\/([a-z0-9_]+)\/archive$/i);
       if (!match) return json({ ok: false, error: "invalid_project_request" }, { status: 400 });
       return json({ ok: true, project: await archiveProject(env, session.userId, match[1]) });
+    }
+    if (route === "worlds-list") {
+      const records = await listWorldRecords(env, session.userId);
+      const projectId = boundedText(url.searchParams.get("projectId"), 100);
+      if (!projectId) return json({ ok: true, ...records });
+      const worldIds = new Set(records.worlds.filter((world) => world.projectId === projectId).map((world) => world.id));
+      return json({
+        ok: true,
+        worlds: records.worlds.filter((world) => worldIds.has(world.id)),
+        worldEntities: records.worldEntities.filter((entity) => worldIds.has(entity.worldId)),
+        continuityRules: records.continuityRules.filter((rule) => worldIds.has(rule.worldId)),
+        canonReferences: records.canonReferences.filter((reference) => worldIds.has(reference.worldId)),
+        canonPromotions: records.canonPromotions.filter((promotion) => worldIds.has(promotion.worldId)),
+      });
+    }
+    if (route === "world-create") {
+      const input = await body<CreateWorldRequest>(request);
+      if (!input) throw new Error("invalid_world_request");
+      return json({ ok: true, world: await createWorld(env, session.userId, input) }, { status: 201 });
+    }
+    if (route === "world-get") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)$/i);
+      if (!match) throw new Error("invalid_world_request");
+      const records = await worldById(env, session.userId, match[1]);
+      if (!records) throw new Error("world_not_found");
+      return json({
+        ok: true,
+        world: records.world,
+        worldEntities: records.entities,
+        continuityRules: records.rules,
+        canonReferences: records.references,
+        canonPromotions: records.promotions,
+      });
+    }
+    if (route === "world-update" || route === "world-archive") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)(?:\/archive)?$/i);
+      const input = await body<UpdateWorldRequest>(request);
+      if (!match || !input) throw new Error("invalid_world_request");
+      return json({ ok: true, world: await updateWorld(env, session.userId, match[1], route === "world-archive" ? { expectedVersion: input.expectedVersion, status: "archived" } : input) });
+    }
+    if (route === "world-entity-create") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/entities$/i);
+      const input = await body<CreateWorldEntityRequest>(request);
+      if (!match || !input) throw new Error("invalid_world_entity_request");
+      return json({ ok: true, entity: await createWorldEntity(env, session.userId, match[1], input) }, { status: 201 });
+    }
+    if (route === "world-entity-update" || route === "world-entity-retire") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/entities\/([a-z0-9_]+)(?:\/retire)?$/i);
+      const input = await body<UpdateWorldEntityRequest>(request);
+      if (!match || !input) throw new Error("invalid_world_entity_request");
+      return json({ ok: true, entity: await updateWorldEntity(env, session.userId, match[1], match[2], route === "world-entity-retire" ? { expectedVersion: input.expectedVersion, status: "retired" } : input) });
+    }
+    if (route === "world-rule-create") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/rules$/i);
+      const input = await body<CreateContinuityRuleRequest>(request);
+      if (!match || !input) throw new Error("invalid_continuity_rule_request");
+      return json({ ok: true, rule: await createContinuityRule(env, session.userId, match[1], input) }, { status: 201 });
+    }
+    if (route === "world-rule-update" || route === "world-rule-retire") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/rules\/([a-z0-9_]+)(?:\/retire)?$/i);
+      const input = await body<UpdateContinuityRuleRequest>(request);
+      if (!match || !input) throw new Error("invalid_continuity_rule_request");
+      return json({ ok: true, rule: await updateContinuityRule(env, session.userId, match[1], match[2], route === "world-rule-retire" ? { expectedVersion: input.expectedVersion, status: "retired" } : input) });
+    }
+    if (route === "world-reference-create") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/references$/i);
+      const input = await body<CreateCanonReferenceRequest>(request);
+      if (!match || !input) throw new Error("invalid_canon_reference_request");
+      return json({ ok: true, reference: await createCanonReference(env, session.userId, match[1], input) }, { status: 201 });
+    }
+    if (route === "world-reference-update" || route === "world-reference-retire") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/references\/([a-z0-9_]+)(?:\/retire)?$/i);
+      const input = await body<UpdateCanonReferenceRequest>(request);
+      if (!match || !input) throw new Error("invalid_canon_reference_request");
+      return json({ ok: true, reference: await updateCanonReference(env, session.userId, match[1], match[2], route === "world-reference-retire" ? { expectedVersion: input.expectedVersion, status: "retired" } : input) });
+    }
+    if (route === "world-reference-promote") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/references\/([a-z0-9_]+)\/promote$/i);
+      const input = await body<PromoteToCanonRequest>(request);
+      if (!match || !input || input.referenceId !== match[2]) throw new Error("invalid_canon_promotion_request");
+      return json({ ok: true, promotion: await promoteReferenceToCanon(env, session.userId, match[1], input) });
+    }
+    if (route === "world-artifact-promote") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/worlds\/([a-z0-9_]+)\/promote-artifact$/i);
+      const input = await body<PromoteArtifactToCanonRequest>(request);
+      if (!match || !input || input.worldId !== match[1]) throw new Error("invalid_canon_promotion_request");
+      return json({ ok: true, promotion: await promoteArtifactToCanon(env, session.userId, boundedText(input.artifactId, 100), input) }, { status: 201 });
     }
     if (route === "dna-list") {
       const artifacts = await listLocalDna(env, session.userId);
@@ -637,6 +777,17 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           throw new Error("workflow_prompt_bound_to_negative");
         }
         const prompt = workflowPrompt;
+        const continuity = input.continuity
+          ? await generationContinuityStamp(env, session.userId, input.projectId, modality, input.continuity, prompt)
+          : undefined;
+        if (continuity) {
+          if (modality === "music") throw new Error("music_continuity_not_supported");
+          const suffix = continuity.directive.text;
+          const authoredPrompt = prompt.endsWith(` ${suffix}`)
+            ? prompt.slice(0, -(suffix.length + 1)).replace(/[.\s]+$/, "").trim()
+            : "";
+          if (authoredPrompt.length < 4) throw new Error("workflow_continuity_prompt_mismatch");
+        }
         const createdAt = new Date().toISOString();
         const aceStepWorkflow = modality === "music" && /\bace\s*step\b/.test(aceStepWorkflowIdentity(plan.workflow));
         const modelAdapters = aceStepWorkflow ? await activeMusicAdapterBindings(env, session.userId, input.projectId) : [];
@@ -703,10 +854,12 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             videoVariant,
             videoOperation,
             evolution,
+            continuity,
           },
         });
         return json({ ok: true, job: created.job }, { status: 202 });
       }
+      if (input.continuity) throw new Error("continuity_workflow_required");
       if (videoOperation) throw new Error("video_workflow_required");
       if (modality === "video") throw new Error("video_workflow_required");
       if (localHardwareMode(env)) throw new Error("local_comfyui_workflow_required");
@@ -804,11 +957,11 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         workflowId: original.settingsStamp.workflow?.workflowId ?? null,
         workflowRevisionId: original.settingsStamp.workflow?.revisionId ?? null,
         upstreamId: resumeLocalUpstream ? original.upstreamId : null,
-        settingsStampOverride: localWorkflow ? {
+        settingsStampOverride: {
           ...original.settingsStamp,
           createdAt,
           reusedFromJobId: original.id,
-        } : undefined,
+        },
       });
       if (!developmentMode(env) && !localWorkflow) {
         try { await enqueueJob(env, created.job.id); } catch (error) { console.error("creative_studio_job_retry_enqueue_failed", created.job.id, error); }
@@ -821,6 +974,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       return json({ ok: true, job: await cancelOwnedJob(env, session.userId, match[1]) });
     }
     if (route === "artifacts-list") {
+      if (url.search) return json({ ok: true, page: await listArtifactHistoryPage(env, session.userId, artifactHistoryQuery(url)) });
       await syncJobs(env, session.userId);
       const [artifacts, acceptances, trainingExamples] = await Promise.all([
         listArtifacts(env, session.userId), listAcceptances(env, session.userId), listTrainingExamples(env, session.userId),

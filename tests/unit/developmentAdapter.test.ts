@@ -18,6 +18,11 @@ describe("development adapter", () => {
     expect(initial.adapter.id).toBe("development-local-storage");
     expect(initial.projects).toHaveLength(0);
     expect(initial.mediaAssets).toEqual([]);
+    expect(initial.worlds).toEqual([]);
+    expect(initial.worldEntities).toEqual([]);
+    expect(initial.continuityRules).toEqual([]);
+    expect(initial.canonReferences).toEqual([]);
+    expect(initial.canonPromotions).toEqual([]);
     await expect(adapter.uploadMedia("project_missing", new File(["real"], "real.png", { type: "image/png" }), true))
       .rejects.toThrow("media_upload_requires_creative_studio_worker");
 
@@ -50,6 +55,8 @@ describe("development adapter", () => {
     expect(reloaded.artifacts.find((item) => item.id === artifact.id)?.status).toBe("accepted");
     expect(reloaded.acceptances.find((item) => item.artifactId === artifact.id && item.decision === "accepted")).toMatchObject({ note: "Keep this direction.", actor: "development-user" });
     expect(reloaded.dnaArtifacts.some((item) => item.artifactId === dna.artifactId)).toBe(true);
+    expect(reloaded.canonReferences).toEqual([]);
+    expect(reloaded.canonPromotions).toEqual([]);
   });
 
   it("cancels active tracking and creates an idempotent retry with lineage", async () => {
@@ -67,7 +74,9 @@ describe("development adapter", () => {
     expect((await adapter.cancelJob(job.id)).status).toBe("cancelled");
     const retry = await adapter.retryJob(job.id, "retry_test_000000001");
     expect(retry).toMatchObject({ status: "queued", retryOfJobId: job.id });
-    expect((await adapter.retryJob(job.id, "retry_test_000000001")).id).toBe(retry.id);
+    expect(retry.prompt).toBe(job.settingsStamp.prompt);
+    expect(retry.settingsStamp).toEqual({ ...job.settingsStamp, createdAt: retry.createdAt, reusedFromJobId: job.id });
+    expect(await adapter.retryJob(job.id, "retry_test_000000001")).toEqual(retry);
   });
 
   it("creates, edits, and archives projects without seeded records", async () => {
@@ -80,5 +89,48 @@ describe("development adapter", () => {
     expect(updated).toMatchObject({ name: "Launch Identity System", status: "paused", initials: "LI" });
     const archived = await adapter.archiveProject(project.id);
     expect(archived.status).toBe("archived");
+  });
+
+  it("persists World metadata and enforces optimistic versions locally", async () => {
+    const storage = new MemoryStorage();
+    let sequence = 0;
+    const options = { storage, id: (prefix: string) => `${prefix}_test_${++sequence}` };
+    const adapter = createDevelopmentAdapter(options);
+    const project = await adapter.createProject({ name: "Blue Archive", type: "Narrative World" });
+    const world = await adapter.createWorld({ projectId: project.id, name: "Blue Archive", premise: "A floating archive under blue stars" });
+    const entity = await adapter.createWorldEntity(world.id, {
+      projectId: project.id,
+      kind: "character",
+      name: "Iria",
+      summary: "A mineral archivist with a translucent face",
+      attributes: [{ facet: "face", value: "Faceted opal cheeks" }],
+    });
+    const rule = await adapter.createContinuityRule(world.id, {
+      projectId: project.id,
+      entityIds: [entity.id],
+      facet: "face",
+      strength: "must",
+      instruction: "Keep the faceted opal cheeks",
+      modalities: ["image", "video"],
+    });
+    const reference = await adapter.createCanonReference(world.id, {
+      projectId: project.id,
+      entityId: entity.id,
+      source: { kind: "commercial-reference", identity: "Protected Franchise Name", lineageOnly: true },
+      continuityNotes: [{ facet: "material", value: "Translucent mineral with internal light" }],
+    });
+
+    await expect(adapter.updateWorld(world.id, { expectedVersion: 7, premise: "Stale rewrite" })).rejects.toThrow("world_version_conflict");
+    await expect(adapter.updateWorldEntity(world.id, entity.id, { expectedVersion: 7, summary: "Stale rewrite" })).rejects.toThrow("world_entity_version_conflict");
+    await expect(adapter.updateContinuityRule(world.id, rule.id, { expectedVersion: 7, instruction: "Stale rewrite" })).rejects.toThrow("continuity_rule_version_conflict");
+    await expect(adapter.updateCanonReference(world.id, reference.id, { expectedVersion: 7, continuityNotes: [{ facet: "material", value: "Stale rewrite" }] }))
+      .rejects.toThrow("canon_reference_version_conflict");
+
+    const reloaded = await createDevelopmentAdapter(options).load();
+    expect(reloaded.worlds).toEqual([expect.objectContaining({ id: world.id, version: 1 })]);
+    expect(reloaded.worldEntities).toEqual([expect.objectContaining({ id: entity.id, version: 1 })]);
+    expect(reloaded.continuityRules).toEqual([expect.objectContaining({ id: rule.id, version: 1 })]);
+    expect(reloaded.canonReferences).toEqual([expect.objectContaining({ id: reference.id, status: "candidate", version: 1 })]);
+    expect(reloaded.canonPromotions).toEqual([]);
   });
 });

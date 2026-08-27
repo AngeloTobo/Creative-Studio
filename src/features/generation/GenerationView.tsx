@@ -26,6 +26,8 @@ import {
   inferGenerationAspectRatio,
   generationProviderWorkloadProfile,
   generationWorkflowPromptParameters,
+  compileContinuityDirective,
+  GENERATION_CONTINUITY_SELECTION_SCHEMA_VERSION,
   musicWorkflowLyricsParameter,
   musicWorkflowPromptProfile,
   primaryWorkflowPromptParameter,
@@ -47,6 +49,7 @@ import {
   type EvolutionRole,
   type GenerationAspectRatio,
   type GenerationRecipe,
+  type GenerationContinuitySelection,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
@@ -274,6 +277,9 @@ export function GenerationView({
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [projectContextEnabled, setProjectContextEnabled] = useState(false);
+  const [worldContinuityEnabled, setWorldContinuityEnabled] = useState(false);
+  const [selectedWorldId, setSelectedWorldId] = useState("");
+  const [selectedWorldEntityIds, setSelectedWorldEntityIds] = useState<string[]>([]);
   const [localError, setLocalError] = useState("");
   const [notice, setNotice] = useState(autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected; model compatibility is checked below.` : "");
   const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
@@ -331,6 +337,9 @@ export function GenerationView({
       setEvolutionStudyId(`evolve_${crypto.randomUUID()}`);
       setVideoPairId(`video_pair_${crypto.randomUUID()}`);
       setProjectContextEnabled(false);
+      setWorldContinuityEnabled(false);
+      setSelectedWorldId("");
+      setSelectedWorldEntityIds([]);
     }
     if (!selected || directionInitialized.current) return;
     directionInitialized.current = true;
@@ -377,7 +386,12 @@ export function GenerationView({
         setLyrics(typeof settings.lyrics === "string" ? settings.lyrics : "");
         setGenerationGoal(latestSession.intentTier);
         setEvolutionEnabled(latestSession.intentTier === "scout");
-        setProjectContextEnabled(settings.projectContextEnabled === true || settings.worldContinuityEnabled === true);
+        setProjectContextEnabled(settings.projectContextEnabled === true);
+        setWorldContinuityEnabled(settings.worldContinuityEnabled === true);
+        setSelectedWorldId(typeof settings.worldId === "string" ? settings.worldId : "");
+        setSelectedWorldEntityIds(typeof settings.worldEntityIds === "string"
+          ? settings.worldEntityIds.split(",").map((value) => value.trim()).filter(Boolean)
+          : []);
         setImagePerformanceMode(settings.imagePerformanceMode === "explicit-custom" ? "explicit-custom" : "fast-default");
         setVideoDurationSeconds(VIDEO_DURATION_OPTIONS.includes(Number(settings.videoDurationSeconds) as VideoDurationSeconds)
           ? Number(settings.videoDurationSeconds) as VideoDurationSeconds
@@ -474,6 +488,19 @@ export function GenerationView({
     : [];
   const generationIntent = intent === "train" ? "image" : intent;
   const activeProject = snapshot?.projects.find((project) => project.id === activeProjectId) ?? null;
+  const projectWorlds = (snapshot?.worlds ?? [])
+    .filter((world) => world.projectId === activeProjectId && world.status === "active")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const selectedWorld = projectWorlds.find((world) => world.id === selectedWorldId) ?? projectWorlds[0] ?? null;
+  const selectedWorldEntitiesAvailable = (snapshot?.worldEntities ?? [])
+    .filter((entity) => entity.worldId === selectedWorld?.id && entity.status === "active");
+  const validSelectedWorldEntityIds = selectedWorldEntityIds.filter((id) => selectedWorldEntitiesAvailable.some((entity) => entity.id === id));
+  const effectiveSelectedWorldEntityIds = validSelectedWorldEntityIds.length
+    ? validSelectedWorldEntityIds
+    : selectedWorldEntitiesAvailable.map((entity) => entity.id);
+  const selectedWorldEntities = selectedWorldEntitiesAvailable
+    .filter((entity) => effectiveSelectedWorldEntityIds.includes(entity.id));
+
   const projectRecipes = (snapshot?.recipes ?? [])
     .filter((recipe) => !recipe.archivedAt && recipe.mediaKind === generationIntent && (recipe.projectId === activeProjectId || recipe.projectId === null))
     .sort((left, right) => right.evidenceSummary.accepted - left.evidenceSummary.accepted
@@ -488,9 +515,48 @@ export function GenerationView({
     authoredDirection: direction,
     excludedReferenceIdentities: excludedProjectReferenceIdentities,
   }) : null;
-  const providerDirection = generationIntent !== "music" && projectContextEnabled && projectContext?.text
+  const authoredProjectDirection = generationIntent !== "music" && projectContextEnabled && !worldContinuityEnabled && projectContext?.text
     ? `${direction.trim().replace(/[.\s]+$/, "")}. ${projectContext.text}`
     : direction.trim();
+  const selectedWorldRules = (snapshot?.continuityRules ?? []).filter((rule) => rule.worldId === selectedWorld?.id
+    && rule.status === "active"
+    && rule.modalities.includes(generationIntent)
+    && (rule.entityIds.length === 0 || rule.entityIds.some((entityId) => selectedWorldEntities.some((entity) => entity.id === entityId))));
+  const selectedWorldReferences = (snapshot?.canonReferences ?? []).filter((reference) => reference.worldId === selectedWorld?.id
+    && reference.status === "canonical"
+    && selectedWorldEntities.some((entity) => entity.id === reference.entityId));
+  const worldReferences = (snapshot?.canonReferences ?? []).filter((reference) => reference.worldId === selectedWorld?.id);
+  const compiledWorldDirective = selectedWorld && generationIntent !== "music"
+    ? compileContinuityDirective({
+      world: selectedWorld,
+      entities: selectedWorldEntitiesAvailable,
+      rules: selectedWorldRules,
+      references: worldReferences,
+      selectedEntityIds: selectedWorldEntities.map((entity) => entity.id),
+      selectedRuleIds: selectedWorldRules.map((rule) => rule.id),
+      selectedReferenceIds: selectedWorldReferences.map((reference) => reference.id),
+      modality: generationIntent,
+    })
+    : null;
+  const continuityTooLarge = Boolean(worldContinuityEnabled && compiledWorldDirective?.truncated);
+  const continuityDirective = worldContinuityEnabled && !continuityTooLarge ? compiledWorldDirective : null;
+  const continuitySelection: GenerationContinuitySelection | undefined = continuityDirective?.text && selectedWorld
+    ? {
+      schemaVersion: GENERATION_CONTINUITY_SELECTION_SCHEMA_VERSION,
+      modality: generationIntent,
+      world: { id: selectedWorld.id, version: selectedWorld.version },
+      entities: selectedWorldEntities.map((entity) => ({ id: entity.id, version: entity.version })),
+      rules: selectedWorldRules.map((rule) => ({ id: rule.id, version: rule.version })),
+      references: selectedWorldReferences.map((reference) => ({ id: reference.id, version: reference.version })),
+    }
+    : undefined;
+  const appendContinuity = (prompt: string) => {
+    if (!continuityDirective?.text) return prompt.trim();
+    const authoredLimit = Math.max(4, 4_000 - continuityDirective.text.length - 2);
+    const authored = prompt.trim().slice(0, authoredLimit).replace(/[.\s]+$/, "");
+    return `${authored}. ${continuityDirective.text}`;
+  };
+  const providerDirection = appendContinuity(authoredProjectDirection);
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
@@ -639,6 +705,9 @@ export function GenerationView({
     canvasAspectRatio,
     canvasMegapixels,
     projectContextEnabled,
+    worldContinuityEnabled,
+    worldId: selectedWorld?.id ?? null,
+    worldEntityIds: selectedWorldEntities.map((entity) => entity.id),
     providerDirection,
     inputBindings,
     workflowValues,
@@ -660,6 +729,9 @@ export function GenerationView({
     canvasAspectRatio,
     canvasMegapixels,
     projectContextEnabled,
+    worldContinuityEnabled,
+    worldId: selectedWorld?.id ?? null,
+    worldEntityIds: selectedWorldEntities.map((entity) => entity.id),
     inputBindings,
     workflowValues,
     videoOperation,
@@ -678,6 +750,9 @@ export function GenerationView({
         canvasAspectRatio,
         canvasMegapixels,
         projectContextEnabled,
+        worldContinuityEnabled,
+        worldId: selectedWorld?.id ?? null,
+        worldEntityIds: selectedWorldEntities.map((entity) => entity.id).join(","),
         videoOperationKind: videoOperation?.kind ?? null,
         videoOperationSourceId: videoOperation?.sourceId ?? null,
         videoOperationSource: videoOperation?.source ?? null,
@@ -702,7 +777,7 @@ export function GenerationView({
         if (saved.id !== sessionId) setSessionId(saved.id);
       }
     };
-  }, [activeProjectId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, projectContextEnabled, quickSourceId, saveSession, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, workflowId, workflowValues]);
+  }, [activeProjectId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, projectContextEnabled, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, workflowId, workflowValues, worldContinuityEnabled]);
 
   useEffect(() => {
     if (sessionCompletionVersion !== sessionCompletionBaselineRef.current) {
@@ -843,6 +918,10 @@ export function GenerationView({
   };
 
   const applyGenerationRecipe = (recipe: GenerationRecipe) => {
+    if (recipe.worldId) {
+      setLocalError(`${recipe.name} uses legacy World text without an exact versioned continuity selection. Build it again from the current World before generating.`);
+      return;
+    }
     const recipeWorkflow = workflows.find((item) => item.id === recipe.workflowId && workflowCreateIntent(item.modality) === recipe.mediaKind);
     if (!recipeWorkflow) {
       setLocalError(`${recipe.name} uses a model that is no longer ready on this machine.`);
@@ -876,6 +955,10 @@ export function GenerationView({
   const saveCurrentRecipe = async () => {
     if (!workflow || !workflowReady || !workflowPromptParameter) return;
     setLocalError("");
+    if (generationIntent !== "music" && worldContinuityEnabled && selectedWorld) {
+      setLocalError("World-backed recipes need typed continuity replay before they can be saved safely. Turn continuity off to save only these model settings.");
+      return;
+    }
     try {
       const modified = Object.fromEntries(scalarParameters
         .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
@@ -1002,6 +1085,10 @@ export function GenerationView({
   const queueWorkflow = async (openQueueAfter = false) => {
     if (!workflow || !workflowReady) return;
     setLocalError("");
+    if (continuityTooLarge) {
+      setLocalError("This World continuity cannot fit without omitting canon. Select fewer elements, then generate again.");
+      return;
+    }
     if (selectedSourceCompatibilityError) {
       setLocalError(`${workflow.name} cannot use ${quickSource?.name ?? "the selected source"}. Choose a compatible model or continue without the source.`);
       return;
@@ -1060,7 +1147,7 @@ export function GenerationView({
       selectDna(dna);
       const videoVersions = generationIntent === "video"
         ? createVideoGenerationVersions({
-          direction: providerDirection,
+          direction: authoredProjectDirection,
           dimensions: dna.shared,
           pairId: attemptVideoPairId,
           discoverySeed: randomUint32(),
@@ -1078,7 +1165,7 @@ export function GenerationView({
         const roles: EvolutionRole[] = ["refine", "correct", "discovery"];
         const videoVersions = generationIntent === "video"
           ? createVideoGenerationVersions({
-            direction: direction.trim(),
+            direction: authoredProjectDirection,
             dimensions: dna.shared,
             pairId: attemptVideoPairId,
             discoverySeed: randomUint32(),
@@ -1087,8 +1174,8 @@ export function GenerationView({
           : null;
         let branchWorkflow = runWorkflow;
         for (const role of roles) {
-          const prompt = evolutionBranchPrompt({
-            basePrompt: providerDirection,
+          const branchDirection = evolutionBranchPrompt({
+            basePrompt: authoredProjectDirection,
             role,
             canon: { identity: "", currentDirection: "" },
             personalTaste,
@@ -1096,6 +1183,7 @@ export function GenerationView({
             dimensions: dna.shared,
             modality: generationIntent,
           });
+          const prompt = appendContinuity(branchDirection);
           const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
           const variant = generationIntent === "video"
             ? role === "discovery" ? videoVersions?.[1].variant : videoVersions?.[0].variant
@@ -1109,18 +1197,19 @@ export function GenerationView({
             sourceId: quickSource.id,
             source: quickSource.source,
           };
-          await submitWorkflowJob(
-            branchWorkflow,
-            effectiveInputBindings,
-            prompt,
-            dna.artifactId,
-            effectiveVideoOperation ?? undefined,
-            generationIntent === "image" ? imagePerformanceMode : undefined,
-            variant,
+          await submitWorkflowJob({
+            workflow: branchWorkflow,
+            inputBindings: effectiveInputBindings,
+            expectedPrompt: prompt,
+            dnaArtifactId: dna.artifactId,
+            videoOperation: effectiveVideoOperation ?? undefined,
+            performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
+            videoVariant: variant,
             evolution,
-            generationIntent === "video" ? videoDurationSeconds : undefined,
-            generationBatchIdempotencyKey(attemptEvolutionStudyId, role),
-          );
+            videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
+            idempotencyKey: generationBatchIdempotencyKey(attemptEvolutionStudyId, role),
+            continuity: continuitySelection,
+          });
         }
         setValuesRevisionId(branchWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(branchWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
@@ -1137,7 +1226,9 @@ export function GenerationView({
       }
       if (videoVersions && workflowPromptParameter) {
         const [aligned, discovery] = videoVersions;
-        const discoveryValues: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, discovery.prompt]));
+        const alignedPrompt = appendContinuity(aligned.prompt);
+        const discoveryPrompt = appendContinuity(discovery.prompt);
+        const discoveryValues: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, discoveryPrompt]));
         if (workflowSeedParameter && discovery.variant.seed !== null) discoveryValues[workflowSeedParameter.id] = discovery.variant.seed;
         const discoveryWorkflow = await saveWorkflowRevision(
           runWorkflow.id,
@@ -1146,30 +1237,28 @@ export function GenerationView({
         );
         setValuesRevisionId(discoveryWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(discoveryWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
-        await submitWorkflowJob(
-          runWorkflow,
-          effectiveInputBindings,
-          providerDirection,
-          dna.artifactId,
-          effectiveVideoOperation ?? undefined,
-          undefined,
-          aligned.variant,
-          undefined,
+        await submitWorkflowJob({
+          workflow: runWorkflow,
+          inputBindings: effectiveInputBindings,
+          expectedPrompt: alignedPrompt,
+          dnaArtifactId: dna.artifactId,
+          videoOperation: effectiveVideoOperation ?? undefined,
+          videoVariant: aligned.variant,
           videoDurationSeconds,
-          generationBatchIdempotencyKey(attemptVideoPairId, "aligned"),
-        );
-        await submitWorkflowJob(
-          discoveryWorkflow,
-          effectiveInputBindings,
-          discovery.prompt,
-          dna.artifactId,
-          effectiveVideoOperation ?? undefined,
-          undefined,
-          discovery.variant,
-          undefined,
+          idempotencyKey: generationBatchIdempotencyKey(attemptVideoPairId, "aligned"),
+          continuity: continuitySelection,
+        });
+        await submitWorkflowJob({
+          workflow: discoveryWorkflow,
+          inputBindings: effectiveInputBindings,
+          expectedPrompt: discoveryPrompt,
+          dnaArtifactId: dna.artifactId,
+          videoOperation: effectiveVideoOperation ?? undefined,
+          videoVariant: discovery.variant,
           videoDurationSeconds,
-          generationBatchIdempotencyKey(attemptVideoPairId, "discovery"),
-        );
+          idempotencyKey: generationBatchIdempotencyKey(attemptVideoPairId, "discovery"),
+          continuity: continuitySelection,
+        });
         setNotice("Aligned and Discovery queued as 2 durable video jobs. They will render one after the other on the Local Runner.");
         const nextVideoPairId = `video_pair_${crypto.randomUUID()}`;
         videoBatchAttemptRef.current = { id: nextVideoPairId, signature: "" };
@@ -1180,17 +1269,16 @@ export function GenerationView({
       }
       setValuesRevisionId(runWorkflow.currentRevision.id);
       setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
-      await submitWorkflowJob(
-        runWorkflow,
-        effectiveInputBindings,
-        providerDirection,
-        dna.artifactId,
-        effectiveVideoOperation ?? undefined,
-        generationIntent === "image" ? imagePerformanceMode : undefined,
-        undefined,
-        undefined,
-        generationIntent === "video" ? videoDurationSeconds : undefined,
-      );
+      await submitWorkflowJob({
+        workflow: runWorkflow,
+        inputBindings: effectiveInputBindings,
+        expectedPrompt: providerDirection,
+        dnaArtifactId: dna.artifactId,
+        videoOperation: effectiveVideoOperation ?? undefined,
+        performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
+        videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
+        continuity: continuitySelection,
+      });
       setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
       completeCreativeSession();
       if (openQueueAfter) onQueued();
@@ -1334,7 +1422,34 @@ export function GenerationView({
           <p>{GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.description}<small>{sessionId ? "Draft autosaved on this device." : "Changes autosave on this device."}</small></p>
         </section> : null}
 
-        {intent !== "train" && generationIntent !== "music" && workflow && !uiOnlyDevelopment && projectContext?.text ? <section className={`quick-project-context${projectContextEnabled ? " on" : ""}`}>
+        {intent !== "train" && generationIntent !== "music" && workflow && !uiOnlyDevelopment && selectedWorld ? <section className={`quick-world-continuity${worldContinuityEnabled ? " on" : ""}`}>
+          <button type="button" className="quick-project-context-toggle" aria-pressed={worldContinuityEnabled} onClick={() => setWorldContinuityEnabled((current) => !current)}>
+            <Icon name="projects" size={15} /><span><strong>{selectedWorld.name} continuity</strong><small>{worldContinuityEnabled ? "Version-stamped into this generation" : "Optional · tap to keep your world consistent"}</small></span><em>{worldContinuityEnabled ? "On" : "Off"}</em>
+          </button>
+          <div className="quick-world-controls">
+            {projectWorlds.length > 1 ? <label><span>World</span><select aria-label="Creative World" value={selectedWorld.id} onChange={(event) => {
+              const worldId = event.target.value;
+              setSelectedWorldId(worldId);
+              setSelectedWorldEntityIds((snapshot?.worldEntities ?? []).filter((entity) => entity.worldId === worldId && entity.status === "active").map((entity) => entity.id));
+            }}>{projectWorlds.map((world) => <option key={world.id} value={world.id}>{world.name}</option>)}</select></label> : null}
+            {selectedWorldEntitiesAvailable.length ? <div className="quick-world-entities" role="group" aria-label="World characters and places">
+              {selectedWorldEntitiesAvailable.map((entity) => {
+                const selectedEntity = effectiveSelectedWorldEntityIds.includes(entity.id);
+                return <button type="button" key={entity.id} className={selectedEntity ? "on" : ""} aria-pressed={selectedEntity} onClick={() => setSelectedWorldEntityIds((current) => {
+                  const availableIds = selectedWorldEntitiesAvailable.map((item) => item.id);
+                  const baseline = current.filter((id) => availableIds.includes(id));
+                  const selectedIds = baseline.length ? baseline : availableIds;
+                  const next = selectedEntity ? selectedIds.filter((id) => id !== entity.id) : [...selectedIds, entity.id];
+                  return next.length ? [...new Set(next)] : selectedIds;
+                })}><Icon name={entity.kind === "character" ? "dna" : entity.kind === "place" ? "projects" : "cube"} size={13} />{entity.name}</button>;
+              })}
+            </div> : null}
+            <small>{selectedWorldRules.length} active {selectedWorldRules.length === 1 ? "rule" : "rules"} · {selectedWorldReferences.length} canon {selectedWorldReferences.length === 1 ? "reference" : "references"}{compiledWorldDirective?.truncated ? " · too large: select fewer elements" : " · all applied exactly"}</small>
+          </div>
+          {compiledWorldDirective?.text ? <details className={compiledWorldDirective.truncated ? "continuity-overflow" : ""}><summary>{compiledWorldDirective.truncated ? "Continuity is too large" : "Inspect exact continuity"}</summary><p>{compiledWorldDirective.text}</p>{compiledWorldDirective.truncated ? <small>Nothing will generate until every selected rule and canon reference can fit. Select fewer elements above.</small> : null}</details> : <p className="quick-world-empty">Add a premise, character detail, rule, or canon note in Studio › Project before turning continuity on.</p>}
+        </section> : null}
+
+        {intent !== "train" && generationIntent !== "music" && workflow && !uiOnlyDevelopment && !selectedWorld && projectContext?.text ? <section className={`quick-project-context${projectContextEnabled ? " on" : ""}`}>
           <button type="button" className="quick-project-context-toggle" aria-pressed={projectContextEnabled} onClick={() => setProjectContextEnabled((current) => !current)}>
             <Icon name="projects" size={15} /><span><strong>{activeProject?.name} project context</strong><small>{projectContextEnabled ? "Added to this local Comfy prompt" : "Optional · off by default"}{projectContext.excludedReferenceIdentityMentions ? ` · ${projectContext.excludedReferenceIdentityMentions} provenance identity ${projectContext.excludedReferenceIdentityMentions === 1 ? "mention" : "mentions"} excluded` : ""}</small></span><em>{projectContextEnabled ? "On" : "Off"}</em>
           </button>
@@ -1385,7 +1500,7 @@ export function GenerationView({
 
         {intent !== "train" && workflow && !uiOnlyDevelopment ? <section className="quick-recipe-tools" aria-label="Reusable generation recipes">
           <label><Icon name="star" size={14} /><span><strong>Recipe</strong><small>{projectRecipes.length ? `${projectRecipes.length} saved · best evidence first` : "Save these exact settings"}</small></span><select aria-label="Load a generation recipe" defaultValue="" disabled={busy || !projectRecipes.length} onChange={(event) => { const recipe = projectRecipes.find((item) => item.id === event.target.value); if (recipe) applyGenerationRecipe(recipe); event.currentTarget.value = ""; }}><option value="">{projectRecipes.length ? "Choose saved recipe" : "No saved recipes yet"}</option>{projectRecipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.name}{recipe.evidenceSummary.runs ? ` · ${recipe.evidenceSummary.accepted}/${recipe.evidenceSummary.runs} accepted` : " · untested"}</option>)}</select></label>
-          <button type="button" className="btn btn-ghost" disabled={busy || !workflowReady || !directionReady} onClick={() => void saveCurrentRecipe()}><Icon name="plus" size={14} /> Save recipe</button>
+          <button type="button" className="btn btn-ghost" disabled={busy || !workflowReady || !directionReady || (generationIntent !== "music" && worldContinuityEnabled && Boolean(selectedWorld))} title={generationIntent !== "music" && worldContinuityEnabled && selectedWorld ? "World continuity recipes require typed replay and cannot be saved yet." : undefined} onClick={() => void saveCurrentRecipe()}><Icon name="plus" size={14} /> Save recipe</button>
         </section> : null}
 
         {intent !== "train" && generationIntent === "image" && workflow ? <details className="quick-setting-panel quick-speed-panel">
@@ -1499,7 +1614,7 @@ export function GenerationView({
         </div> : <>
           <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
           {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
-          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{estimatedOutputCount} {estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || selectedSourceCompatibilityError || fastImageBlocked || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
+          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || selectedSourceCompatibilityError || fastImageBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>

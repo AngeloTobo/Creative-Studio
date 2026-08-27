@@ -1,11 +1,20 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { CreativeDnaArtifact } from "../../shared/contracts";
+import {
+  compileContinuityDirective,
+  type CanonReference,
+  type ContinuityRule,
+  type CreativeDnaArtifact,
+  type GenerationContinuitySelection,
+  type World,
+  type WorldEntity,
+} from "../../shared/contracts";
 import { backendMode } from "../../worker/config";
 import { processJobMessage } from "../../worker/jobs";
 import { attachAfdfwGeneration, cancelOwnedJob, createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, createQueuedJob, reconcileDevelopmentJobs } from "../../worker/repository";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
 import { claimLocalRunnerJob } from "../../worker/runner";
+import { generationContinuityStamp, promoteArtifactToCanon } from "../../worker/worlds";
 import type { Env } from "../../worker/types";
 
 const BASE = "https://creative-studio.test";
@@ -78,6 +87,11 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_canon_promotions"),
+    env.DB.prepare("delete from creative_canon_references"),
+    env.DB.prepare("delete from creative_continuity_rules"),
+    env.DB.prepare("delete from creative_world_entities"),
+    env.DB.prepare("delete from creative_worlds"),
     env.DB.prepare("delete from creative_model_adapter_reviews"),
     env.DB.prepare("delete from creative_model_adapters"),
     env.DB.prepare("delete from creative_model_training_jobs"),
@@ -257,6 +271,568 @@ describe("Creative Studio Worker API", () => {
       body: "{}",
     }), local);
     expect(await result(archived)).toMatchObject({ project: { id: projectId, status: "archived" } });
+  });
+
+  it("persists owned Worlds and rejects stale entity, rule, and reference writes", async () => {
+    const ownerId = "owner-worlds";
+    const project = await testProject(ownerId, "Glass Moon");
+    const owned = workerEnv("afdfw", afdfwFor(ownerId));
+    const otherOwner = workerEnv("afdfw", afdfwFor("owner-worlds-other"));
+
+    const createdResponse = await routeCreativeStudioApi(request("/api/creative-studio/worlds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id, name: "Glass Moon", premise: "A low-gravity city grown from translucent stone." }),
+    }), owned);
+    expect(createdResponse.status).toBe(201);
+    const created = await result(createdResponse) as { world: World };
+    expect(created.world).toMatchObject({ projectId: project.id, name: "Glass Moon", status: "active", version: 1 });
+
+    const invisible = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}`), otherOwner);
+    expect(invisible.status).toBe(404);
+    expect(await result(invisible)).toMatchObject({ error: "world_not_found" });
+    expect(await result(await routeCreativeStudioApi(request(`/api/creative-studio/worlds?projectId=${project.id}`), otherOwner)))
+      .toMatchObject({ worlds: [], worldEntities: [], continuityRules: [], canonReferences: [], canonPromotions: [] });
+
+    const updatedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 1, premise: "A low-gravity city grown from translucent stone and blue vapor." }),
+    }), owned);
+    expect(updatedResponse.status).toBe(200);
+    const updated = await result(updatedResponse) as { world: World };
+    expect(updated.world).toMatchObject({ version: 2, premise: expect.stringContaining("blue vapor") });
+
+    const staleWorld = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 1, name: "Stale rewrite" }),
+    }), owned);
+    expect(staleWorld.status).toBe(409);
+    expect(await result(staleWorld)).toMatchObject({ error: "world_version_conflict" });
+
+    const entityResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/entities`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        kind: "character",
+        name: "Iria",
+        summary: "A cartographer with a translucent mineral face.",
+        aliases: ["The Moon Mapper"],
+        attributes: [{ facet: "face", value: "Translucent opal planes around bright blue eyes" }],
+      }),
+    }), owned);
+    expect(entityResponse.status).toBe(201);
+    const entity = (await result(entityResponse) as { entity: WorldEntity }).entity;
+
+    const staleEntity = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/entities/${entity.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 9, summary: "Stale entity rewrite" }),
+    }), owned);
+    expect(staleEntity.status).toBe(409);
+    expect(await result(staleEntity)).toMatchObject({ error: "world_entity_version_conflict" });
+
+    const ruleResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityIds: [entity.id],
+        facet: "face",
+        strength: "must",
+        instruction: "Keep the translucent mineral face and bright blue eyes.",
+        modalities: ["image", "video"],
+      }),
+    }), owned);
+    expect(ruleResponse.status).toBe(201);
+    const rule = (await result(ruleResponse) as { rule: ContinuityRule }).rule;
+    const staleRule = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/rules/${rule.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 4, instruction: "Stale rule rewrite" }),
+    }), owned);
+    expect(staleRule.status).toBe(409);
+    expect(await result(staleRule)).toMatchObject({ error: "continuity_rule_version_conflict" });
+
+    const referenceResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/references`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityId: entity.id,
+        source: { kind: "commercial-reference", identity: "Protected Franchise Name", lineageOnly: true },
+        continuityNotes: [{ facet: "material", value: "Layered translucent mineral with softly lit inclusions" }],
+      }),
+    }), owned);
+    expect(referenceResponse.status).toBe(201);
+    const reference = (await result(referenceResponse) as { reference: CanonReference }).reference;
+    expect(reference).toMatchObject({ status: "candidate", version: 1, rights: { policy: "abstract-attributes-only" } });
+    const staleReference = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/references/${reference.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 8, continuityNotes: [{ facet: "material", value: "Stale reference rewrite" }] }),
+    }), owned);
+    expect(staleReference.status).toBe(409);
+    expect(await result(staleReference)).toMatchObject({ error: "canon_reference_version_conflict" });
+
+    const listed = await result(await routeCreativeStudioApi(request(`/api/creative-studio/worlds?projectId=${project.id}`), owned));
+    expect(listed).toMatchObject({
+      worlds: [expect.objectContaining({ id: created.world.id, version: 2 })],
+      worldEntities: [expect.objectContaining({ id: entity.id })],
+      continuityRules: [expect.objectContaining({ id: rule.id })],
+      canonReferences: [expect.objectContaining({ id: reference.id, status: "candidate" })],
+    });
+
+    const promotionBody = {
+      schemaVersion: "creative-studio-promote-to-canon/1.0",
+      confirmation: "promote-to-canon",
+      worldId: created.world.id,
+      entityId: entity.id,
+      referenceId: reference.id,
+      facets: ["material"],
+      note: "Keep only the reviewed abstract material quality.",
+      expectedReferenceVersion: reference.version,
+    };
+    const forgedEvidence = await routeCreativeStudioApi(request(
+      `/api/creative-studio/worlds/${created.world.id}/references/${reference.id}/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...promotionBody, evidenceReviewId: "acceptance_forged" }),
+      },
+    ), owned);
+    expect(forgedEvidence.status).toBe(400);
+    expect(await result(forgedEvidence)).toMatchObject({ error: "canon_promotion_evidence_not_applicable" });
+
+    const competingPromotions = await Promise.all([
+      routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/references/${reference.id}/promote`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(promotionBody),
+      }), owned),
+      routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/references/${reference.id}/promote`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(promotionBody),
+      }), owned),
+    ]);
+    expect(competingPromotions.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_promotions where reference_id = ?")
+      .bind(reference.id).first<{ count: number }>()).toMatchObject({ count: 1 });
+    expect(await env.DB.prepare("select version, status, promotion_token as promotionToken from creative_canon_references where id = ?")
+      .bind(reference.id).first<{ version: number; status: string; promotionToken: string | null }>())
+      .toMatchObject({ version: 2, status: "canonical", promotionToken: expect.stringMatching(/^promotion_/) });
+
+    const retiredEntity = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/entities/${entity.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: entity.version, status: "retired" }),
+    }), owned);
+    expect(retiredEntity.status).toBe(200);
+    const retiredRule = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/rules/${rule.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: rule.version, status: "retired" }),
+    }), owned);
+    expect(retiredRule.status).toBe(200);
+    expect(await result(retiredRule)).toMatchObject({ rule: { id: rule.id, status: "retired", version: 2 } });
+
+    const archived = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${created.world.id}/archive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    }), owned);
+    expect(archived.status).toBe(200);
+    expect(await result(archived)).toMatchObject({ world: { status: "archived", version: 3 } });
+  });
+
+  it("keeps acceptance separate from explicit artifact-to-canon promotion", async () => {
+    const ownerId = "development-angelo";
+    const local = workerEnv("development");
+    const project = await testProject(ownerId, "Retained Canon Study");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Retained Canon Study",
+      directive: "A luminous mineral portrait with a precise facial silhouette.",
+      targetModality: "image",
+    });
+    const worldResponse = await routeCreativeStudioApi(request("/api/creative-studio/worlds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id, name: "Mineral City", premise: "Living minerals preserve memory as light." }),
+    }), local);
+    const world = (await result(worldResponse) as { world: World }).world;
+    const entityResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/entities`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        kind: "character",
+        name: "Iria",
+        summary: "A mineral archivist whose face carries stored light.",
+        attributes: [{ facet: "face", value: "Faceted opal cheeks and a narrow luminous brow" }],
+      }),
+    }), local);
+    const entity = (await result(entityResponse) as { entity: WorldEntity }).entity;
+
+    const job = await createDevelopmentJob(env, ownerId, project.id, dna, "image", "canon_artifact_test_001");
+    await env.DB.prepare("update creative_jobs set created_at = ? where id = ?")
+      .bind("2020-01-01T00:00:00.000Z", job.id).run();
+    await reconcileDevelopmentJobs(env, ownerId);
+    const artifact = await env.DB.prepare("select id from creative_artifacts where owner_id = ? and job_id = ?")
+      .bind(ownerId, job.id).first<{ id: string }>();
+    expect(artifact?.id).toBeTruthy();
+    await env.DB.prepare("update creative_artifacts set retained_key = ?, retained_content_type = ?, retained_size = ? where id = ?")
+      .bind(`owners/${ownerId}/artifacts/${artifact!.id}/output.png`, "image/png", 128, artifact!.id).run();
+
+    const unreviewedCandidate = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/references`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityId: entity.id,
+        source: { kind: "retained-artifact", artifactId: artifact!.id, label: "Unreviewed portrait" },
+        continuityNotes: [{ facet: "face", value: "Faceted opal cheeks and a narrow luminous brow" }],
+      }),
+    }), local);
+    expect(unreviewedCandidate.status).toBe(409);
+    expect(await result(unreviewedCandidate)).toMatchObject({ error: "canon_reference_artifact_acceptance_required" });
+
+    const acceptedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifact!.id}/accepted`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "This is the definitive facial material." }),
+    }), local);
+    expect(acceptedResponse.status).toBe(200);
+    const accepted = await result(acceptedResponse) as { acceptance: { id: string } };
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_references").first<{ count: number }>()).toMatchObject({ count: 0 });
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_promotions").first<{ count: number }>()).toMatchObject({ count: 0 });
+
+    const reviewedCandidateResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/references`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityId: entity.id,
+        source: { kind: "retained-artifact", artifactId: artifact!.id, label: "Reviewed portrait" },
+        continuityNotes: [{ facet: "face", value: "Faceted opal cheeks and a narrow luminous brow" }],
+      }),
+    }), local);
+    expect(reviewedCandidateResponse.status).toBe(201);
+    const reviewedCandidate = (await result(reviewedCandidateResponse) as { reference: CanonReference }).reference;
+    expect(reviewedCandidate).toMatchObject({ status: "candidate", source: { artifactId: artifact!.id } });
+    const forgedReviewPromotion = await routeCreativeStudioApi(request(
+      `/api/creative-studio/worlds/${world.id}/references/${reviewedCandidate.id}/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: "creative-studio-promote-to-canon/1.0",
+          confirmation: "promote-to-canon",
+          worldId: world.id,
+          entityId: entity.id,
+          referenceId: reviewedCandidate.id,
+          facets: ["face"],
+          note: "Promote only with the real accepted review.",
+          expectedReferenceVersion: reviewedCandidate.version,
+          evidenceReviewId: "acceptance_forged",
+        }),
+      },
+    ), local);
+    expect(forgedReviewPromotion.status).toBe(409);
+    expect(await result(forgedReviewPromotion)).toMatchObject({ error: "artifact_acceptance_mismatch" });
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_promotions").first<{ count: number }>()).toMatchObject({ count: 0 });
+
+    const raceDatabase = new Proxy(env.DB, {
+      get(target, property) {
+        if (property === "batch") return async (statements: D1PreparedStatement[]) => {
+          await target.prepare("update creative_artifacts set status = 'rejected' where id = ? and owner_id = ?")
+            .bind(artifact!.id, ownerId).run();
+          return target.batch(statements);
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as D1Database;
+    await expect(promoteArtifactToCanon({ ...local, DB: raceDatabase }, ownerId, artifact!.id, {
+      schemaVersion: "creative-studio-promote-to-canon/1.0",
+      confirmation: "promote-artifact-to-canon",
+      projectId: project.id,
+      worldId: world.id,
+      entityId: entity.id,
+      artifactId: artifact!.id,
+      facets: ["face", "material"],
+      continuityNotes: [
+        { facet: "face", value: "Faceted opal cheeks and a narrow luminous brow" },
+        { facet: "material", value: "Translucent mineral with light held beneath the surface" },
+      ],
+      note: "This promotion must lose the concurrent review race.",
+      expectedEntityVersion: entity.version,
+      acceptanceId: accepted.acceptance.id,
+    })).rejects.toThrow("canon_promotion_prerequisite_changed");
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_references").first<{ count: number }>()).toMatchObject({ count: 1 });
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_promotions").first<{ count: number }>()).toMatchObject({ count: 0 });
+
+    const reacceptedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts/${artifact!.id}/accepted`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "Reconfirm this definitive facial material after the race test." }),
+    }), local);
+    expect(reacceptedResponse.status).toBe(200);
+    const reaccepted = await result(reacceptedResponse) as { acceptance: { id: string } };
+
+    const missingConfirmation = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/promote-artifact`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "creative-studio-promote-to-canon/1.0",
+        confirmation: "accept-only",
+        projectId: project.id,
+        worldId: world.id,
+        entityId: entity.id,
+        artifactId: artifact!.id,
+        facets: ["face", "material"],
+        continuityNotes: [
+          { facet: "face", value: "Faceted opal cheeks and a narrow luminous brow" },
+          { facet: "material", value: "Translucent mineral with light held beneath the surface" },
+        ],
+        note: "Promote the accepted portrait as facial canon.",
+        expectedEntityVersion: entity.version,
+        acceptanceId: reaccepted.acceptance.id,
+      }),
+    }), local);
+    expect(missingConfirmation.status).toBe(400);
+    expect(await result(missingConfirmation)).toMatchObject({ error: "canon_promotion_confirmation_required" });
+
+    const promotedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/promote-artifact`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "creative-studio-promote-to-canon/1.0",
+        confirmation: "promote-artifact-to-canon",
+        projectId: project.id,
+        worldId: world.id,
+        entityId: entity.id,
+        artifactId: artifact!.id,
+        facets: ["face", "material"],
+        continuityNotes: [
+          { facet: "face", value: "Faceted opal cheeks and a narrow luminous brow" },
+          { facet: "material", value: "Translucent mineral with light held beneath the surface" },
+        ],
+        note: "Promote the accepted portrait as facial canon.",
+        expectedEntityVersion: entity.version,
+        acceptanceId: reaccepted.acceptance.id,
+      }),
+    }), local);
+    expect(promotedResponse.status).toBe(201);
+    expect(await result(promotedResponse)).toMatchObject({
+      promotion: {
+        artifactId: artifact!.id,
+        promotion: {
+          actor: "angelo",
+          evidenceReviewId: reaccepted.acceptance.id,
+          reference: { status: "canonical", version: 2, source: { kind: "retained-artifact", artifactId: artifact!.id } },
+        },
+      },
+    });
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_references").first<{ count: number }>()).toMatchObject({ count: 2 });
+    expect(await env.DB.prepare("select count(*) as count from creative_canon_promotions").first<{ count: number }>()).toMatchObject({ count: 1 });
+  });
+
+  it("stores a Worker-compiled, versioned continuity stamp on a workflow job", async () => {
+    const ownerId = "development-angelo";
+    const local = workerEnv("development");
+    const project = await testProject(ownerId, "Continuity Workflow");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Continuity Workflow",
+      directive: "A controlled portrait in an unfamiliar luminous environment.",
+      targetModality: "image",
+    });
+    const world = (await result(await routeCreativeStudioApi(request("/api/creative-studio/worlds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id, name: "Blue Archive", premise: "A floating archive lit by slow blue stars" }),
+    }), local)) as { world: World }).world;
+    const entity = (await result(await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/entities`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        kind: "character",
+        name: "Iria",
+        summary: "A mineral archivist with a translucent face",
+        attributes: [{ facet: "palette", value: "Opal white, midnight blue, and one amber signal" }],
+      }),
+    }), local)) as { entity: WorldEntity }).entity;
+    const rule = (await result(await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityIds: [entity.id],
+        facet: "silhouette",
+        strength: "must",
+        instruction: "Keep the tall narrow silhouette and halo-shaped collar",
+        modalities: ["image", "video"],
+      }),
+    }), local)) as { rule: ContinuityRule }).rule;
+    const videoOnlyRule = (await result(await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityIds: [entity.id],
+        facet: "motion",
+        strength: "prefer",
+        instruction: "Use one slow head turn in motion work",
+        modalities: ["video"],
+      }),
+    }), local)) as { rule: ContinuityRule }).rule;
+    await expect(generationContinuityStamp(env, ownerId, project.id, "image", {
+      schemaVersion: "creative-studio-generation-continuity-selection/1.0",
+      modality: "image",
+      world: { id: world.id, version: world.version },
+      entities: [{ id: entity.id, version: entity.version }],
+      rules: [{ id: videoOnlyRule.id, version: videoOnlyRule.version }],
+      references: [],
+    })).rejects.toThrow("continuity_rule_modality_mismatch");
+    const oversizedRules: ContinuityRule[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const response = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/rules`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          entityIds: [entity.id],
+          facet: "material",
+          strength: "must",
+          instruction: `${String(index + 1).padStart(2, "0")} ${"Preserve the exact reviewed translucent mineral rhythm across every visible surface. ".repeat(7)}`,
+          modalities: ["image"],
+        }),
+      }), local);
+      oversizedRules.push((await result(response) as { rule: ContinuityRule }).rule);
+    }
+    await expect(generationContinuityStamp(env, ownerId, project.id, "image", {
+      schemaVersion: "creative-studio-generation-continuity-selection/1.0",
+      modality: "image",
+      world: { id: world.id, version: world.version },
+      entities: [{ id: entity.id, version: entity.version }],
+      rules: oversizedRules.map((item) => ({ id: item.id, version: item.version })),
+      references: [],
+    })).rejects.toThrow("continuity_directive_too_large");
+    const candidate = (await result(await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/references`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        entityId: entity.id,
+        source: { kind: "commercial-reference", identity: "Protected Franchise Name", lineageOnly: true },
+        continuityNotes: [{ facet: "material", value: "Translucent mineral skin with subtle internal light" }],
+      }),
+    }), local)) as { reference: CanonReference }).reference;
+    const canonicalResponse = await routeCreativeStudioApi(request(`/api/creative-studio/worlds/${world.id}/references/${candidate.id}/promote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "creative-studio-promote-to-canon/1.0",
+        confirmation: "promote-to-canon",
+        worldId: world.id,
+        entityId: entity.id,
+        referenceId: candidate.id,
+        facets: ["material"],
+        note: "Keep only the abstract material quality.",
+        expectedReferenceVersion: candidate.version,
+      }),
+    }), local);
+    expect(canonicalResponse.status).toBe(200);
+    const canonical = (await result(canonicalResponse) as { promotion: { reference: CanonReference } }).promotion.reference;
+
+    const directive = compileContinuityDirective({
+      world,
+      entities: [entity],
+      rules: [rule],
+      references: [canonical],
+      selectedEntityIds: [entity.id],
+      selectedRuleIds: [rule.id],
+      selectedReferenceIds: [canonical.id],
+      modality: "image",
+    });
+    expect(directive.text).not.toContain("Protected Franchise Name");
+    const authoredPrompt = "Portrait of Iria standing beneath the archive's slow blue stars.";
+    const workflowPrompt = `${authoredPrompt} ${directive.text}`;
+    const graph = JSON.stringify({
+      "1": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" } },
+      "2": { class_type: "PrimitiveStringMultiline", inputs: { value: workflowPrompt }, _meta: { title: "Prompt" } },
+      "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] } },
+      "4": { class_type: "SaveImage", inputs: { filename_prefix: "result", images: ["3", 0] } },
+      "5": { class_type: "EmptySD3LatentImage", inputs: { width: 1024, height: 1024, batch_size: 1 } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("continuity-image.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("Continuity Image"),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+    const selection = {
+      schemaVersion: "creative-studio-generation-continuity-selection/1.0",
+      modality: "image",
+      world: { id: world.id, version: world.version },
+      entities: [{ id: entity.id, version: entity.version }],
+      rules: [{ id: rule.id, version: rule.version }],
+      references: [{ id: canonical.id, version: canonical.version }],
+    } satisfies GenerationContinuitySelection;
+    await expect(generationContinuityStamp(
+      env,
+      ownerId,
+      project.id,
+      "image",
+      selection,
+      `Portrait inspired by Protected Franchise Name. ${directive.text}`,
+    )).rejects.toThrow("continuity_commercial_identity_in_prompt");
+    const submitted = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        performanceMode: "explicit-custom",
+        idempotencyKey: "continuity_job_test_0001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: {},
+          expectedPrompt: workflowPrompt,
+        },
+        continuity: selection,
+      }),
+    }), local);
+    expect(submitted.status).toBe(202);
+    const submittedPayload = await result(submitted) as { job: { prompt: string; settingsStamp: { continuity: Record<string, unknown> } } };
+    expect(submittedPayload.job.prompt).toBe(workflowPrompt);
+    expect(submittedPayload.job.settingsStamp.continuity).toMatchObject({
+      schemaVersion: "creative-studio-generation-continuity-stamp/1.0",
+      selection,
+      directive: {
+        text: directive.text,
+        worldId: world.id,
+        entityIds: [entity.id],
+        ruleIds: [rule.id],
+        referenceIds: [canonical.id],
+        excludedCommercialReferenceIdentityIds: [canonical.id],
+      },
+      records: {
+        world: { id: world.id, version: world.version },
+        entities: [{ id: entity.id, version: entity.version }],
+        rules: [{ id: rule.id, version: rule.version }],
+        references: [{ id: canonical.id, version: canonical.version }],
+        redactionReferences: [{ id: canonical.id, version: canonical.version }],
+      },
+    });
+    expect(JSON.stringify(submittedPayload.job.settingsStamp.continuity)).toContain("Protected Franchise Name");
+    expect((submittedPayload.job.settingsStamp.continuity.directive as { text: string }).text).not.toContain("Protected Franchise Name");
   });
 
   it("validates JSON, project ownership, and commercial-reference provenance", async () => {
@@ -1222,6 +1798,94 @@ describe("Creative Studio Worker API", () => {
     expect(historyPayload.trainingExamples[0]).toMatchObject({ status: "excluded", prompt: dnaPayload.artifact.generationPrompts.image, settingsStamp: { source: "creative-dna" } });
   });
 
+  it("pages equal-timestamp artifacts without drift and reviews work older than the snapshot window", async () => {
+    const ownerId = "development-angelo";
+    const local = workerEnv("development");
+    const project = await testProject(ownerId, "Complete History");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Complete History",
+      directive: "A precise archive study with stable ordering.",
+      targetModality: "image",
+    });
+    const tiedAt = "2026-08-20T12:00:00.000Z";
+    await env.DB.prepare(`with recursive sequence(value) as (
+        select 0 union all select value + 1 from sequence where value < 101
+      ) insert into creative_jobs
+        (id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
+          artifact_id, created_at, updated_at, completed_at, execution_stage)
+      select 'job_history_' || printf('%03d', value), ?, ?, ?, 'IMAGE_GENERATE', 'image', 'completed', 100,
+        'Stable history prompt', 'development-worker', 'artifact_history_' || printf('%03d', value), ?, ?, ?, 'completed'
+      from sequence`)
+      .bind(ownerId, project.id, dna.artifactId, tiedAt, tiedAt, tiedAt).run();
+    await env.DB.prepare(`with recursive sequence(value) as (
+        select 0 union all select value + 1 from sequence where value < 101
+      ) insert into creative_artifacts
+        (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt,
+          preview_kind, preview_url, preview_from, preview_to, created_at, updated_at)
+      select 'artifact_history_' || printf('%03d', value), ?, ?, 'job_history_' || printf('%03d', value), ?,
+        'image', 'History ' || printf('%03d', value), 'ready', 'development-worker', 'Stable history prompt',
+        'development-gradient', null, '#111827', '#6d28d9', ?, ?
+      from sequence`)
+      .bind(ownerId, project.id, dna.artifactId, tiedAt, tiedAt).run();
+
+    const firstResponse = await routeCreativeStudioApi(request("/api/creative-studio/artifacts?page=true&limit=2"), local);
+    expect(firstResponse.status).toBe(200);
+    const first = (await result(firstResponse) as {
+      page: { artifacts: Array<{ id: string }>; jobs: Array<{ id: string }>; nextCursor: { createdAt: string; artifactId: string }; hasMore: boolean; total: number };
+    }).page;
+    expect(first.artifacts.map((artifact) => artifact.id)).toEqual(["artifact_history_101", "artifact_history_100"]);
+    expect(first.jobs.map((job) => job.id).sort()).toEqual(["job_history_100", "job_history_101"]);
+    expect(first).toMatchObject({ hasMore: true, total: 102, nextCursor: { createdAt: tiedAt, artifactId: "artifact_history_100" } });
+
+    const newerAt = "2026-08-20T12:01:00.000Z";
+    await env.DB.prepare(`insert into creative_jobs
+      (id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
+        artifact_id, created_at, updated_at, completed_at, execution_stage)
+      values ('job_history_new', ?, ?, ?, 'IMAGE_GENERATE', 'image', 'completed', 100, 'New history prompt',
+        'development-worker', 'artifact_history_new', ?, ?, ?, 'completed')`)
+      .bind(ownerId, project.id, dna.artifactId, newerAt, newerAt, newerAt).run();
+    await env.DB.prepare(`insert into creative_artifacts
+      (id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt,
+        preview_kind, preview_url, preview_from, preview_to, created_at, updated_at)
+      values ('artifact_history_new', ?, ?, 'job_history_new', ?, 'image', 'New history item', 'ready',
+        'development-worker', 'New history prompt', 'development-gradient', null, '#111827', '#6d28d9', ?, ?)`)
+      .bind(ownerId, project.id, dna.artifactId, newerAt, newerAt).run();
+
+    const nextQuery = new URLSearchParams({
+      page: "true",
+      limit: "2",
+      cursorCreatedAt: first.nextCursor.createdAt,
+      cursorArtifactId: first.nextCursor.artifactId,
+    });
+    const second = (await result(await routeCreativeStudioApi(request(`/api/creative-studio/artifacts?${nextQuery}`), local)) as {
+      page: { artifacts: Array<{ id: string }>; total: number };
+    }).page;
+    expect(second.artifacts.map((artifact) => artifact.id)).toEqual(["artifact_history_099", "artifact_history_098"]);
+    expect(second.artifacts.map((artifact) => artifact.id)).not.toEqual(expect.arrayContaining(first.artifacts.map((artifact) => artifact.id)));
+    expect(second.total).toBe(103);
+
+    const invalidCursor = await routeCreativeStudioApi(request(`/api/creative-studio/artifacts?page=true&cursorCreatedAt=${encodeURIComponent(tiedAt)}`), local);
+    expect(invalidCursor.status).toBe(400);
+    expect(await result(invalidCursor)).toMatchObject({ error: "invalid_artifact_history_cursor" });
+    const otherOwnerPage = await result(await routeCreativeStudioApi(
+      request("/api/creative-studio/artifacts?page=true&limit=2"),
+      workerEnv("afdfw", afdfwFor("owner-history-other")),
+    ));
+    expect(otherOwnerPage).toMatchObject({ page: { artifacts: [], jobs: [], total: 0, hasMore: false, nextCursor: null } });
+
+    const reviewed = await routeCreativeStudioApi(request("/api/creative-studio/artifacts/artifact_history_000/accepted", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "Keep the oldest retained direction." }),
+    }), local);
+    expect(reviewed.status).toBe(200);
+    expect(await result(reviewed)).toMatchObject({
+      artifact: { id: "artifact_history_000", status: "accepted" },
+      acceptance: { artifactId: "artifact_history_000", decision: "accepted", note: "Keep the oldest retained direction." },
+    });
+  });
+
   it("reuses an immutable settings stamp and records the source job", async () => {
     const local = workerEnv("development");
     const project = await testProject("development-angelo", "Settings Stamp");
@@ -1341,7 +2005,7 @@ describe("Creative Studio Worker API", () => {
       headers: { "content-type": "application/json", "cf-access-authenticated-user-email": accessEmail },
       body: JSON.stringify({ projectId: project.id, dnaArtifactId: dna.artifactId, modality: "image", provider: "afdfw", idempotencyKey: "controls_submit_0001" }),
     }), production);
-    const first = await result(await create()) as { job: { id: string } };
+    const first = await result(await create()) as { job: { id: string; settingsStamp: Record<string, unknown> } };
     const duplicate = await result(await create()) as { job: { id: string } };
     expect(duplicate.job.id).toBe(first.job.id);
     const row = await env.DB.prepare("select count(*) as count from creative_jobs where owner_id = ?").bind(ownerId).first<{ count: number }>();
@@ -1358,7 +2022,13 @@ describe("Creative Studio Worker API", () => {
       body: JSON.stringify({ idempotencyKey: "controls_retry_00001" }),
     }), production);
     expect(retried.status).toBe(202);
-    expect(await result(retried)).toMatchObject({ job: { status: "queued", retryOfJobId: first.job.id } });
+    const retryPayload = await result(retried) as { job: { status: string; retryOfJobId: string; settingsStamp: Record<string, unknown> } };
+    expect(retryPayload).toMatchObject({ job: { status: "queued", retryOfJobId: first.job.id } });
+    expect(retryPayload.job.settingsStamp).toEqual({
+      ...first.job.settingsStamp,
+      createdAt: retryPayload.job.settingsStamp.createdAt,
+      reusedFromJobId: first.job.id,
+    });
     expect(messages.length).toBeGreaterThanOrEqual(3);
   });
 

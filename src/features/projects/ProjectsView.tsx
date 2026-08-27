@@ -12,6 +12,7 @@ import {
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ProjectAvatar } from "../../components/Visuals";
+import { WorldBoard } from "../worlds/WorldBoard";
 
 type ProjectFormValue = CreateProjectRequest & { status: "active" | "paused" };
 export type ProjectDestination = "dna" | "gallery" | "cockpit" | "queue";
@@ -74,7 +75,7 @@ function ProjectForm({ project, firstProject = false, busy, onSave, onCancel }: 
         <div className="project-fields">
           <label className="field"><span>Type</span><input className="input" aria-label="Project type" value={type} maxLength={80} onChange={(event) => setType(event.target.value)} placeholder="Creative project" /></label>
           {project ? <label className="field"><span>Status</span><select className="input" aria-label="Project status" value={status} onChange={(event) => setStatus(event.target.value as "active" | "paused")}><option value="active">Active</option><option value="paused">Paused</option></select></label> : null}
-          <label className="field project-field-wide"><span>Project / character canon</span><textarea className="textarea project-description" aria-label="Project or character canon" value={description} maxLength={500} onChange={(event) => setDescription(event.target.value)} placeholder="Identity, world rules, appearance, and continuity that must remain true." /></label>
+          <label className="field project-field-wide"><span>Project overview</span><textarea className="textarea project-description" aria-label="Project overview" value={description} maxLength={500} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, subject, and context for this body of work." /></label>
           <label className="field project-field-wide"><span>Current piece direction</span><input className="input" aria-label="Current piece direction" value={note} maxLength={250} onChange={(event) => setNote(event.target.value)} placeholder="What this piece is doing now" /></label>
         </div>
         <fieldset className="project-hues"><legend>Project color</legend>{PROJECT_HUES.map((color) => <button type="button" key={color} aria-label={`Use project color ${color}`} aria-pressed={hue === color} className={hue === color ? "on" : ""} style={{ "--project-hue": color } as React.CSSProperties} onClick={() => setHue(color)} />)}</fieldset>
@@ -98,6 +99,7 @@ export function ProjectsView({ onOpen, embedded = false }: ProjectsViewProps) {
 
   const showCreateForm = creating || availableProjects.length === 0;
   const editingProject = projects.find((project) => project.id === editingId) ?? null;
+  const activeProject = availableProjects.find((project) => project.id === activeProjectId) ?? availableProjects[0] ?? null;
 
   const open = (projectId: string, destination: ProjectDestination, action?: ProductionCockpitAction) => {
     setActiveProjectId(projectId);
@@ -137,6 +139,7 @@ export function ProjectsView({ onOpen, embedded = false }: ProjectsViewProps) {
       {showCreateForm ? <ProjectForm firstProject={!availableProjects.length} busy={busy} onSave={create} onCancel={availableProjects.length ? () => setCreating(false) : undefined} /> : null}
       {editingProject ? <ProjectForm key={editingProject.updatedAt} project={editingProject} busy={busy} onSave={(input) => update(editingProject.id, input)} onCancel={() => setEditingId(null)} /> : null}
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
+      {activeProject ? <WorldBoard project={activeProject} /> : null}
       <div className="projects-grid">
         {availableProjects.map((project) => {
           const jobs = snapshot?.jobs.filter((job) => job.projectId === project.id).length ?? 0;

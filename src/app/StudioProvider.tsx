@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { primaryWorkflowPromptParameter } from "../../shared/contracts";
+import { deriveEvolutionStudies, primaryWorkflowPromptParameter } from "../../shared/contracts";
 import type {
   AcceptanceDecision,
   CreateProjectRequest,
@@ -35,6 +35,25 @@ import type {
   UpdateGenerationRecipeRequest,
   GenerationRecipe,
   RecipeEvidenceResponse,
+  ArtifactHistoryPage,
+  ArtifactHistoryQuery,
+  CanonReference,
+  ContinuityRule,
+  CreateCanonReferenceRequest,
+  CreateContinuityRuleRequest,
+  CreateWorldEntityRequest,
+  CreateWorldRequest,
+  GenerationContinuitySelection,
+  PromoteArtifactToCanonRequest,
+  PromoteArtifactToCanonResult,
+  PromoteToCanonRequest,
+  PromoteToCanonResult,
+  UpdateCanonReferenceRequest,
+  UpdateContinuityRuleRequest,
+  UpdateWorldEntityRequest,
+  UpdateWorldRequest,
+  World,
+  WorldEntity,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -53,11 +72,23 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPrompt: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds, idempotencyKey?: string) => Promise<Job>;
+  submitWorkflowJob: (input: SubmitWorkflowJobInput) => Promise<Job>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note: string) => Promise<ReviewArtifactResponse>;
+  loadArtifactHistory: (query: ArtifactHistoryQuery) => Promise<ArtifactHistoryPage>;
+  createWorld: (input: CreateWorldRequest) => Promise<World>;
+  updateWorld: (worldId: string, input: UpdateWorldRequest) => Promise<World>;
+  archiveWorld: (worldId: string, expectedVersion: number) => Promise<World>;
+  createWorldEntity: (worldId: string, input: CreateWorldEntityRequest) => Promise<WorldEntity>;
+  updateWorldEntity: (worldId: string, entityId: string, input: UpdateWorldEntityRequest) => Promise<WorldEntity>;
+  createContinuityRule: (worldId: string, input: CreateContinuityRuleRequest) => Promise<ContinuityRule>;
+  updateContinuityRule: (worldId: string, ruleId: string, input: UpdateContinuityRuleRequest) => Promise<ContinuityRule>;
+  createCanonReference: (worldId: string, input: CreateCanonReferenceRequest) => Promise<CanonReference>;
+  updateCanonReference: (worldId: string, referenceId: string, input: UpdateCanonReferenceRequest) => Promise<CanonReference>;
+  promoteCanonReference: (worldId: string, referenceId: string, input: PromoteToCanonRequest) => Promise<PromoteToCanonResult>;
+  promoteArtifactToCanon: (worldId: string, input: PromoteArtifactToCanonRequest) => Promise<PromoteArtifactToCanonResult>;
   uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
   uploadWorkflow: (file: File, name?: string, description?: string) => Promise<WorkflowDefinition>;
   saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
@@ -77,6 +108,20 @@ type StudioContextValue = {
   refresh: () => Promise<void>;
 };
 
+export type SubmitWorkflowJobInput = {
+  workflow: WorkflowDefinition;
+  inputBindings: Record<string, string>;
+  expectedPrompt: string;
+  dnaArtifactId?: string;
+  videoOperation?: VideoGenerationOperation;
+  performanceMode?: ImagePerformanceMode;
+  videoVariant?: VideoGenerationVariant;
+  evolution?: EvolutionJobContext;
+  videoDurationSeconds?: VideoDurationSeconds;
+  idempotencyKey?: string;
+  continuity?: GenerationContinuitySelection;
+};
+
 const StudioContext = createContext<StudioContextValue | null>(null);
 
 function message(error: unknown) {
@@ -91,6 +136,15 @@ function message(error: unknown) {
   if (error.message === "ace_step_requires_3_audio_files") return "Select at least three consented audio uploads before preparing the LoRA dataset.";
   if (error.message === "model_training_audio_consent_required") return "Every selected song must have CreativeDNA training consent enabled.";
   if (error.message === "ace_step_dataset_review_required") return "Review every caption and lyric field before starting LoRA training.";
+  if (/^(world|world_entity|continuity_rule|canon_reference)_version_conflict$/.test(error.message)) return "This continuity record changed in another view. Refresh, review the current version, and try again.";
+  if (error.message === "workflow_continuity_prompt_mismatch") return "The saved model prompt no longer ends with the selected World continuity. Review the direction and generate again.";
+  if (error.message === "continuity_directive_empty") return "Add a world premise, element detail, rule, or reviewed canon note before using continuity.";
+  if (error.message === "continuity_directive_too_large") return "This World continuity is too large to apply exactly. Select fewer elements, then generate again.";
+  if (error.message === "continuity_commercial_identity_in_prompt") return "Remove the named commercial source from the prompt. Only its reviewed abstract traits can be sent to the model.";
+  if (error.message === "continuity_rule_modality_mismatch") return "One selected continuity rule does not apply to this media type. Refresh the World selection and try again.";
+  if (error.message === "canon_promotion_prerequisite_changed") return "The World, element, project, or artifact review changed before canon could be saved. Review the current state and confirm again.";
+  if (error.message === "canon_promotion_facet_guidance_required") return "Add reusable guidance for every facet you want to make canon.";
+  if (error.message === "artifact_already_canonical") return "This retained result is already canon for that World element.";
   if (error.message.startsWith("ace_step_gpu_busy_free_")) {
     const freeMiB = Number(error.message.match(/^ace_step_gpu_busy_free_(\d+)_mib$/)?.[1] ?? 0);
     const freeGiB = freeMiB > 0 ? `${Math.round(freeMiB / 1024)} GB` : "too little memory";
@@ -131,6 +185,21 @@ function operationKey(prefix: string) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
+function mergeById<T extends { id: string }>(older: readonly T[], newer: readonly T[]) {
+  const records = new Map(older.map((item) => [item.id, item]));
+  for (const item of newer) records.set(item.id, item);
+  return [...records.values()];
+}
+
+function mergeSnapshotHistory(current: StudioSnapshot | null, next: StudioSnapshot) {
+  if (!current) return next;
+  const jobs = mergeById(current.jobs, next.jobs).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  const artifacts = mergeById(current.artifacts, next.artifacts).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  const acceptances = mergeById(current.acceptances, next.acceptances).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  const trainingExamples = mergeById(current.trainingExamples, next.trainingExamples).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  return { ...next, jobs, artifacts, acceptances, trainingExamples, evolutionStudies: deriveEvolutionStudies(jobs, artifacts) };
+}
+
 export function StudioProvider({ children }: { children: ReactNode }) {
   const [adapter] = useState<StudioAdapter>(() => createStudioAdapter());
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
@@ -142,7 +211,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [activeDna, setActiveDna] = useState<CreativeDnaArtifact | null>(null);
 
   const applySnapshot = useCallback((next: StudioSnapshot) => {
-    setSnapshot(next);
+    setSnapshot((current) => mergeSnapshotHistory(current, next));
     setActiveProjectId((currentProjectId) => {
       const projectId = next.projects.some((project) => project.id === currentProjectId && project.status !== "archived")
         ? currentProjectId
@@ -250,7 +319,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPromptValue: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds, stableIdempotencyKey?: string) => {
+  const submitWorkflowJob = useCallback(async (input: SubmitWorkflowJobInput) => {
+    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, evolution, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity } = input;
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -272,6 +342,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       videoVariant,
       videoOperation,
       evolution,
+      continuity,
     }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
 
@@ -288,8 +359,78 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, transact]);
 
   const reviewArtifact = useCallback(async (artifactId: string, decision: AcceptanceDecision, note: string) => {
-    return transact(() => adapter.reviewArtifact(artifactId, decision, note));
+    const result = await transact(() => adapter.reviewArtifact(artifactId, decision, note));
+    setSnapshot((current) => {
+      if (!current) return current;
+      const artifacts = mergeById(current.artifacts, [result.artifact])
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+      const acceptances = mergeById(current.acceptances, [result.acceptance])
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+      const trainingExamples = current.trainingExamples.map((example) => example.artifactId === artifactId && decision !== "archived"
+        ? { ...example, status: decision === "accepted" ? "training-ready" as const : "excluded" as const, updatedAt: result.acceptance.createdAt }
+        : example);
+      return { ...current, artifacts, acceptances, trainingExamples, evolutionStudies: deriveEvolutionStudies(current.jobs, artifacts) };
+    });
+    return result;
   }, [adapter, transact]);
+
+  const loadArtifactHistory = useCallback(async (query: ArtifactHistoryQuery) => {
+    setError("");
+    try {
+      const page = await adapter.listArtifactHistory({
+        ...query,
+        projectId: query.projectId === undefined ? activeProjectId || null : query.projectId,
+      });
+      setSnapshot((current) => {
+        if (!current) return current;
+        const jobs = mergeById(current.jobs, page.jobs)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+        const artifacts = mergeById(current.artifacts, page.artifacts)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+        const acceptances = mergeById(current.acceptances, page.acceptances)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+        const trainingExamples = mergeById(current.trainingExamples, page.trainingExamples)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+        return { ...current, jobs, artifacts, acceptances, trainingExamples, evolutionStudies: deriveEvolutionStudies(jobs, artifacts) };
+      });
+      return page;
+    } catch (nextError) {
+      setError(message(nextError));
+      throw nextError;
+    }
+  }, [activeProjectId, adapter]);
+
+  const createWorld = useCallback((input: CreateWorldRequest) => transact(() => adapter.createWorld(input)), [adapter, transact]);
+  const updateWorld = useCallback((worldId: string, input: UpdateWorldRequest) => (
+    transact(() => adapter.updateWorld(worldId, input))
+  ), [adapter, transact]);
+  const archiveWorld = useCallback((worldId: string, expectedVersion: number) => (
+    transact(() => adapter.archiveWorld(worldId, expectedVersion))
+  ), [adapter, transact]);
+  const createWorldEntity = useCallback((worldId: string, input: CreateWorldEntityRequest) => (
+    transact(() => adapter.createWorldEntity(worldId, input))
+  ), [adapter, transact]);
+  const updateWorldEntity = useCallback((worldId: string, entityId: string, input: UpdateWorldEntityRequest) => (
+    transact(() => adapter.updateWorldEntity(worldId, entityId, input))
+  ), [adapter, transact]);
+  const createContinuityRule = useCallback((worldId: string, input: CreateContinuityRuleRequest) => (
+    transact(() => adapter.createContinuityRule(worldId, input))
+  ), [adapter, transact]);
+  const updateContinuityRule = useCallback((worldId: string, ruleId: string, input: UpdateContinuityRuleRequest) => (
+    transact(() => adapter.updateContinuityRule(worldId, ruleId, input))
+  ), [adapter, transact]);
+  const createCanonReference = useCallback((worldId: string, input: CreateCanonReferenceRequest) => (
+    transact(() => adapter.createCanonReference(worldId, input))
+  ), [adapter, transact]);
+  const updateCanonReference = useCallback((worldId: string, referenceId: string, input: UpdateCanonReferenceRequest) => (
+    transact(() => adapter.updateCanonReference(worldId, referenceId, input))
+  ), [adapter, transact]);
+  const promoteCanonReference = useCallback((worldId: string, referenceId: string, input: PromoteToCanonRequest) => (
+    transact(() => adapter.promoteCanonReference(worldId, referenceId, input))
+  ), [adapter, transact]);
+  const promoteArtifactToCanon = useCallback((worldId: string, input: PromoteArtifactToCanonRequest) => (
+    transact(() => adapter.promoteArtifactToCanon(worldId, input))
+  ), [adapter, transact]);
 
   const uploadMedia = useCallback(async (file: File, trainingEligible: boolean) => {
     if (!activeProjectId) throw new Error("project_required");
@@ -415,6 +556,18 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     reuseJob,
     cancelJob,
     reviewArtifact,
+    loadArtifactHistory,
+    createWorld,
+    updateWorld,
+    archiveWorld,
+    createWorldEntity,
+    updateWorldEntity,
+    createContinuityRule,
+    updateContinuityRule,
+    createCanonReference,
+    updateCanonReference,
+    promoteCanonReference,
+    promoteArtifactToCanon,
     uploadMedia,
     uploadWorkflow,
     saveWorkflowRevision,
@@ -432,7 +585,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     enrollLocalRunner,
     revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

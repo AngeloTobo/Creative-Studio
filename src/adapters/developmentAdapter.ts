@@ -27,6 +27,27 @@ import {
   type SubmitJobRequest,
   type UpdateProjectRequest,
   type WorkflowDefinition,
+  CANON_REFERENCE_SCHEMA_VERSION,
+  CONTINUITY_RULE_SCHEMA_VERSION,
+  CREATIVE_WORLD_SCHEMA_VERSION,
+  PROMOTE_TO_CANON_SCHEMA_VERSION,
+  WORLD_ENTITY_SCHEMA_VERSION,
+  promoteCanonReference,
+  type ArtifactHistoryQuery,
+  type CanonPromotion,
+  type CanonReference,
+  type ContinuityRule,
+  type CreateCanonReferenceRequest,
+  type CreateContinuityRuleRequest,
+  type CreateWorldEntityRequest,
+  type CreateWorldRequest,
+  type PromoteArtifactToCanonRequest,
+  type UpdateCanonReferenceRequest,
+  type UpdateContinuityRuleRequest,
+  type UpdateWorldEntityRequest,
+  type UpdateWorldRequest,
+  type World,
+  type WorldEntity,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 
@@ -45,6 +66,11 @@ type DevelopmentState = {
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
+  worlds: World[];
+  worldEntities: WorldEntity[];
+  continuityRules: ContinuityRule[];
+  canonReferences: CanonReference[];
+  canonPromotions: CanonPromotion[];
   idempotencyKeys: Record<string, string>;
 };
 
@@ -59,7 +85,7 @@ function defaultId(prefix: string) {
 }
 
 function emptyState(): DevelopmentState {
-  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} };
+  return { projects: [], dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], worlds: [], worldEntities: [], continuityRules: [], canonReferences: [], canonPromotions: [], idempotencyKeys: {} };
 }
 
 function normalizeJobTiming(job: Job): Job {
@@ -103,6 +129,7 @@ function projectValues(input: CreateProjectRequest) {
 function capabilitySnapshot(now: string): Capability[] {
   return [
     { key: "creative-dna", label: "CreativeDNA v1", state: "available", provider: "deterministic compiler", detail: "Versioned locally in the development adapter.", checkedAt: now },
+    { key: "creative-worlds", label: "Creative Worlds", state: "available", provider: "development adapter", detail: "Versioned world records and explicit canon decisions persist in this browser; acceptance never changes canon.", checkedAt: now },
     { key: "media-library", label: "Media library", state: "unavailable", provider: "not connected", detail: "Real uploads require the Creative Studio Worker and R2; this adapter never simulates retained media.", checkedAt: now },
     { key: "workflow-library", label: "ComfyUI workflows", state: "unavailable", provider: "not connected", detail: "Workflow upload and immutable server revisions require the Creative Studio Worker.", checkedAt: now },
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "degraded", provider: "development adapter", detail: "Candidate metadata is browser-only; no real media is presented as training-ready output.", checkedAt: now },
@@ -169,6 +196,11 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     runners: [],
     capabilities: capabilitySnapshot(now),
     acceptances,
+    worlds: [...state.worlds].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    worldEntities: [...state.worldEntities].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    continuityRules: [...state.continuityRules].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    canonReferences: [...state.canonReferences].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    canonPromotions: [...state.canonPromotions].sort((a, b) => b.promotedAt.localeCompare(a.promotedAt)),
     tasteMemory: compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts: state.dnaArtifacts }),
     evolutionStudies: deriveEvolutionStudies(state.jobs, artifacts),
     refreshedAt: now,
@@ -366,6 +398,235 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       write(state);
       return project;
     },
+    async createWorld(input: CreateWorldRequest) {
+      const state = read();
+      const project = state.projects.find((item) => item.id === input.projectId);
+      if (!project) throw new Error("project_not_found");
+      if (project.status === "archived") throw new Error("project_archived");
+      const name = cleanText(input.name, 100);
+      if (!name) throw new Error("world_name_required");
+      const createdAt = now().toISOString();
+      const world: World = {
+        schemaVersion: CREATIVE_WORLD_SCHEMA_VERSION,
+        id: makeId("world"),
+        projectId: project.id,
+        name,
+        premise: cleanText(input.premise, 1_200),
+        status: "active",
+        entityIds: [],
+        continuityRuleIds: [],
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      state.worlds.unshift(world);
+      write(state);
+      return world;
+    },
+    async updateWorld(worldId: string, input: UpdateWorldRequest) {
+      const state = read();
+      const world = state.worlds.find((item) => item.id === worldId);
+      if (!world) throw new Error("world_not_found");
+      if (world.version !== input.expectedVersion) throw new Error("world_version_conflict");
+      const name = input.name === undefined ? world.name : cleanText(input.name, 100);
+      if (!name) throw new Error("world_name_required");
+      if (input.status && input.status !== "active" && input.status !== "archived") throw new Error("invalid_world_status");
+      Object.assign(world, {
+        name,
+        premise: input.premise === undefined ? world.premise : cleanText(input.premise, 1_200),
+        status: input.status ?? world.status,
+        version: world.version + 1,
+        updatedAt: now().toISOString(),
+      });
+      write(state);
+      return world;
+    },
+    async archiveWorld(worldId: string, expectedVersion: number) {
+      return this.updateWorld(worldId, { expectedVersion, status: "archived" });
+    },
+    async createWorldEntity(worldId: string, input: CreateWorldEntityRequest) {
+      const state = read();
+      const world = state.worlds.find((item) => item.id === worldId);
+      if (!world) throw new Error("world_not_found");
+      if (world.projectId !== input.projectId) throw new Error("world_project_mismatch");
+      if (!(["character", "place", "object"] as string[]).includes(input.kind)) throw new Error("invalid_world_entity_kind");
+      const name = cleanText(input.name, 100);
+      if (!name) throw new Error("world_entity_name_required");
+      const createdAt = now().toISOString();
+      const entity: WorldEntity = {
+        schemaVersion: WORLD_ENTITY_SCHEMA_VERSION,
+        id: makeId("entity"),
+        worldId,
+        projectId: world.projectId,
+        kind: input.kind,
+        name,
+        summary: cleanText(input.summary, 800),
+        aliases: [...new Set((input.aliases ?? []).map((value) => cleanText(value, 100)).filter(Boolean))].slice(0, 12),
+        attributes: (input.attributes ?? []).map((attribute) => ({ facet: attribute.facet, value: cleanText(attribute.value, 360) })).filter((attribute) => attribute.value).slice(0, 24),
+        canonReferenceIds: [],
+        status: "active",
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      state.worldEntities.unshift(entity);
+      world.entityIds.push(entity.id);
+      write(state);
+      return entity;
+    },
+    async updateWorldEntity(worldId: string, entityId: string, input: UpdateWorldEntityRequest) {
+      const state = read();
+      const entity = state.worldEntities.find((item) => item.id === entityId && item.worldId === worldId);
+      if (!entity) throw new Error("world_entity_not_found");
+      if (entity.version !== input.expectedVersion) throw new Error("world_entity_version_conflict");
+      const name = input.name === undefined ? entity.name : cleanText(input.name, 100);
+      if (!name) throw new Error("world_entity_name_required");
+      Object.assign(entity, {
+        name,
+        summary: input.summary === undefined ? entity.summary : cleanText(input.summary, 800),
+        aliases: input.aliases === undefined ? entity.aliases : [...new Set(input.aliases.map((value) => cleanText(value, 100)).filter(Boolean))].slice(0, 12),
+        attributes: input.attributes === undefined ? entity.attributes : input.attributes.map((attribute) => ({ facet: attribute.facet, value: cleanText(attribute.value, 360) })).filter((attribute) => attribute.value).slice(0, 24),
+        status: input.status ?? entity.status,
+        version: entity.version + 1,
+        updatedAt: now().toISOString(),
+      });
+      write(state);
+      return entity;
+    },
+    async createContinuityRule(worldId: string, input: CreateContinuityRuleRequest) {
+      const state = read();
+      const world = state.worlds.find((item) => item.id === worldId);
+      if (!world) throw new Error("world_not_found");
+      if (world.projectId !== input.projectId) throw new Error("world_project_mismatch");
+      if ((input.entityIds ?? []).some((entityId) => !state.worldEntities.some((entity) => entity.id === entityId && entity.worldId === worldId))) throw new Error("continuity_rule_entity_not_found");
+      const instruction = cleanText(input.instruction, 500);
+      if (!instruction) throw new Error("continuity_rule_instruction_required");
+      const createdAt = now().toISOString();
+      const rule: ContinuityRule = {
+        schemaVersion: CONTINUITY_RULE_SCHEMA_VERSION,
+        id: makeId("rule"),
+        worldId,
+        projectId: world.projectId,
+        entityIds: [...new Set(input.entityIds ?? [])],
+        facet: input.facet,
+        strength: input.strength,
+        instruction,
+        modalities: [...new Set(input.modalities)],
+        status: "active",
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      state.continuityRules.unshift(rule);
+      world.continuityRuleIds.push(rule.id);
+      write(state);
+      return rule;
+    },
+    async updateContinuityRule(worldId: string, ruleId: string, input: UpdateContinuityRuleRequest) {
+      const state = read();
+      const rule = state.continuityRules.find((item) => item.id === ruleId && item.worldId === worldId);
+      if (!rule) throw new Error("continuity_rule_not_found");
+      if (rule.version !== input.expectedVersion) throw new Error("continuity_rule_version_conflict");
+      const instruction = input.instruction === undefined ? rule.instruction : cleanText(input.instruction, 500);
+      if (!instruction) throw new Error("continuity_rule_instruction_required");
+      Object.assign(rule, {
+        entityIds: input.entityIds ?? rule.entityIds,
+        facet: input.facet ?? rule.facet,
+        strength: input.strength ?? rule.strength,
+        instruction,
+        modalities: input.modalities ?? rule.modalities,
+        status: input.status ?? rule.status,
+        version: rule.version + 1,
+        updatedAt: now().toISOString(),
+      });
+      write(state);
+      return rule;
+    },
+    async createCanonReference(worldId: string, input: CreateCanonReferenceRequest) {
+      const state = read();
+      const world = state.worlds.find((item) => item.id === worldId);
+      const entity = state.worldEntities.find((item) => item.id === input.entityId && item.worldId === worldId);
+      if (!world) throw new Error("world_not_found");
+      if (!entity) throw new Error("world_entity_not_found");
+      if (world.projectId !== input.projectId) throw new Error("world_project_mismatch");
+      const source = input.source;
+      if (source.kind === "owner-upload" && !state.mediaAssets.some((asset) => asset.id === source.mediaId && asset.projectId === world.projectId && asset.status === "retained")) throw new Error("canon_reference_media_not_found");
+      if (source.kind === "retained-artifact") {
+        const artifact = state.artifacts.find((item) => item.id === source.artifactId && item.projectId === world.projectId);
+        if (!artifact || artifact.retention.state !== "retained") throw new Error("canon_reference_artifact_not_retained");
+        if (artifact.status !== "accepted") throw new Error("canon_reference_artifact_acceptance_required");
+      }
+      const createdAt = now().toISOString();
+      const reference: CanonReference = {
+        schemaVersion: CANON_REFERENCE_SCHEMA_VERSION,
+        id: makeId("reference"),
+        worldId,
+        projectId: world.projectId,
+        entityId: entity.id,
+        source: input.source,
+        continuityNotes: input.continuityNotes,
+        status: "candidate",
+        rights: { policy: input.source.kind === "commercial-reference" ? "abstract-attributes-only" : "owner-controlled", sourceIdentityPromptEligible: false, rawMediaPromptEligible: false },
+        version: 1,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      state.canonReferences.unshift(reference);
+      entity.canonReferenceIds.push(reference.id);
+      write(state);
+      return reference;
+    },
+    async updateCanonReference(worldId: string, referenceId: string, input: UpdateCanonReferenceRequest) {
+      const state = read();
+      const reference = state.canonReferences.find((item) => item.id === referenceId && item.worldId === worldId);
+      if (!reference) throw new Error("canon_reference_not_found");
+      if (reference.version !== input.expectedVersion) throw new Error("canon_reference_version_conflict");
+      Object.assign(reference, {
+        continuityNotes: input.continuityNotes ?? reference.continuityNotes,
+        status: input.status ?? reference.status,
+        version: reference.version + 1,
+        updatedAt: now().toISOString(),
+      });
+      write(state);
+      return reference;
+    },
+    async promoteCanonReference(worldId: string, referenceId: string, input) {
+      const state = read();
+      const reference = state.canonReferences.find((item) => item.id === referenceId && item.worldId === worldId);
+      if (!reference) throw new Error("canon_reference_not_found");
+      const promotion = promoteCanonReference(input, reference, { promotionId: makeId("promotion"), actor: "development-user", promotedAt: now().toISOString() });
+      Object.assign(reference, promotion.reference);
+      state.canonPromotions.unshift({ ...promotion, referenceVersion: promotion.reference.version, sourceArtifactId: promotion.reference.source.kind === "retained-artifact" ? promotion.reference.source.artifactId : null });
+      write(state);
+      return promotion;
+    },
+    async promoteArtifactToCanon(worldId: string, input: PromoteArtifactToCanonRequest) {
+      const state = read();
+      if (input.confirmation !== "promote-artifact-to-canon" || input.worldId !== worldId) throw new Error("canon_promotion_confirmation_required");
+      const artifact = state.artifacts.find((item) => item.id === input.artifactId);
+      const entity = state.worldEntities.find((item) => item.id === input.entityId && item.worldId === worldId);
+      if (!artifact) throw new Error("artifact_not_found");
+      if (!entity) throw new Error("world_entity_not_found");
+      if (artifact.status !== "accepted") throw new Error("artifact_acceptance_required");
+      if (artifact.retention.state !== "retained") throw new Error("canon_reference_artifact_not_retained");
+      if (entity.version !== input.expectedEntityVersion) throw new Error("world_entity_version_conflict");
+      const acceptance = state.acceptances.find((item) => item.artifactId === artifact.id && item.decision === "accepted");
+      if (!acceptance) throw new Error("artifact_acceptance_required");
+      const createdAt = now().toISOString();
+      const candidate: CanonReference = {
+        schemaVersion: CANON_REFERENCE_SCHEMA_VERSION, id: makeId("reference"), worldId, projectId: artifact.projectId,
+        entityId: entity.id, source: { kind: "retained-artifact", artifactId: artifact.id, label: artifact.name },
+        continuityNotes: input.continuityNotes, status: "candidate",
+        rights: { policy: "owner-controlled", sourceIdentityPromptEligible: false, rawMediaPromptEligible: false },
+        version: 1, createdAt, updatedAt: createdAt,
+      };
+      const promotion = promoteCanonReference({ schemaVersion: PROMOTE_TO_CANON_SCHEMA_VERSION, confirmation: "promote-to-canon", worldId, entityId: entity.id, referenceId: candidate.id, facets: input.facets, note: input.note, expectedReferenceVersion: 1, evidenceReviewId: acceptance.id }, candidate, { promotionId: makeId("promotion"), actor: "development-user", promotedAt: createdAt });
+      state.canonReferences.unshift(promotion.reference);
+      state.canonPromotions.unshift({ ...promotion, referenceVersion: promotion.reference.version, sourceArtifactId: artifact.id });
+      entity.canonReferenceIds.push(promotion.reference.id);
+      write(state);
+      return { schemaVersion: PROMOTE_TO_CANON_SCHEMA_VERSION, artifactId: artifact.id, promotion };
+    },
     async saveCreativeDna(input: CreateCreativeDnaRequest) {
       const state = read();
       const parent = input.parentArtifactId
@@ -407,12 +668,24 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       const original = state.jobs.find((item) => item.id === jobId);
       if (!original) throw new Error("job_not_found");
       if (original.status !== "failed" && original.status !== "cancelled") throw new Error("job_not_retryable");
-      return addJob(state, {
+      const duplicateId = state.idempotencyKeys[idempotencyKey];
+      const duplicate = duplicateId ? state.jobs.find((item) => item.id === duplicateId) : null;
+      if (duplicate) return duplicate;
+      const retried = addJob(state, {
         projectId: original.projectId,
         dnaArtifactId: original.dnaArtifactId,
         modality: original.modality,
         idempotencyKey,
       }, original.id);
+      retried.prompt = original.settingsStamp.prompt;
+      retried.provider = original.provider;
+      retried.settingsStamp = {
+        ...original.settingsStamp,
+        createdAt: retried.createdAt,
+        reusedFromJobId: original.id,
+      };
+      write(state);
+      return retried;
     },
     async reuseJob(jobId: string, idempotencyKey: string) {
       const state = read();
@@ -471,6 +744,32 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       }
       write(state);
       return { artifact, acceptance };
+    },
+    async listArtifactHistory(query: ArtifactHistoryQuery) {
+      const state = reconcile(read());
+      const limit = Math.max(1, Math.min(50, Math.round(Number(query.limit) || 24)));
+      const search = cleanText(query.search, 120).toLocaleLowerCase();
+      const artifacts = [...state.artifacts]
+        .filter((artifact) => !query.projectId || artifact.projectId === query.projectId)
+        .filter((artifact) => !query.kinds?.length || query.kinds.includes(artifact.kind))
+        .filter((artifact) => query.statuses?.length ? query.statuses.includes(artifact.status) : query.includeArchived || artifact.status !== "archived")
+        .filter((artifact) => !search || `${artifact.name} ${artifact.prompt}`.toLocaleLowerCase().includes(search))
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+      const start = query.cursor
+        ? artifacts.findIndex((artifact) => artifact.createdAt < query.cursor!.createdAt || (artifact.createdAt === query.cursor!.createdAt && artifact.id < query.cursor!.artifactId))
+        : 0;
+      const pageArtifacts = start < 0 ? [] : artifacts.slice(start, start + limit);
+      const last = pageArtifacts.at(-1);
+      const nextStart = start < 0 ? artifacts.length : start + pageArtifacts.length;
+      return {
+        artifacts: pageArtifacts,
+        jobs: state.jobs.filter((job) => pageArtifacts.some((artifact) => artifact.jobId === job.id)),
+        acceptances: state.acceptances.filter((acceptance) => pageArtifacts.some((artifact) => artifact.id === acceptance.artifactId)),
+        trainingExamples: state.trainingExamples.filter((example) => pageArtifacts.some((artifact) => artifact.id === example.artifactId)),
+        nextCursor: nextStart < artifacts.length && last ? { createdAt: last.createdAt, artifactId: last.id } : null,
+        hasMore: nextStart < artifacts.length,
+        total: artifacts.length,
+      };
     },
     async uploadMedia() {
       throw new Error("media_upload_requires_creative_studio_worker");

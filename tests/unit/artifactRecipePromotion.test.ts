@@ -175,6 +175,9 @@ describe("artifact winner recipe promotion", () => {
     expect(artifactCanSaveWinningRecipe(artifact, { ...completedJob, status: "running" }, false, workflow)).toBe(false);
     expect(artifactCanSaveWinningRecipe(artifact, completedJob, true, workflow)).toBe(false);
     expect(artifactCanSaveWinningRecipe({ ...artifact, retention: { state: "development-only", size: null } }, completedJob, false, workflow)).toBe(false);
+    const continuityArtifact = { ...artifact, settingsStamp: { ...artifact.settingsStamp, continuity: {} as never } };
+    expect(artifactCanSaveWinningRecipe(continuityArtifact, completedJob, false, workflow)).toBe(false);
+    expect(() => winningRecipeForArtifact(continuityArtifact, workflow)).toThrow("winning_recipe_continuity_not_replayable");
   });
 
   it("promotes video extension compatibility from its final-frame workflow input", () => {

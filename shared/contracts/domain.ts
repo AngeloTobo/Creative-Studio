@@ -115,6 +115,7 @@ export type GenerationSettingsStamp = {
   evolution?: GenerationEvolutionStamp;
   promptEnhancement?: SongPromptEnhancementStamp;
   modelAdapters?: import("./modelTraining").GenerationModelAdapterBinding[];
+  continuity?: import("./worlds").GenerationContinuityStamp;
 };
 
 export type SongPromptProfileId =
@@ -344,6 +345,7 @@ export type EvolutionStudy = {
 
 export type CapabilityKey =
   | "creative-dna"
+  | "creative-worlds"
   | "media-library"
   | "music-generation"
   | "image-generation"

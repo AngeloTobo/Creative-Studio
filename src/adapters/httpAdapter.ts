@@ -33,6 +33,24 @@ import {
   type GenerationRecipesResponse,
   type RecipeEvidenceResponse,
   type UpdateGenerationRecipeRequest,
+  type ArtifactHistoryPageResponse,
+  type ArtifactHistoryQuery,
+  type CanonReferenceResponse,
+  type ContinuityRuleResponse,
+  type CreateCanonReferenceRequest,
+  type CreateContinuityRuleRequest,
+  type CreateWorldEntityRequest,
+  type CreateWorldRequest,
+  type PromoteArtifactCanonResponse,
+  type PromoteArtifactToCanonRequest,
+  type PromoteCanonReferenceResponse,
+  type PromoteToCanonRequest,
+  type UpdateCanonReferenceRequest,
+  type UpdateContinuityRuleRequest,
+  type UpdateWorldEntityRequest,
+  type UpdateWorldRequest,
+  type WorldEntityResponse,
+  type WorldResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -89,6 +107,21 @@ async function uploadWorkflowRequest(file: File, projectId: string, name = "", d
   const payload = await response.json() as ApiResult<ImportWorkflowResponse>;
   if (!response.ok || !payload.ok) throw new Error(payload.ok ? `http_${response.status}` : payload.error);
   return payload.workflow;
+}
+
+function artifactHistoryUrl(query: ArtifactHistoryQuery) {
+  const params = new URLSearchParams({ page: "true" });
+  if (query.projectId) params.set("projectId", query.projectId);
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.cursor) {
+    params.set("cursorCreatedAt", query.cursor.createdAt);
+    params.set("cursorArtifactId", query.cursor.artifactId);
+  }
+  for (const kind of query.kinds ?? []) params.append("kind", kind);
+  for (const status of query.statuses ?? []) params.append("status", status);
+  if (query.includeArchived) params.set("includeArchived", "true");
+  if (query.search?.trim()) params.set("q", query.search.trim());
+  return `${CREATIVE_STUDIO_ROUTES.artifacts}?${params.toString()}`;
 }
 
 export function createHttpAdapter(): StudioAdapter {
@@ -165,6 +198,54 @@ export function createHttpAdapter(): StudioAdapter {
         method: "POST",
         body: JSON.stringify({ decision, note }),
       });
+    },
+    async listArtifactHistory(query: ArtifactHistoryQuery) {
+      const result = await request<ArtifactHistoryPageResponse>(artifactHistoryUrl(query));
+      return result.page;
+    },
+    async createWorld(input: CreateWorldRequest) {
+      const result = await request<WorldResponse>(CREATIVE_STUDIO_ROUTES.worlds, { method: "POST", body: JSON.stringify(input) });
+      return result.world;
+    },
+    async updateWorld(worldId: string, input: UpdateWorldRequest) {
+      const result = await request<WorldResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}`, { method: "PATCH", body: JSON.stringify(input) });
+      return result.world;
+    },
+    async archiveWorld(worldId: string, expectedVersion: number) {
+      const result = await request<WorldResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/archive`, { method: "POST", body: JSON.stringify({ expectedVersion }) });
+      return result.world;
+    },
+    async createWorldEntity(worldId: string, input: CreateWorldEntityRequest) {
+      const result = await request<WorldEntityResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/entities`, { method: "POST", body: JSON.stringify(input) });
+      return result.entity;
+    },
+    async updateWorldEntity(worldId: string, entityId: string, input: UpdateWorldEntityRequest) {
+      const result = await request<WorldEntityResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/entities/${encodeURIComponent(entityId)}`, { method: "PATCH", body: JSON.stringify(input) });
+      return result.entity;
+    },
+    async createContinuityRule(worldId: string, input: CreateContinuityRuleRequest) {
+      const result = await request<ContinuityRuleResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/rules`, { method: "POST", body: JSON.stringify(input) });
+      return result.rule;
+    },
+    async updateContinuityRule(worldId: string, ruleId: string, input: UpdateContinuityRuleRequest) {
+      const result = await request<ContinuityRuleResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/rules/${encodeURIComponent(ruleId)}`, { method: "PATCH", body: JSON.stringify(input) });
+      return result.rule;
+    },
+    async createCanonReference(worldId: string, input: CreateCanonReferenceRequest) {
+      const result = await request<CanonReferenceResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/references`, { method: "POST", body: JSON.stringify(input) });
+      return result.reference;
+    },
+    async updateCanonReference(worldId: string, referenceId: string, input: UpdateCanonReferenceRequest) {
+      const result = await request<CanonReferenceResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/references/${encodeURIComponent(referenceId)}`, { method: "PATCH", body: JSON.stringify(input) });
+      return result.reference;
+    },
+    async promoteCanonReference(worldId: string, referenceId: string, input: PromoteToCanonRequest) {
+      const result = await request<PromoteCanonReferenceResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/references/${encodeURIComponent(referenceId)}/promote`, { method: "POST", body: JSON.stringify(input) });
+      return result.promotion;
+    },
+    async promoteArtifactToCanon(worldId: string, input: PromoteArtifactToCanonRequest) {
+      const result = await request<PromoteArtifactCanonResponse>(`${CREATIVE_STUDIO_ROUTES.worlds}/${encodeURIComponent(worldId)}/promote-artifact`, { method: "POST", body: JSON.stringify(input) });
+      return result.promotion;
     },
     async uploadMedia(projectId: string, file: File, trainingEligible: boolean) {
       return uploadRequest(file, projectId, trainingEligible);

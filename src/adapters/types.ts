@@ -27,6 +27,24 @@ import type {
   GenerationRecipe,
   RecipeEvidenceResponse,
   UpdateGenerationRecipeRequest,
+  ArtifactHistoryPage,
+  ArtifactHistoryQuery,
+  CanonReference,
+  ContinuityRule,
+  CreateCanonReferenceRequest,
+  CreateContinuityRuleRequest,
+  CreateWorldEntityRequest,
+  CreateWorldRequest,
+  PromoteArtifactToCanonRequest,
+  PromoteArtifactToCanonResult,
+  PromoteToCanonRequest,
+  PromoteToCanonResult,
+  UpdateCanonReferenceRequest,
+  UpdateContinuityRuleRequest,
+  UpdateWorldEntityRequest,
+  UpdateWorldRequest,
+  World,
+  WorldEntity,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -43,6 +61,18 @@ export interface StudioAdapter {
   reuseJob(jobId: string, idempotencyKey: string): Promise<Job>;
   cancelJob(jobId: string): Promise<Job>;
   reviewArtifact(artifactId: string, decision: AcceptanceDecision, note: string): Promise<ReviewArtifactResponse>;
+  listArtifactHistory(query: ArtifactHistoryQuery): Promise<ArtifactHistoryPage>;
+  createWorld(input: CreateWorldRequest): Promise<World>;
+  updateWorld(worldId: string, input: UpdateWorldRequest): Promise<World>;
+  archiveWorld(worldId: string, expectedVersion: number): Promise<World>;
+  createWorldEntity(worldId: string, input: CreateWorldEntityRequest): Promise<WorldEntity>;
+  updateWorldEntity(worldId: string, entityId: string, input: UpdateWorldEntityRequest): Promise<WorldEntity>;
+  createContinuityRule(worldId: string, input: CreateContinuityRuleRequest): Promise<ContinuityRule>;
+  updateContinuityRule(worldId: string, ruleId: string, input: UpdateContinuityRuleRequest): Promise<ContinuityRule>;
+  createCanonReference(worldId: string, input: CreateCanonReferenceRequest): Promise<CanonReference>;
+  updateCanonReference(worldId: string, referenceId: string, input: UpdateCanonReferenceRequest): Promise<CanonReference>;
+  promoteCanonReference(worldId: string, referenceId: string, input: PromoteToCanonRequest): Promise<PromoteToCanonResult>;
+  promoteArtifactToCanon(worldId: string, input: PromoteArtifactToCanonRequest): Promise<PromoteArtifactToCanonResult>;
   uploadMedia(projectId: string, file: File, trainingEligible: boolean): Promise<MediaAsset>;
   uploadWorkflow(projectId: string, file: File, name?: string, description?: string): Promise<WorkflowDefinition>;
   saveWorkflowRevision(workflowId: string, input: SaveWorkflowRevisionRequest): Promise<WorkflowDefinition>;

@@ -36,11 +36,15 @@ Every submitted workflow job retains its exact revision, SHA-256 content stamp, 
 - **Scout direction boards:** choosing Scout for an image with an image source queues Refine, Correct, and Discovery as three independent durable evolution jobs under one study ID. Their retained results stay grouped for comparison while each branch keeps its exact prompt, workflow revision, settings, source provenance, and evolution role.
 - **Generation Recipes:** Create can save and reload an owner-scoped recipe containing the exact executable workflow revision, model identifier, prompt profile, scalar parameters, supported source kinds, and Scout/Explore/Master tier. D1 migration `0014_generation_recipes.sql` adds durable recipe and recipe-evidence records. Evidence can be recorded from an owned terminal job only when its project scope, modality, workflow revision, parameters, model, prompt profile, and executable workflow inputs match. To keep visible-work polling inside the free-plan budget, the consolidated snapshot returns the 50 most recently updated active recipes and the 10 newest evidence observations per recipe; an explicit recipe detail request returns up to 100 observations.
 
-### Project context today, Creative Worlds next
+### Creative Worlds and character continuity
 
-Project context is an optional control for local ComfyUI image and video creation, and it is **off by default**. When enabled, Creative Studio appends bounded text from the current project's description and note, suppresses a whole field already present in the authored direction, strips known provenance-only reference identities, shows the exact added text before submission, and retains the combined text through the existing prompt and workflow stamp. It does not affect music or the optional AFDFW route.
+Creative Worlds are project-scoped, versioned continuity records. A World can contain characters, places, and objects; `must`, `prefer`, and `avoid` rules scoped by modality; and provenance-bearing visual or retained-work references. Every update uses an expected version so a stale browser cannot silently overwrite newer canon.
 
-This control is not a persisted Creative World and does not stamp a structured world, character, place, object, canon reference, entity selection, or continuity-rule selection. Typed `World`, `WorldEntity`, `CanonReference`, continuity facet/rule, explicit promote-to-canon, and continuity-directive contracts exist as a foundation only. World persistence, APIs, authoring, selection, evaluation, and structured generation provenance are not implemented in this release.
+Generation can opt into one active World and an exact selection of entity, rule, and canonical-reference versions for a local ComfyUI image or video. The Worker re-loads those owner-scoped records, rejects stale or retired selections, compiles the provider-safe continuity directive, and stamps the exact selected records, versioned redaction references, and compiled text into the durable job. Later World edits therefore cannot rewrite what an earlier result was asked to preserve. Commercial reference identity remains provenance-only; the Worker checks the complete submitted prompt against every stored World reference before anything can reach ComfyUI.
+
+Artifact acceptance and canon are deliberately separate decisions. Accepting a result makes its prompt and settings eligible for CreativeDNA training; it does **not** make the result part of a World. Promoting an accepted, retained artifact to canon requires a second explicit confirmation, a note, selected continuity facets, an active entity version, and the acceptance evidence. The append-only promotion record keeps the actor, reference version, source artifact, and review linkage.
+
+The older Project context toggle remains an optional, off-by-default prompt aid. It is useful for quick local image/video direction, but it is not World canon and does not create a structured continuity stamp.
 
 ### Build and train CreativeDNA
 
@@ -71,6 +75,7 @@ The proof, balanced, and deep recipes remain visible, and the checkpoint hash, s
 - Generation and training continue without an open browser.
 - Every completed result is retained and size-verified before a job becomes complete; accept, reject, and archive do not control retention.
 - Work is ordered newest to oldest. Archived artifacts stay collapsed, video cards use lazy first-frame JPEGs, and only an explicitly opened video mounts a player.
+- The consolidated snapshot stays bounded for fast operational refresh. Complete history is read in explicit pages with a stable `(createdAt, artifactId)` cursor, so equal-timestamp results are neither skipped nor duplicated; each page carries its matching jobs, decisions, and training-evidence records. The gallery renders only IDs proven by the current query, invalidates stale in-flight requests when filters change, and re-reads page one when a newly completed result changes the visible query head.
 - Image, audio, and video review use the correct media controls. Accept and reject require a note, and the append-only decision history keeps the actor and time.
 - Cancellation preserves the original run and immediately exposes recovery. Retry creates a new lineage-linked job rather than rewriting history.
 - A 20-minute threshold creates an awareness warning without cancelling legitimate long local renders. Workload evidence exposes resolution, steps, frames, duration, models, and observed exact-revision timing when available.
@@ -182,7 +187,7 @@ flowchart LR
 
 - The frontend imports shared contracts but no AFDFW frontend code, routes, CSS, components, or branding.
 - Browser traffic is limited to `/api/creative-studio/*`. Unknown API paths return `404`.
-- Creative Studio D1 owns projects, DNA versions, workflows, jobs, training, runners, artifacts, evidence, and decisions.
+- Creative Studio D1 owns projects, DNA versions, Worlds, entities, continuity rules, canon references and promotions, workflows, jobs, training, runners, artifacts, evidence, and decisions.
 - Creative Studio R2 owns uploaded media, every completed result, and retained video thumbnails.
 - Local workflow jobs are claimed by the authenticated machine runner and never enter the AFDFW queue consumer.
 - AFDFW access is method-and-path allowlisted for approved session handoff and explicitly selected image/music generation only. There is no arbitrary forwarder.
@@ -222,9 +227,9 @@ See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the all
 - Image, audio/music, and video workflow execution are supported. 3D workflows may be inspected but are rejected at execution in this release.
 - Video duration choices depend on a recognized control in a compatible workflow. Two-version and three-branch video requests create sequential local jobs, so their total time includes each render.
 - Runtime estimates require comparable completed evidence and exclude unknown queue or cold-model-load time.
-- D1/R2 retention is durable, but current list and snapshot APIs expose bounded recent windows without pagination. Older retained records can therefore fall outside the browser's current history feed.
+- The consolidated snapshot intentionally exposes a bounded recent window; older retained records are available through the cursor-paginated artifact-history API rather than increasing every background refresh.
 - Creative Sessions are browser-and-device local drafts rather than Worker records; they do not synchronize between devices or local-first and remote stores.
-- Project context is an off-by-default local ComfyUI prompt aid, not a persisted World or structured continuity stamp. The typed Worlds contracts are foundation-only in this release.
+- World continuity is supported for local ComfyUI image and video generation. Music continuity and optional AFDFW generation do not accept a World selection in this phase.
 - Local and remote data do not synchronize automatically.
 - AFDFW is optional and never an implicit fallback when a local workflow is missing.
 
@@ -238,7 +243,7 @@ npm run check:all
 
 `npm run check` runs ESLint, browser-domain Vitest, Workers-runtime tests against isolated D1 migrations, the Local Runner self-test, environment validation, the Cloudflare free-tier guard, TypeScript, the production build, and the source secret scan. `check:all` adds the serial desktop/mobile Playwright matrix.
 
-The current four-surface release passed 69 browser-domain tests, 26 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 32 Playwright checks with 26 exercised passes plus six intentional device-specific skips. Rendered checks at 390 x 844 and 1440 x 900 reported zero horizontal overflow and zero console errors or warnings. Exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
+The current World/history release candidate passes 109 browser-domain tests, 32 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 38 Playwright checks with 32 exercised passes plus six intentional device-specific skips. Production migration and deployment proof remain pending; exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
 
 Production configuration can be checked without deploying:
 

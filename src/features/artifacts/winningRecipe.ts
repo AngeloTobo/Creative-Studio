@@ -40,6 +40,7 @@ function exactWorkflowForArtifact(artifact: Artifact, workflow?: WorkflowDefinit
 /** Builds only from the retained artifact stamp; workflow metadata supplies compatibility labels, never replacement values. */
 export function winningRecipeForArtifact(artifact: Artifact, workflow: WorkflowDefinition): CreateGenerationRecipeRequest {
   const stamp = artifact.settingsStamp;
+  if (stamp.continuity) throw new Error("winning_recipe_continuity_not_replayable");
   const stampedWorkflow = stamp.workflow;
   const exactWorkflow = exactWorkflowForArtifact(artifact, workflow);
   if (!exactWorkflow) throw new Error("winning_recipe_workflow_metadata_unavailable");
@@ -82,6 +83,7 @@ export function generationRecipeMatchesArtifact(recipe: GenerationRecipe, artifa
 
 export function artifactCanSaveWinningRecipe(artifact: Artifact, job: Job | undefined, development: boolean, workflow?: WorkflowDefinition) {
   return !development
+    && !artifact.settingsStamp.continuity
     && artifact.retention.state === "retained"
     && artifact.status !== "retaining"
     && artifact.settingsStamp.source === "comfyui-workflow"

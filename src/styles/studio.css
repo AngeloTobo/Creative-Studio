@@ -912,6 +912,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .artifact-filters label { margin-left: auto; }
 .artifact-filters select { cursor: pointer; outline: 0; text-transform: none; }
 .artifact-filters select:focus-visible { border-color: var(--cyan); }
+.artifact-search { display: flex; min-height: 29px; flex: 0 0 auto; align-items: center; gap: 4px; border: 1px solid var(--border-soft); border-radius: 999px; padding-left: 8px; background: rgba(255,255,255,.025); color: var(--text-faint); }
+.artifact-search input { width: 105px; border: 0; outline: 0; background: transparent; color: var(--text-soft); font: inherit; font-size: 9px; }
+.artifact-search input::placeholder { color: var(--text-faint); }
+.artifact-filters .artifact-search button { min-height: 25px; border: 0; border-left: 1px solid var(--border-soft); border-radius: 0; padding: 0 8px; background: transparent; color: var(--cyan); font-size: 8px; }
 .taste-memory-summary { margin-bottom: 11px; overflow: hidden; border-radius: 13px; }
 .taste-memory-summary > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; cursor: pointer; list-style: none; }
 .taste-memory-summary > summary::-webkit-details-marker { display: none; }
@@ -1018,6 +1022,15 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .artifact-details[open] > summary { color: var(--text-soft); }
 .lineage-panel { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.18); color: var(--text-muted); font-size: 9px; }
 .lineage-panel code { color: var(--text-soft); }
+.artifact-continuity-stamp { margin-top: 8px; padding: 10px; border: 1px solid rgba(34,211,238,.2); border-radius: 10px; background: linear-gradient(135deg,rgba(34,211,238,.07),rgba(139,92,246,.07)); }
+.artifact-continuity-stamp header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.artifact-continuity-stamp header span { display: inline-flex; align-items: center; gap: 6px; color: #cffafe; font-size: 9px; }
+.artifact-continuity-stamp header em { font-size: 7px; font-style: normal; font-weight: 800; text-transform: uppercase; }
+.lineage-current { color: #6ee7b7; }
+.lineage-drift { color: #fbbf24; }
+.artifact-continuity-stamp p { margin-top: 7px; color: var(--text-muted); font-size: 8px; line-height: 1.5; }
+.artifact-continuity-stamp > div { display: flex; gap: 5px; margin-top: 7px; overflow-x: auto; scrollbar-width: none; }
+.artifact-continuity-stamp > div span { flex: 0 0 auto; padding: 4px 6px; border-radius: 999px; background: rgba(255,255,255,.05); color: var(--text-faint); font-size: 7px; }
 .lineage-prompt { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(0,0,0,.12); }
 .lineage-prompt summary { cursor: pointer; padding: 8px; color: var(--text-soft); font-weight: 700; }
 .lineage-prompt pre, .lineage-prompt p { margin: 0; padding: 0 8px 8px; color: var(--text-muted); font: inherit; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1068,6 +1081,17 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .review-note-field textarea::placeholder { color: var(--text-faint); }
 .review-note-field > small { display: block; margin-top: 6px; color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; text-align: right; }
 .review-dialog form > footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
+.canon-targets { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.canon-targets label { display: grid; gap: 6px; color: var(--text-muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
+.canon-targets select { width: 100%; min-height: 38px; border: 1px solid var(--border-soft); border-radius: 10px; padding: 0 9px; outline: 0; background: rgba(5,5,18,.55); color: var(--text-main); font-size: 10px; text-transform: none; }
+.canon-targets select:focus { border-color: var(--cyan); }
+.canon-facets { margin-top: 16px; border: 0; }
+.canon-facets legend { color: var(--text-soft); font-size: 9px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.canon-facets > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.canon-facets button { min-height: 28px; border: 1px solid var(--border-soft); border-radius: 999px; padding: 0 9px; color: var(--text-muted); font-size: 8px; text-transform: capitalize; }
+.canon-facets button.on { border-color: rgba(34,211,238,.35); background: rgba(34,211,238,.1); color: #cffafe; }
+.canon-dialog .review-note-field { margin-top: 13px; }
+.canon-dialog .review-note-field textarea { min-height: 82px; }
 .empty-state { grid-column: 1 / -1; display: grid; min-height: 260px; place-items: center; align-content: center; gap: 9px; border-radius: var(--r-xl); text-align: center; }
 .empty-state p { color: var(--text-muted); }
 
@@ -1594,6 +1618,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .artifacts-toolbar .btn { min-height: 32px; padding: 0 10px; }
   .artifact-filters { gap: 5px; margin-bottom: 6px; }
   .artifact-filters button, .artifact-filters select { min-height: 27px; padding: 0 9px; }
+  .artifact-search { min-height: 27px; }
   .taste-memory-summary { margin-bottom: 7px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .taste-memory-summary > summary { min-height: 28px; padding: 3px 0; }
   .taste-memory-summary > summary small { min-width: 0; overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1641,6 +1666,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .video-inspector { padding: 12px; }
   .video-inspector > footer { align-items: stretch; flex-direction: column; }
   .review-dialog { padding: 17px; }
+  .canon-targets { grid-template-columns: 1fr; }
   .review-dialog form > footer { align-items: stretch; flex-direction: column-reverse; }
   .review-dialog form > footer .btn { width: 100%; }
   .media-library-head, .media-upload-actions { align-items: stretch; flex-direction: column; }

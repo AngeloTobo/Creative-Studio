@@ -266,8 +266,10 @@ test("evolution results stay in one side-by-side study instead of repeating in a
     const stamp = (role: string) => ({ schemaVersion: 1, source: "comfyui-workflow", createdAt: time, reusedFromJobId: null, prompt: `${role} rooftop direction`, provider: "local-comfyui", modality: "image", workflow: null, parameters: { prompt: `${role} rooftop direction` }, models: ["z_image_turbo_bf16.safetensors"], inputAssetIds: [], evolution: { schemaVersion: "creative-studio-evolution/1.0", studyId: "evolve_e2e-study-001", role, sourceId: "artifact_source", source: "artifact", sourceKind: "image", sourceName: "Rebecca rooftop", projectCanon: { identity: project.description, currentDirection: project.note }, personalTasteSignalIds: [], projectTasteSignalIds: [], createdAt: time } });
     const jobs = roles.map((role) => ({ id: `job_${role}`, projectId: project.id, dnaArtifactId: "dna_evolution", capability: "IMAGE_GENERATE", modality: "image", status: "completed", progress: 100, prompt: `${role} rooftop direction`, provider: "local-comfyui", upstreamId: `comfy_${role}`, artifactId: `artifact_${role}`, retryOfJobId: null, error: null, createdAt: time, updatedAt: time, startedAt: time, executionStage: "completed", stageUpdatedAt: time, completedAt: time, settingsStamp: stamp(role) }));
     const cancelledJob = { ...jobs[0], id: "job_cancelled", status: "cancelled", progress: 44, artifactId: null, upstreamId: null, executionStage: "cancelled", settingsStamp: stamp("correct") };
-    const artifacts = roles.map((role, index) => ({ id: `artifact_${role}`, projectId: project.id, jobId: `job_${role}`, dnaArtifactId: "dna_evolution", kind: "image", name: `Rebecca · ${role}`, status: index === 0 ? "accepted" : "ready", provider: "local-comfyui", prompt: `${role} rooftop direction`, preview: { kind: "development-gradient", url: null, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: ["artifact_source"], parentArtifactId: "artifact_source" }, retention: { state: "development-only", size: null }, settingsStamp: stamp(role), createdAt: time, updatedAt: time }));
-    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [...jobs, cancelledJob], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [{ id: "accept_evolution", artifactId: "artifact_refine", decision: "accepted", note: "Keep the luminous eyes and controlled silhouette.", actor: "development-user", createdAt: time }], idempotencyKeys: {} }));
+    const artifacts = roles.map((role, index) => ({ id: `artifact_${role}`, projectId: project.id, jobId: `job_${role}`, dnaArtifactId: "dna_evolution", kind: "image", name: `Rebecca · ${role}`, status: index === 0 ? "accepted" : index === 1 ? "rejected" : "ready", provider: "local-comfyui", prompt: `${role} rooftop direction`, preview: { kind: "development-gradient", url: null, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: ["artifact_source"], parentArtifactId: "artifact_source" }, retention: { state: "development-only", size: null }, settingsStamp: stamp(role), createdAt: time, updatedAt: time }));
+    const archivedJob = { ...jobs[2], id: "job_archived_discovery", artifactId: "artifact_archived_discovery" };
+    const archivedArtifact = { ...artifacts[2], id: "artifact_archived_discovery", jobId: archivedJob.id, name: "Rebecca · archived discovery", status: "archived" };
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [...jobs, archivedJob, cancelledJob], artifacts: [...artifacts, archivedArtifact], mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [{ id: "accept_evolution", artifactId: "artifact_refine", decision: "accepted", note: "Keep the luminous eyes and controlled silhouette.", actor: "development-user", createdAt: time }], idempotencyKeys: {} }));
   }, { createdAt });
 
   await page.goto("/#/gallery");
@@ -280,12 +282,24 @@ test("evolution results stay in one side-by-side study instead of repeating in a
   await expect(study).toContainText("Correct");
   await expect(study).toContainText("Discovery");
   await expect(study.locator(".evolution-branch-label > b")).toHaveText(["A", "B", "C"]);
-  await expect(study).toContainText("3 ready · 4 runs");
+  await expect(study).toContainText("3 results · 4 runs");
+  await expect(study.getByRole("heading", { name: "Rebecca · archived discovery" })).toHaveCount(0);
   const noMedia = study.locator(".evolution-no-media");
   await expect(noMedia).toContainText("1 run without media");
   await expect(noMedia.getByText("job_cancelled", { exact: false })).toBeHidden();
   await noMedia.getByText("1 run without media").click();
   await expect(noMedia.getByText("job_cancelled", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "ready 1" }).click();
+  await expect(study.locator(".evolution-branch")).toHaveCount(1);
+  await expect(study.getByRole("heading", { name: "Rebecca · discovery" })).toBeVisible();
+  await expect(study.getByRole("heading", { name: "Rebecca · correct" })).toHaveCount(0);
+  await expect(study.locator(".evolution-no-media")).toHaveCount(0);
+  const archive = page.locator(".archived-artifacts");
+  await archive.getByText("Archived history").click();
+  const archivedStudy = page.getByRole("feed", { name: "Archived artifact history, newest first" }).locator(".evolution-study");
+  await expect(archivedStudy.locator(".evolution-branch")).toHaveCount(1);
+  await expect(archivedStudy.getByRole("heading", { name: "Rebecca · archived discovery" })).toBeVisible();
+  await expect(archivedStudy.getByRole("heading", { name: "Rebecca · refine" })).toHaveCount(0);
   await expect(page.locator(".artifact-grid > .artifact-card")).toHaveCount(0);
 });
 
@@ -308,7 +322,7 @@ test("artifact history keeps active work compact and archived work available on 
   await expect(activeFeed.locator(".artifact-card")).toHaveCount(2);
   await expect(activeFeed.getByRole("heading", { name: "Newest active frame" })).toBeVisible();
   await expect(activeFeed.getByRole("heading", { name: "Archived frame" })).toHaveCount(0);
-  await expect(page.locator(".archived-artifacts > summary")).toContainText("1 hidden item");
+  await expect(page.locator(".archived-artifacts > summary")).toContainText("Hidden · open to load");
 
   await page.getByRole("button", { name: "accepted 1" }).click();
   await expect(activeFeed.getByRole("heading", { name: "Accepted frame" })).toBeVisible();
@@ -321,6 +335,7 @@ test("artifact history keeps active work compact and archived work available on 
   const archive = page.locator(".archived-artifacts");
   await expect(archive).not.toHaveAttribute("open", "");
   await archive.getByText("Archived history").click();
+  await expect(page.locator(".archived-artifacts > summary")).toContainText("1 hidden item");
   await expect(page.getByRole("feed", { name: "Archived artifact history, newest first" }).getByRole("heading", { name: "Archived frame" })).toBeVisible();
   await page.locator(testInfo.project.name === "mobile" ? ".mtabbar" : ".sidebar").getByRole("button", { name: "Create", exact: true }).click();
   await expect(page).toHaveURL(/#\/dna$/);
@@ -373,6 +388,53 @@ test("Projects opens the exact pending trained-DNA review instead of the default
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("heading", { name: "Compare before activation" })).toBeVisible();
   await expect(page.getByText("Rebecca trained direction.", { exact: true })).toBeVisible();
+});
+
+test("Creative Worlds turns an owner upload into explicitly reviewed canon", async ({ page }) => {
+  const createdAt = "2026-08-27T16:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "project_world", activeDnaArtifactId: null, name: "Rebecca world", type: "Character world", status: "active", description: "", note: "", hue: "#d946ef", initials: "RW", createdAt: time, updatedAt: time }],
+      mediaAssets: [{ id: "media_world", projectId: "project_world", kind: "image", name: "Rebecca embryo", originalFileName: "rebecca-embryo.png", mimeType: "image/png", size: 68, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: time, parentAssetIds: [] }, createdAt: time, updatedAt: time }],
+      dnaArtifacts: [], jobs: [], artifacts: [], workflows: [], acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
+    }));
+  }, { createdAt });
+
+  await page.goto("/#/studio");
+  await page.getByRole("button", { name: "New world", exact: true }).click();
+  let dialog = page.getByRole("dialog", { name: "Create a world" });
+  await dialog.getByLabel("World name").fill("Rebecca continuum");
+  await dialog.getByLabel("Premise").fill("A living archive where Rebecca's body and luminous internal structures remain continuous.");
+  await dialog.getByRole("button", { name: "Create world" }).click();
+  await expect(page.getByText("Rebecca continuum", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Add the first character/ }).click();
+  dialog = page.getByRole("dialog", { name: "Add a world element" });
+  await dialog.getByLabel("Name").fill("Rebecca");
+  await dialog.getByLabel("Identity summary").fill("A non-binary intergalactic observer adapting human anatomy through deliberate body modification.");
+  await dialog.getByRole("textbox", { name: "Identity detail", exact: true }).fill("Keep Rebecca's luminous embryonic core and calm, observant presence.");
+  await dialog.getByRole("button", { name: "Add character" }).click();
+  await expect(page.getByText("Rebecca", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Add reference/ }).first().click();
+  dialog = page.getByRole("dialog", { name: "Add canon candidate" });
+  await dialog.getByRole("tab", { name: /Accepted work/ }).click();
+  await expect(dialog.getByText(/0 eligible loaded .* 0 accepted total/)).toBeVisible();
+  await expect(dialog.getByText("All accepted work checked", { exact: true })).toBeVisible();
+  await dialog.getByRole("tab", { name: /Uploads/ }).click();
+  await dialog.getByRole("option", { name: /Rebecca embryo/ }).click();
+  await dialog.getByRole("textbox", { name: "Identity detail", exact: true }).fill("Preserve the violet glow, branching vessels, and suspended embryonic silhouette.");
+  await dialog.getByRole("button", { name: "Add candidate" }).click();
+  await expect(page.getByText("candidate", { exact: true })).toBeVisible();
+  await expect(page.getByText(/0 canon/).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Promote", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "Promote candidate" });
+  await dialog.getByLabel(/Promotion note/).fill("This image establishes Rebecca's primary internal-light anatomy.");
+  await dialog.getByRole("checkbox", { name: /Make these facets canon/ }).check();
+  await dialog.getByRole("button", { name: "Promote to canon" }).click();
+  await expect(page.getByText("canonical", { exact: true })).toBeVisible();
+  await expect(page.getByText(/1 canon/).first()).toBeVisible();
 });
 
 test("CreativeDNA survives the full review loop", async ({ page }) => {

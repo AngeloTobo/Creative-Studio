@@ -46,6 +46,26 @@ import type {
   RecordRecipeEvidenceRequest,
   UpdateGenerationRecipeRequest,
 } from "./generationRecipes";
+import type {
+  CanonPromotion,
+  CanonReference,
+  CreateCanonReferenceRequest,
+  CreateContinuityRuleRequest,
+  CreateWorldEntityRequest,
+  CreateWorldRequest,
+  GenerationContinuitySelection,
+  PromoteArtifactToCanonRequest,
+  PromoteArtifactToCanonResult,
+  PromoteToCanonRequest,
+  PromoteToCanonResult,
+  ContinuityRule,
+  UpdateCanonReferenceRequest,
+  UpdateContinuityRuleRequest,
+  UpdateWorldEntityRequest,
+  UpdateWorldRequest,
+  World,
+  WorldEntity,
+} from "./worlds";
 
 export const CREATIVE_STUDIO_API_PREFIX = "/api/creative-studio" as const;
 
@@ -53,6 +73,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   snapshot: `${CREATIVE_STUDIO_API_PREFIX}/snapshot`,
   session: `${CREATIVE_STUDIO_API_PREFIX}/session`,
   projects: `${CREATIVE_STUDIO_API_PREFIX}/projects`,
+  worlds: `${CREATIVE_STUDIO_API_PREFIX}/worlds`,
   dna: `${CREATIVE_STUDIO_API_PREFIX}/dna`,
   jobs: `${CREATIVE_STUDIO_API_PREFIX}/jobs`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
@@ -71,6 +92,10 @@ export const CREATIVE_STUDIO_ROUTES = {
 
 export type CreativeStudioRoute =
   | "snapshot" | "session" | "projects" | "project-create" | "project-update" | "project-archive"
+  | "worlds-list" | "world-create" | "world-get" | "world-update" | "world-archive"
+  | "world-entity-create" | "world-entity-update" | "world-entity-retire"
+  | "world-rule-create" | "world-rule-update" | "world-rule-retire"
+  | "world-reference-create" | "world-reference-update" | "world-reference-retire" | "world-reference-promote" | "world-artifact-promote"
   | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
@@ -90,6 +115,22 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/projects") return "project-create";
   if (method === "PATCH" && /^\/api\/creative-studio\/projects\/[a-z0-9_]+$/i.test(pathname)) return "project-update";
   if (method === "POST" && /^\/api\/creative-studio\/projects\/[a-z0-9_]+\/archive$/i.test(pathname)) return "project-archive";
+  if (method === "GET" && pathname === "/api/creative-studio/worlds") return "worlds-list";
+  if (method === "POST" && pathname === "/api/creative-studio/worlds") return "world-create";
+  if (method === "GET" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+$/i.test(pathname)) return "world-get";
+  if (method === "PATCH" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+$/i.test(pathname)) return "world-update";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/archive$/i.test(pathname)) return "world-archive";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/entities$/i.test(pathname)) return "world-entity-create";
+  if (method === "PATCH" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/entities\/[a-z0-9_]+$/i.test(pathname)) return "world-entity-update";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/entities\/[a-z0-9_]+\/retire$/i.test(pathname)) return "world-entity-retire";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/rules$/i.test(pathname)) return "world-rule-create";
+  if (method === "PATCH" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/rules\/[a-z0-9_]+$/i.test(pathname)) return "world-rule-update";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/rules\/[a-z0-9_]+\/retire$/i.test(pathname)) return "world-rule-retire";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/references$/i.test(pathname)) return "world-reference-create";
+  if (method === "PATCH" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/references\/[a-z0-9_]+$/i.test(pathname)) return "world-reference-update";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/references\/[a-z0-9_]+\/retire$/i.test(pathname)) return "world-reference-retire";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/references\/[a-z0-9_]+\/promote$/i.test(pathname)) return "world-reference-promote";
+  if (method === "POST" && /^\/api\/creative-studio\/worlds\/[a-z0-9_]+\/promote-artifact$/i.test(pathname)) return "world-artifact-promote";
   if (method === "GET" && pathname === "/api/creative-studio/dna") return "dna-list";
   if (method === "POST" && pathname === "/api/creative-studio/dna") return "dna-create";
   if (method === "GET" && pathname === "/api/creative-studio/jobs") return "jobs-list";
@@ -152,6 +193,11 @@ export type StudioSnapshot = {
   adapter: AdapterDescriptor;
   session: StudioSession;
   projects: Project[];
+  worlds?: World[];
+  worldEntities?: WorldEntity[];
+  continuityRules?: ContinuityRule[];
+  canonReferences?: CanonReference[];
+  canonPromotions?: CanonPromotion[];
   dnaArtifacts: CreativeDnaArtifact[];
   jobs: Job[];
   artifacts: Artifact[];
@@ -181,6 +227,19 @@ export type CreateCreativeDnaRequest = CreativeDnaInput & {
 
 export type CreateProjectResponse = { project: Project };
 export type UpdateProjectResponse = { project: Project };
+export type WorldCollectionsResponse = {
+  worlds: World[];
+  worldEntities: WorldEntity[];
+  continuityRules: ContinuityRule[];
+  canonReferences: CanonReference[];
+  canonPromotions: CanonPromotion[];
+};
+export type WorldResponse = { world: World };
+export type WorldEntityResponse = { entity: WorldEntity };
+export type ContinuityRuleResponse = { rule: ContinuityRule };
+export type CanonReferenceResponse = { reference: CanonReference };
+export type PromoteCanonReferenceResponse = { promotion: PromoteToCanonResult };
+export type PromoteArtifactCanonResponse = { promotion: PromoteArtifactToCanonResult };
 
 export type CreateCreativeDnaResponse = {
   artifact: CreativeDnaArtifact;
@@ -203,6 +262,7 @@ export type SubmitJobRequest = {
   videoVariant?: VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
   evolution?: EvolutionJobContext;
+  continuity?: GenerationContinuitySelection;
 };
 
 export type SubmitJobResponse = {
@@ -222,6 +282,36 @@ export type ReviewArtifactResponse = {
   artifact: Artifact;
   acceptance: Acceptance;
 };
+
+export type ArtifactHistoryCursor = {
+  createdAt: string;
+  artifactId: string;
+};
+
+/** Newest owner-wide artifacts included in the operational snapshot. */
+export const ARTIFACT_SNAPSHOT_LIMIT = 100;
+
+export type ArtifactHistoryQuery = {
+  projectId?: string | null;
+  cursor?: ArtifactHistoryCursor | null;
+  limit?: number;
+  kinds?: GenerationModality[];
+  statuses?: Artifact["status"][];
+  includeArchived?: boolean;
+  search?: string;
+};
+
+export type ArtifactHistoryPage = {
+  artifacts: Artifact[];
+  jobs: Job[];
+  acceptances: Acceptance[];
+  trainingExamples: CreativeTrainingExample[];
+  nextCursor: ArtifactHistoryCursor | null;
+  hasMore: boolean;
+  total: number;
+};
+
+export type ArtifactHistoryPageResponse = { page: ArtifactHistoryPage };
 
 export type UploadMediaResponse = { asset: MediaAsset };
 export type CreateCreativeDnaTrainingJobRequest = {
@@ -323,6 +413,18 @@ export type RunnerModelAdapterEvaluation = ModelAdapterEvaluation;
 export type { CreateModelTrainingJobRequest, ModelAdapterReviewDecision, ReviewModelTrainingDatasetRequest };
 export type { SaveWorkflowRevisionRequest };
 export type { CreateGenerationRecipeRequest, RecordRecipeEvidenceRequest, UpdateGenerationRecipeRequest };
+export type {
+  CreateCanonReferenceRequest,
+  CreateContinuityRuleRequest,
+  CreateWorldEntityRequest,
+  CreateWorldRequest,
+  PromoteArtifactToCanonRequest,
+  PromoteToCanonRequest,
+  UpdateCanonReferenceRequest,
+  UpdateContinuityRuleRequest,
+  UpdateWorldEntityRequest,
+  UpdateWorldRequest,
+};
 
 export type ApiSuccess<T> = { ok: true } & T;
 export type ApiFailure = { ok: false; error: string; message?: string };

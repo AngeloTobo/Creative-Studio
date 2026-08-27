@@ -4,19 +4,35 @@ The browser-facing namespace is fixed to `/api/creative-studio/*`.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/creative-studio/snapshot` | Load the complete owner read model in one request |
+| `GET` | `/api/creative-studio/snapshot` | Load the bounded owner operational read model, including current World collections |
 | `GET` | `/api/creative-studio/session` | Same-origin session descriptor |
 | `GET` | `/api/creative-studio/projects` | List Creative Studio projects |
 | `POST` | `/api/creative-studio/projects` | Create an owned project from user input |
 | `PATCH` | `/api/creative-studio/projects/:id` | Edit an owned active or paused project |
 | `POST` | `/api/creative-studio/projects/:id/archive` | Archive an owned project without deleting history |
+| `GET` | `/api/creative-studio/worlds` | List owned Worlds with their entities, rules, references, and promotion records |
+| `POST` | `/api/creative-studio/worlds` | Create a project-scoped World |
+| `GET` | `/api/creative-studio/worlds/:id` | Read one owned World collection |
+| `PATCH` | `/api/creative-studio/worlds/:id` | Update a World at an expected version |
+| `POST` | `/api/creative-studio/worlds/:id/archive` | Archive a World without deleting continuity history |
+| `POST` | `/api/creative-studio/worlds/:id/entities` | Create a versioned character, place, or object |
+| `PATCH` | `/api/creative-studio/worlds/:id/entities/:entityId` | Update an entity at an expected version |
+| `POST` | `/api/creative-studio/worlds/:id/entities/:entityId/retire` | Retire an entity without deleting its history |
+| `POST` | `/api/creative-studio/worlds/:id/rules` | Create a modality-scoped continuity rule |
+| `PATCH` | `/api/creative-studio/worlds/:id/rules/:ruleId` | Update a continuity rule at an expected version |
+| `POST` | `/api/creative-studio/worlds/:id/rules/:ruleId/retire` | Retire a continuity rule |
+| `POST` | `/api/creative-studio/worlds/:id/references` | Create a candidate provenance-bearing canon reference |
+| `PATCH` | `/api/creative-studio/worlds/:id/references/:referenceId` | Update a candidate reference at an expected version |
+| `POST` | `/api/creative-studio/worlds/:id/references/:referenceId/retire` | Retire a canon reference |
+| `POST` | `/api/creative-studio/worlds/:id/references/:referenceId/promote` | Explicitly promote a candidate reference to canon |
+| `POST` | `/api/creative-studio/worlds/:id/promote-artifact` | Explicitly promote an accepted retained artifact to canon |
 | `GET` | `/api/creative-studio/dna` | List versioned CreativeDNA artifacts |
 | `POST` | `/api/creative-studio/dna` | Create a root or child DNA version |
 | `GET` | `/api/creative-studio/jobs` | List durable jobs without driving their lifecycle |
 | `POST` | `/api/creative-studio/jobs` | Persist one idempotent ComfyUI workflow job or explicitly selected optional AFDFW image/music job |
 | `POST` | `/api/creative-studio/jobs/:id/retry` | Create a lineage-linked retry of a failed or cancelled job |
 | `POST` | `/api/creative-studio/jobs/:id/cancel` | Stop Creative Studio tracking for an active job |
-| `GET` | `/api/creative-studio/artifacts` | List artifacts and acceptance history |
+| `GET` | `/api/creative-studio/artifacts` | Read the bounded legacy list, or a cursor-safe history page when query parameters are present |
 | `GET` | `/api/creative-studio/artifacts/:id/media` | Serve retained R2 media, with temporary mediation only while retention is pending |
 | `GET` | `/api/creative-studio/artifacts/:id/thumbnail` | Serve the retained first-frame JPEG for a video artifact |
 | `POST` | `/api/creative-studio/artifacts/:id/{accepted,rejected,archived}` | Record an explicit decision |
@@ -35,6 +51,22 @@ When `BACKEND_MODE=development` and `LOCAL_HARDWARE_ONLY=true`, the BFF is a loc
 The generation request chooses exactly one execution route. A `workflow` bundle creates a Creative Studio `local-comfyui` job and cannot also name a provider. A direct production image/music request must include `provider: "afdfw"`; omitting it returns `generation_provider_required`, so AFDFW can never become an implicit fallback. The browser-storage and simulated Worker development paths likewise require the explicit `development-preview` provider label.
 
 Project lists may be empty. The Worker never creates seeded projects, and archived projects remain available for historical counts while being excluded from new DNA and generation writes.
+
+## Creative World and canon boundary
+
+Worlds, entities, continuity rules, references, and promotions are Creative Studio-owned records scoped to the authenticated owner and one project. Mutable records use monotonic versions and expected-version writes. Archive and retire operations preserve history.
+
+A generation `continuity` selection contains the exact version of its World plus every selected entity, rule, and canonical reference. The Worker reloads all of them, verifies owner/project/world membership and active state, rejects stale versions, compiles a rights-safe directive, and stores an immutable `GenerationContinuityStamp` with both the compiled text and exact record snapshots. The current path permits this only for local ComfyUI image and video workflows; music and AFDFW requests fail closed if continuity is supplied.
+
+Artifact acceptance is not canon promotion. The artifact-promotion route additionally requires an accepted decision record, durable retained media, an active entity at the expected version, selected facets, continuity notes, a bounded owner note, and the literal `promote-artifact-to-canon` confirmation. It creates a new canonical retained-artifact reference and an append-only promotion row; it does not rewrite the artifact decision or any AFDFW record. Direct reference promotion likewise requires an expected reference version, selected facets, a note, and the literal `promote-to-canon` confirmation.
+
+## Artifact-history pagination
+
+`GET /api/creative-studio/artifacts` without a query string preserves the bounded snapshot-era response. Supplying history query parameters returns `{ page }`, where the page contains artifacts and only their matching jobs, acceptance decisions, and CreativeDNA training examples.
+
+Supported parameters are `projectId`, `cursorCreatedAt`, `cursorArtifactId`, `limit`, repeated or comma-separated `kind`, repeated or comma-separated `status`, `includeArchived`, and `q`. `limit` defaults to 24 and is normalized into the 1-to-50 range. The cursor pair is required together and continues the stable `created_at DESC, id DESC` ordering. The response carries `nextCursor`, `hasMore`, and the filtered `total`. Invalid cursors, kinds, and statuses fail closed.
+
+The snapshot remains bounded so active-work refresh stays cheap. Opening Results reads its first history page, and a changed recent snapshot head may reread only that current query so a newly completed result appears without exposing an unproven cached gap. Older pages, World CRUD, and canon decisions remain explicit owner actions; this phase adds no polling timer, runner claim, cron, Queue producer, or AFDFW call. In local-first mode those requests, D1 reads/writes, and retained-history access stay on `127.0.0.1` and consume no Cloudflare allowance. Local and remote stores still do not synchronize automatically.
 
 ## AFDFW allowlist
 

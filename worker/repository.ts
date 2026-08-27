@@ -2,6 +2,7 @@ import {
   compileCreativeDna,
   creativeDnaReferenceAssetIds,
   creativeDnaGenerationPrompt,
+  ARTIFACT_SNAPSHOT_LIMIT,
   PROJECT_HUES,
   resolveCreativeDnaGenerationArtifact,
   videoGenerationVariantLabel,
@@ -9,6 +10,8 @@ import {
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
+  type ArtifactHistoryPage,
+  type ArtifactHistoryQuery,
   type CreateCreativeDnaRequest,
   type CreativeDnaArtifact,
   type CreativeTrainingExample,
@@ -698,12 +701,12 @@ function mapJob(row: JobRow): Job {
 }
 
 export async function listJobs(env: Env, ownerId: string): Promise<Job[]> {
-  const result = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<JobRow>();
+  const result = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? order by created_at desc, id desc limit 100`).bind(ownerId).all<JobRow>();
   return (result.results ?? []).map(mapJob);
 }
 
 export async function listJobRuntime(env: Env, ownerId: string) {
-  const result = await env.DB.prepare(`select id, runner_id as runnerId from creative_jobs where owner_id = ? order by created_at desc limit 100`)
+  const result = await env.DB.prepare(`select id, runner_id as runnerId from creative_jobs where owner_id = ? order by created_at desc, id desc limit 100`)
     .bind(ownerId).all<{ id: string; runnerId: string | null }>();
   return Object.fromEntries((result.results ?? []).map((row) => [row.id, { runnerId: row.runnerId }]));
 }
@@ -1120,27 +1123,142 @@ type ArtifactRow = {
   retainedKey: string | null; retainedSize: number | null; thumbnailKey: string | null; createdAt: string; updatedAt: string; settingsStampJson: string;
 };
 
-export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
-  const result = await env.DB.prepare(`select id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId, kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl, preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId, retained_key as retainedKey, retained_size as retainedSize, thumbnail_key as thumbnailKey, created_at as createdAt, updated_at as updatedAt, settings_stamp_json as settingsStampJson from creative_artifacts where owner_id = ? order by created_at desc limit 100`).bind(ownerId).all<ArtifactRow>();
-  return (result.results ?? []).map((row) => {
-    const settingsStamp = parseSettingsStamp(row.settingsStampJson, {
-      source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
-      provider: row.provider, modality: row.kind, workflow: null, parameters: { prompt: row.prompt }, models: [], inputAssetIds: [],
-    });
-    return {
-      id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
-      name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
-      preview: { kind: row.previewKind, url: row.previewUrl, posterUrl: row.thumbnailKey ? `/api/creative-studio/artifacts/${row.id}/thumbnail` : null, colors: [row.previewFrom, row.previewTo] },
-      lineage: { sourceArtifactIds: settingsStamp.inputArtifactIds ?? [], parentArtifactId: row.parentArtifactId },
-      retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
-      settingsStamp,
-      createdAt: row.createdAt, updatedAt: row.updatedAt,
-    };
+const ARTIFACT_COLUMNS = `id, project_id as projectId, job_id as jobId, dna_artifact_id as dnaArtifactId,
+  kind, name, status, provider, prompt, preview_kind as previewKind, preview_url as previewUrl,
+  preview_from as previewFrom, preview_to as previewTo, parent_artifact_id as parentArtifactId,
+  retained_key as retainedKey, retained_size as retainedSize, thumbnail_key as thumbnailKey,
+  created_at as createdAt, updated_at as updatedAt, settings_stamp_json as settingsStampJson`;
+
+function mapArtifact(row: ArtifactRow): Artifact {
+  const settingsStamp = parseSettingsStamp(row.settingsStampJson, {
+    source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
+    provider: row.provider, modality: row.kind, workflow: null, parameters: { prompt: row.prompt }, models: [], inputAssetIds: [],
   });
+  return {
+    id: row.id, projectId: row.projectId, jobId: row.jobId, dnaArtifactId: row.dnaArtifactId, kind: row.kind,
+    name: row.name, status: row.status, provider: row.provider, prompt: row.prompt,
+    preview: { kind: row.previewKind, url: row.previewUrl, posterUrl: row.thumbnailKey ? `/api/creative-studio/artifacts/${row.id}/thumbnail` : null, colors: [row.previewFrom, row.previewTo] },
+    lineage: { sourceArtifactIds: settingsStamp.inputArtifactIds ?? [], parentArtifactId: row.parentArtifactId },
+    retention: { state: row.previewKind === "development-gradient" ? "development-only" : row.retainedKey ? "retained" : "pending", size: row.retainedSize === null ? null : Number(row.retainedSize) },
+    settingsStamp,
+    createdAt: row.createdAt, updatedAt: row.updatedAt,
+  };
+}
+
+export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
+  const result = await env.DB.prepare(`select ${ARTIFACT_COLUMNS} from creative_artifacts where owner_id = ? order by created_at desc, id desc limit ?`).bind(ownerId, ARTIFACT_SNAPSHOT_LIMIT).all<ArtifactRow>();
+  return (result.results ?? []).map(mapArtifact);
+}
+
+export async function artifactById(env: Env, ownerId: string, artifactId: string) {
+  const row = await env.DB.prepare(`select ${ARTIFACT_COLUMNS} from creative_artifacts where id = ? and owner_id = ?`)
+    .bind(artifactId, ownerId).first<ArtifactRow>();
+  return row ? mapArtifact(row) : null;
+}
+
+const ARTIFACT_STATUSES = new Set<Artifact["status"]>(["retaining", "ready", "accepted", "rejected", "archived"]);
+const ARTIFACT_KINDS = new Set<Artifact["kind"]>(["music", "image", "video"]);
+
+/** Stable, owner-scoped history pages. The live snapshot remains a bounded operational window. */
+export async function listArtifactHistoryPage(env: Env, ownerId: string, query: ArtifactHistoryQuery = {}): Promise<ArtifactHistoryPage> {
+  const limit = Math.max(1, Math.min(50, Math.round(Number(query.limit) || 24)));
+  const projectId = boundedText(query.projectId, 100);
+  const search = boundedText(query.search, 120).toLocaleLowerCase();
+  const kinds = [...new Set(query.kinds ?? [])];
+  const statuses = [...new Set(query.statuses ?? [])];
+  if (kinds.some((kind) => !ARTIFACT_KINDS.has(kind))) throw new Error("invalid_artifact_history_kind");
+  if (statuses.some((status) => !ARTIFACT_STATUSES.has(status))) throw new Error("invalid_artifact_history_status");
+  const cursor = query.cursor ?? null;
+  if (cursor && (!/^\d{4}-\d{2}-\d{2}T/.test(cursor.createdAt)
+    || !Number.isFinite(Date.parse(cursor.createdAt))
+    || !/^[a-z0-9_]{2,100}$/i.test(cursor.artifactId))) throw new Error("invalid_artifact_history_cursor");
+
+  const clauses = ["owner_id = ?"];
+  const bindings: unknown[] = [ownerId];
+  if (projectId) {
+    clauses.push("project_id = ?");
+    bindings.push(projectId);
+  }
+  if (kinds.length) {
+    clauses.push(`kind in (${kinds.map(() => "?").join(", ")})`);
+    bindings.push(...kinds);
+  }
+  if (statuses.length) {
+    clauses.push(`status in (${statuses.map(() => "?").join(", ")})`);
+    bindings.push(...statuses);
+  } else if (!query.includeArchived) {
+    clauses.push("status <> 'archived'");
+  }
+  if (search) {
+    const like = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+    clauses.push("(lower(name) like ? escape '\\' or lower(prompt) like ? escape '\\')");
+    bindings.push(like, like);
+  }
+  const unpagedWhere = clauses.join(" and ");
+  const pageClauses = [...clauses];
+  const pageBindings = [...bindings];
+  if (cursor) {
+    pageClauses.push("(created_at < ? or (created_at = ? and id < ?))");
+    pageBindings.push(cursor.createdAt, cursor.createdAt, cursor.artifactId);
+  }
+  const [rows, count] = await Promise.all([
+    env.DB.prepare(`select ${ARTIFACT_COLUMNS} from creative_artifacts where ${pageClauses.join(" and ")}
+      order by created_at desc, id desc limit ?`).bind(...pageBindings, limit + 1).all<ArtifactRow>(),
+    env.DB.prepare(`select count(*) as total from creative_artifacts where ${unpagedWhere}`)
+      .bind(...bindings).first<{ total: number }>(),
+  ]);
+  const availableRows = rows.results ?? [];
+  const hasMore = availableRows.length > limit;
+  const pageRows = availableRows.slice(0, limit);
+  const artifacts = pageRows.map(mapArtifact);
+  const artifactIds = artifacts.map((artifact) => artifact.id);
+  const jobIds = [...new Set(artifacts.map((artifact) => artifact.jobId))];
+  let jobs: Job[] = [];
+  let acceptances: Acceptance[] = [];
+  let trainingExamples: CreativeTrainingExample[] = [];
+  if (jobIds.length) {
+    const jobRows = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs
+      where owner_id = ? and id in (${jobIds.map(() => "?").join(", ")})`)
+      .bind(ownerId, ...jobIds).all<JobRow>();
+    jobs = (jobRows.results ?? []).map(mapJob);
+  }
+  if (artifactIds.length) {
+    const [acceptanceRows, exampleRows] = await Promise.all([
+      env.DB.prepare(`select id, artifact_id as artifactId, decision, note, actor, created_at as createdAt
+        from creative_acceptances where owner_id = ? and artifact_id in (${artifactIds.map(() => "?").join(", ")})
+        order by created_at desc, id desc`).bind(ownerId, ...artifactIds).all<Acceptance>(),
+      env.DB.prepare(`select id, project_id as projectId, dna_artifact_id as dnaArtifactId,
+        artifact_id as artifactId, kind, status, prompt, settings_stamp_json as settingsStampJson,
+        created_at as createdAt, updated_at as updatedAt from creative_training_examples
+        where owner_id = ? and artifact_id in (${artifactIds.map(() => "?").join(", ")})
+        order by created_at desc, id desc`).bind(ownerId, ...artifactIds).all<TrainingExampleRow>(),
+    ]);
+    acceptances = (acceptanceRows.results ?? []) as Acceptance[];
+    trainingExamples = (exampleRows.results ?? []).map((row) => {
+      const { settingsStampJson, ...example } = row;
+      return {
+        ...example,
+        settingsStamp: parseSettingsStamp(settingsStampJson, {
+          source: "creative-dna", createdAt: row.createdAt, reusedFromJobId: null, prompt: row.prompt,
+          provider: "unknown", modality: row.kind, workflow: null, parameters: { prompt: row.prompt }, models: [], inputAssetIds: [],
+        }),
+      };
+    });
+  }
+  const last = artifacts.at(-1);
+  return {
+    artifacts,
+    jobs,
+    acceptances,
+    trainingExamples,
+    nextCursor: hasMore && last ? { createdAt: last.createdAt, artifactId: last.id } : null,
+    hasMore,
+    total: Number(count?.total ?? 0),
+  };
 }
 
 export async function listAcceptances(env: Env, ownerId: string): Promise<Acceptance[]> {
-  const result = await env.DB.prepare(`select id, artifact_id as artifactId, decision, note, actor, created_at as createdAt from creative_acceptances where owner_id = ? order by created_at desc limit 200`).bind(ownerId).all<Acceptance>();
+  const result = await env.DB.prepare(`select id, artifact_id as artifactId, decision, note, actor, created_at as createdAt from creative_acceptances where owner_id = ? order by created_at desc, id desc limit 200`).bind(ownerId).all<Acceptance>();
   return (result.results ?? []) as Acceptance[];
 }
 
@@ -1183,7 +1301,7 @@ export async function reviewArtifact(env: Env, ownerId: string, artifactId: stri
       else status end, updated_at = ? where artifact_id = ? and owner_id = ?`)
       .bind(decision, decision, now, artifactId, ownerId),
   ]);
-  const artifact = (await listArtifacts(env, ownerId)).find((item) => item.id === artifactId);
+  const artifact = await artifactById(env, ownerId, artifactId);
   if (!artifact) throw new Error("artifact_not_found");
   return { artifact, acceptance };
 }

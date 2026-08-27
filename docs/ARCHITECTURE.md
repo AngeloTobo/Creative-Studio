@@ -18,7 +18,7 @@ flowchart LR
   BFF -->|"lease + immutable bundle"| LR["Windows Local Runner"]
   LR -->|"localhost only"| COMFY["ComfyUI 127.0.0.1:8188"]
   LR -->|"verified output"| BFF
-  D1 --> HIST["DNA, jobs, artifacts, decisions"]
+  D1 --> HIST["DNA, Worlds, jobs, artifacts, decisions"]
   R2 --> MEDIA["Uploads and every completed result"]
 ```
 
@@ -34,7 +34,7 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 - The frontend owns presentation and interaction only. It imports shared types but no Worker or AFDFW source.
 - The BFF owns authentication handoff, validation, idempotent job creation, capability translation, and media mediation.
 - The queue consumer owns only explicitly selected AFDFW submission and per-generation reconciliation. A scheduled sweep re-enqueues due AFDFW jobs after delivery or runtime interruptions; local workflow jobs are claimed by the Local Runner instead.
-- Creative Studio D1 owns project metadata, CreativeDNA in every environment, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only decisions.
+- Creative Studio D1 owns project metadata, CreativeDNA in every environment, versioned Worlds/entities/rules/references, append-only canon promotions, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only review decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
 - Local Runner 1.4 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
@@ -51,12 +51,31 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 7. AFDFW image/music generation is a distinct optional action. Its request must explicitly name the `afdfw` provider; the Worker never falls through to AFDFW when no workflow was supplied.
 8. Either completion path creates a `retaining` artifact and writes the result to a deterministic Creative Studio R2 key. Only after size verification does the job become `completed` and the artifact become `ready`; for video, the runner then stores an independently bounded first-frame JPEG under the same artifact. Later review never changes AFDFW canonical state.
 
+## Creative Worlds and character continuity
+
+Creative Worlds add a structured continuity layer without making generation or review implicit:
+
+1. An owned project can persist a versioned World and versioned character, place, or object entities.
+2. Each entity can keep bounded aliases and facet/value attributes. Versioned `must`, `prefer`, and `avoid` rules can target selected entities and image, video, or music modalities.
+3. Canon references retain source provenance, continuity notes, and a rights policy. Commercial-reference identity is permitted only in provenance and is excluded from provider prompt text.
+4. A generation request selects the exact World, entity, rule, and canonical-reference versions that the owner inspected. The Worker reloads every record under the authenticated owner and project, rejects missing, stale, retired, foreign, or noncanonical selections, and compiles the directive authoritatively.
+5. Local ComfyUI image and video generation must contain that exact compiled suffix in the workflow's positive prompt. The resulting `GenerationSettingsStamp.continuity` freezes the selection, compiled directive, and complete versioned record snapshots. A later edit creates new current state without altering older generation evidence.
+6. Music continuity is reserved in the shared contract but rejected by the current generation path. Optional AFDFW generation cannot receive a World selection.
+
+Artifact review and World canon are independent state machines. Accepting a retained output controls CreativeDNA training eligibility only. Promoting it to canon is a second explicit, note-bearing action that requires an accepted decision, retained bytes, an active World/entity at the expected version, selected continuity facets, and the exact confirmation string. Promotion creates a canonical retained-artifact reference plus an append-only `CanonPromotion`; it never mutates AFDFW state.
+
+## Cursor-safe artifact history
+
+The consolidated snapshot is an operational window, not the archive transport. Complete history uses explicit keyset pages ordered by `created_at DESC, id DESC`. The cursor carries both values, which makes the boundary stable even when multiple artifacts share a timestamp. A page includes the matching artifacts plus their exact jobs, acceptance decisions, and CreativeDNA training examples, and supports project, modality, status, archived, and text filters. Stable D1 indexes back the same ordering. The browser keeps query-specific loaded IDs rather than treating the globally merged snapshot as a contiguous page; changing a project or filter invalidates in-flight responses, and grouped studies are projected and re-sorted from only the branches proven by that query.
+
+Page requests are owner actions rather than a new polling loop. The browser continues to refresh only the bounded snapshot while visible active work exists; loading older history does not enlarge every refresh or add a cron, Queue producer, or runner claim.
+
 ## Adapters
 
 - `development-local-storage` is deliberately visible and browser-scoped. Its media is a gradient placeholder.
 - `creative-studio-bff` is backend-scoped. In Worker development mode, D1 and the Wrangler-local R2 store are durable across process restarts. Local ComfyUI workflow jobs retain real outputs; only the explicitly labeled development renderer remains non-media.
 - Production uses the `AFDFW` same-account service binding, dedicated D1/R2/Queue bindings, an hourly recovery trigger, and Cloudflare Access over `cs.angelotoborg.com/*`.
-- The browser reads one consolidated Worker snapshot and polls only once per minute while durable work is active and the tab is visible. The Local Runner uses one unified work claim per idle minute and folds its machine heartbeat into active job heartbeats. The enforced free-plan baseline is at most 2,904 Worker invocations per day before explicit owner actions or active Queue deliveries.
+- The browser reads one bounded consolidated Worker snapshot and polls only once per minute while durable work is active and the tab is visible. World edits, canon promotion, and older-history pages are explicit owner requests, not polling sources. The Local Runner uses one unified work claim per idle minute and folds its machine heartbeat into active job heartbeats. The enforced free-plan baseline is at most 2,904 Worker invocations per day before explicit owner actions or active Queue deliveries.
 
 ## Media intake and training boundary
 
