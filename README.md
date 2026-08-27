@@ -243,7 +243,7 @@ npm run check:all
 
 `npm run check` runs ESLint, browser-domain Vitest, Workers-runtime tests against isolated D1 migrations, the Local Runner self-test, environment validation, the Cloudflare free-tier guard, TypeScript, the production build, and the source secret scan. `check:all` adds the serial desktop/mobile Playwright matrix.
 
-The current World/history release candidate passes 109 browser-domain tests, 32 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 38 Playwright checks with 32 exercised passes plus six intentional device-specific skips. Production migration and deployment proof remain pending; exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
+The production-proven World/history release passes 109 browser-domain tests, 32 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 38 Playwright checks with 32 exercised passes plus six intentional device-specific skips. Migrations `0015` and `0016` are applied remotely and Worker version `1b3e407e-5eee-4fb4-8743-5e45b3f6efc5` is deployed at 100%; exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
 
 Production configuration can be checked without deploying:
 
