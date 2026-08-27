@@ -102,6 +102,8 @@
 .home-continue > header .link-btn { display: inline-flex; align-items: center; gap: 5px; }
 .home-continue-rail { display: flex; gap: 9px; margin-top: 10px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
 .home-run-chip, .home-artifact-chip, .home-empty-continue { display: flex; width: 188px; min-width: 188px; align-items: center; gap: 9px; border: 1px solid var(--border-soft); border-radius: 13px; padding: 8px; background: rgba(255,255,255,.025); text-align: left; }
+.home-draft-chip { width: 232px; min-width: 232px; border-color: rgba(34,211,238,.24); background: linear-gradient(135deg,rgba(34,211,238,.08),rgba(217,70,239,.07)); }
+.home-draft-chip > svg:first-child { color: var(--cyan); }
 .home-run-chip > span, .home-artifact-chip > span, .home-empty-continue > span { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
 .home-run-chip strong, .home-artifact-chip strong, .home-empty-continue strong, .home-run-chip small, .home-artifact-chip small, .home-empty-continue small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-run-chip strong, .home-artifact-chip strong, .home-empty-continue strong { font-size: 10.5px; }

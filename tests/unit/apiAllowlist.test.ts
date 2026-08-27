@@ -21,6 +21,12 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/workflows")).toBe("workflow-import");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/workflows/workflow_123/revisions")).toBe("workflow-revision-create");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/workflows/workflow_123/content")).toBe("workflow-content");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/recipes")).toBe("recipes-list");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/recipes")).toBe("recipe-create");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/recipes/recipe_123")).toBe("recipe-get");
+    expect(matchCreativeStudioRoute("PATCH", "/api/creative-studio/recipes/recipe_123")).toBe("recipe-update");
+    expect(matchCreativeStudioRoute("DELETE", "/api/creative-studio/recipes/recipe_123")).toBe("recipe-delete");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/recipes/recipe_123/evidence")).toBe("recipe-evidence-create");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/training-jobs")).toBe("training-jobs-list");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs")).toBe("training-job-create");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs/dnatraining_123/review")).toBe("training-job-review");
@@ -38,6 +44,8 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/admin")) .toBeNull();
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/proxy/api/profile")) .toBeNull();
     expect(matchCreativeStudioRoute("GET", "/api/profile-image/generations")) .toBeNull();
+    expect(matchCreativeStudioRoute("PUT", "/api/creative-studio/recipes/recipe_123")) .toBeNull();
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/recipes/recipe_123/run")) .toBeNull();
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/training-jobs/dnatraining_123/complete")) .toBeNull();
   });
 });

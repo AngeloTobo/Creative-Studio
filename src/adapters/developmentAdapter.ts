@@ -137,6 +137,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     artifacts,
     mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    recipes: [],
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingReviews,
@@ -479,6 +480,24 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async saveWorkflowRevision() {
       throw new Error("workflow_revision_requires_creative_studio_worker");
+    },
+    async listGenerationRecipes() {
+      return [];
+    },
+    async getGenerationRecipe() {
+      throw new Error("generation_recipes_require_creative_studio_worker");
+    },
+    async createGenerationRecipe() {
+      throw new Error("generation_recipes_require_creative_studio_worker");
+    },
+    async updateGenerationRecipe() {
+      throw new Error("generation_recipes_require_creative_studio_worker");
+    },
+    async deleteGenerationRecipe() {
+      throw new Error("generation_recipes_require_creative_studio_worker");
+    },
+    async recordGenerationRecipeEvidence() {
+      throw new Error("generation_recipes_require_creative_studio_worker");
     },
     async startCreativeDnaTraining() {
       throw new Error("creative_dna_training_requires_creative_studio_worker");

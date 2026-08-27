@@ -23,6 +23,10 @@ import type {
   ModelAdapterReviewDecision,
   ReviewModelTrainingDatasetRequest,
   ReviewModelAdapterResponse,
+  CreateGenerationRecipeRequest,
+  GenerationRecipe,
+  RecipeEvidenceResponse,
+  UpdateGenerationRecipeRequest,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -42,6 +46,12 @@ export interface StudioAdapter {
   uploadMedia(projectId: string, file: File, trainingEligible: boolean): Promise<MediaAsset>;
   uploadWorkflow(projectId: string, file: File, name?: string, description?: string): Promise<WorkflowDefinition>;
   saveWorkflowRevision(workflowId: string, input: SaveWorkflowRevisionRequest): Promise<WorkflowDefinition>;
+  listGenerationRecipes(includeArchived?: boolean): Promise<GenerationRecipe[]>;
+  getGenerationRecipe(recipeId: string): Promise<GenerationRecipe>;
+  createGenerationRecipe(input: CreateGenerationRecipeRequest): Promise<GenerationRecipe>;
+  updateGenerationRecipe(recipeId: string, input: UpdateGenerationRecipeRequest): Promise<GenerationRecipe>;
+  deleteGenerationRecipe(recipeId: string): Promise<GenerationRecipe>;
+  recordGenerationRecipeEvidence(recipeId: string, jobId: string): Promise<RecipeEvidenceResponse>;
   startCreativeDnaTraining(input: CreateCreativeDnaTrainingJobRequest): Promise<CreativeDnaTrainingJob>;
   cancelCreativeDnaTraining(jobId: string): Promise<CreativeDnaTrainingJob>;
   reviewCreativeDnaTraining(jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string): Promise<ReviewCreativeDnaTrainingResponse>;

@@ -29,6 +29,9 @@ import {
   type RunnerCompleteTrainingRequest,
   type ReviewCreativeDnaTrainingRequest,
   type CreateModelTrainingJobRequest,
+  type CreateGenerationRecipeRequest,
+  type RecordRecipeEvidenceRequest,
+  type UpdateGenerationRecipeRequest,
   type ReviewModelTrainingDatasetRequest,
   type ReviewModelAdapterRequest,
   type RunnerModelTrainingHeartbeatRequest,
@@ -52,10 +55,14 @@ import {
   createLocalDna,
   createProject,
   createQueuedJob,
+  createGenerationRecipe,
+  deleteGenerationRecipe,
+  generationRecipeById,
   jobById,
   listAcceptances,
   listArtifacts,
   listJobs,
+  listGenerationRecipes,
   listJobRuntime,
   listLocalDna,
   listMediaAssets,
@@ -65,6 +72,8 @@ import {
   reconcileDevelopmentJobs,
   reviewArtifact,
   runnerInputById,
+  recordGenerationRecipeEvidence,
+  updateGenerationRecipe,
   updateProject,
 } from "../repository";
 import { retainCompletedArtifact } from "../retention";
@@ -145,7 +154,8 @@ function statusFor(error: string) {
     || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable"
     || error === "training_review_required" || error === "training_review_not_ready" || error === "training_evidence_already_reserved"
     || error === "model_training_job_not_cancellable" || error === "model_training_dataset_not_ready"
-    || error === "model_adapter_already_reviewed") return 409;
+    || error === "model_adapter_already_reviewed" || error === "recipe_evidence_settings_immutable"
+    || error === "generation_recipe_archived") return 409;
   if (error === "runner_job_not_completable" || error === "image_custom_mode_required") return 409;
   return 400;
 }
@@ -298,7 +308,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, runners] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, runners] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -308,6 +318,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listAcceptances(env, session.userId),
     listTrainingExamples(env, session.userId),
     listWorkflows(env, session.userId),
+    listGenerationRecipes(env, session.userId),
     listCreativeDnaTrainingJobs(env, session.userId),
     listCreativeDnaTrainingReviews(env, session.userId),
     listModelTrainingJobs(env, session.userId),
@@ -337,6 +348,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     artifacts,
     mediaAssets,
     workflows,
+    recipes,
     trainingExamples,
     trainingJobs,
     trainingReviews,
@@ -834,6 +846,38 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const match = url.pathname.match(/^\/api\/creative-studio\/workflows\/([a-z0-9_]+)\/content$/i);
       if (!match) return json({ ok: false, error: "invalid_workflow_route" }, { status: 400 });
       return workflowContent(env, session.userId, match[1], url.searchParams.get("revision"));
+    }
+    if (route === "recipes-list") {
+      return json({ ok: true, recipes: await listGenerationRecipes(env, session.userId, url.searchParams.get("includeArchived") === "true") });
+    }
+    if (route === "recipe-get") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/recipes\/([a-z0-9_]+)$/i);
+      if (!match) return json({ ok: false, error: "invalid_recipe_route" }, { status: 400 });
+      const recipe = await generationRecipeById(env, session.userId, match[1]);
+      if (!recipe) return json({ ok: false, error: "generation_recipe_not_found" }, { status: 404 });
+      return json({ ok: true, recipe });
+    }
+    if (route === "recipe-create") {
+      const input = await body<CreateGenerationRecipeRequest>(request);
+      if (!input) return json({ ok: false, error: "invalid_recipe_request" }, { status: 400 });
+      return json({ ok: true, recipe: await createGenerationRecipe(env, session.userId, input) }, { status: 201 });
+    }
+    if (route === "recipe-update") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/recipes\/([a-z0-9_]+)$/i);
+      const input = await body<UpdateGenerationRecipeRequest>(request);
+      if (!match || !input) return json({ ok: false, error: "invalid_recipe_request" }, { status: 400 });
+      return json({ ok: true, recipe: await updateGenerationRecipe(env, session.userId, match[1], input) });
+    }
+    if (route === "recipe-delete") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/recipes\/([a-z0-9_]+)$/i);
+      if (!match) return json({ ok: false, error: "invalid_recipe_route" }, { status: 400 });
+      return json({ ok: true, recipe: await deleteGenerationRecipe(env, session.userId, match[1]) });
+    }
+    if (route === "recipe-evidence-create") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/recipes\/([a-z0-9_]+)\/evidence$/i);
+      const input = await body<RecordRecipeEvidenceRequest>(request);
+      if (!match || !input?.jobId) return json({ ok: false, error: "invalid_recipe_evidence_request" }, { status: 400 });
+      return json({ ok: true, ...await recordGenerationRecipeEvidence(env, session.userId, match[1], input.jobId) }, { status: 201 });
     }
     if (route === "runners-list") return json({ ok: true, runners: await listLocalRunners(env, session.userId) });
     if (route === "runner-enroll") {

@@ -18,6 +18,7 @@ const emptySnapshot: StudioSnapshot = {
   artifacts: [],
   mediaAssets: [],
   workflows: [],
+  recipes: [],
   trainingExamples: [],
   trainingJobs: [],
   trainingReviews: [],

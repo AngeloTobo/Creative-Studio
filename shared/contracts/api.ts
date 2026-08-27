@@ -39,6 +39,13 @@ import type { ProjectProductionLoop } from "./productionLoop";
 import type { ProductionCockpit } from "./productionCockpit";
 import type { VideoDurationSeconds } from "./videoDuration";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
+import type {
+  CreateGenerationRecipeRequest,
+  GenerationRecipe,
+  RecipeEvidence,
+  RecordRecipeEvidenceRequest,
+  UpdateGenerationRecipeRequest,
+} from "./generationRecipes";
 
 export const CREATIVE_STUDIO_API_PREFIX = "/api/creative-studio" as const;
 
@@ -51,6 +58,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
+  recipes: `${CREATIVE_STUDIO_API_PREFIX}/recipes`,
   trainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/training-jobs`,
   modelTrainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/model-training-jobs`,
   modelAdapters: `${CREATIVE_STUDIO_API_PREFIX}/model-adapters`,
@@ -67,6 +75,7 @@ export type CreativeStudioRoute =
   | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
+  | "recipes-list" | "recipe-get" | "recipe-create" | "recipe-update" | "recipe-delete" | "recipe-evidence-create"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
   | "model-training-jobs-list" | "model-training-job-create" | "model-training-job-cancel" | "model-training-dataset-review" | "model-adapter-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
@@ -99,6 +108,12 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/workflows") return "workflow-import";
   if (method === "POST" && /^\/api\/creative-studio\/workflows\/[a-z0-9_]+\/revisions$/i.test(pathname)) return "workflow-revision-create";
   if (method === "GET" && /^\/api\/creative-studio\/workflows\/[a-z0-9_]+\/content$/i.test(pathname)) return "workflow-content";
+  if (method === "GET" && pathname === "/api/creative-studio/recipes") return "recipes-list";
+  if (method === "POST" && pathname === "/api/creative-studio/recipes") return "recipe-create";
+  if (method === "GET" && /^\/api\/creative-studio\/recipes\/[a-z0-9_]+$/i.test(pathname)) return "recipe-get";
+  if (method === "PATCH" && /^\/api\/creative-studio\/recipes\/[a-z0-9_]+$/i.test(pathname)) return "recipe-update";
+  if (method === "DELETE" && /^\/api\/creative-studio\/recipes\/[a-z0-9_]+$/i.test(pathname)) return "recipe-delete";
+  if (method === "POST" && /^\/api\/creative-studio\/recipes\/[a-z0-9_]+\/evidence$/i.test(pathname)) return "recipe-evidence-create";
   if (method === "GET" && pathname === "/api/creative-studio/training-jobs") return "training-jobs-list";
   if (method === "POST" && pathname === "/api/creative-studio/training-jobs") return "training-job-create";
   if (method === "POST" && /^\/api\/creative-studio\/training-jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "training-job-cancel";
@@ -142,6 +157,7 @@ export type StudioSnapshot = {
   artifacts: Artifact[];
   mediaAssets: MediaAsset[];
   workflows: WorkflowDefinition[];
+  recipes: GenerationRecipe[];
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
@@ -245,6 +261,9 @@ export type CreativeDnaTrainingBundleResponse = {
 };
 export type ImportWorkflowResponse = { workflow: WorkflowDefinition };
 export type SaveWorkflowRevisionResponse = { workflow: WorkflowDefinition };
+export type GenerationRecipesResponse = { recipes: GenerationRecipe[] };
+export type GenerationRecipeResponse = { recipe: GenerationRecipe };
+export type RecipeEvidenceResponse = { recipe: GenerationRecipe; evidence: RecipeEvidence };
 export type EnrollLocalRunnerRequest = { name: string };
 export type EnrollLocalRunnerResponse = { runner: LocalRunner; token: string; apiBase: string };
 export type RevokeLocalRunnerResponse = { runner: LocalRunner };
@@ -303,6 +322,7 @@ export type RunnerFailModelTrainingRequest = { error: string };
 export type RunnerModelAdapterEvaluation = ModelAdapterEvaluation;
 export type { CreateModelTrainingJobRequest, ModelAdapterReviewDecision, ReviewModelTrainingDatasetRequest };
 export type { SaveWorkflowRevisionRequest };
+export type { CreateGenerationRecipeRequest, RecordRecipeEvidenceRequest, UpdateGenerationRecipeRequest };
 
 export type ApiSuccess<T> = { ok: true } & T;
 export type ApiFailure = { ok: false; error: string; message?: string };

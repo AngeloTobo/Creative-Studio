@@ -30,6 +30,18 @@ Legacy deep links still resolve into the correct Work or Studio section, but the
 
 Every submitted workflow job retains its exact revision, SHA-256 content stamp, model files, prompt, parameters, media bindings, CreativeDNA version, source lineage, timing, and retry lineage.
 
+### Resume, scout, and reuse a direction
+
+- **Creative Sessions:** Create autosaves the current project-scoped draft in this browser's device storage, including its retained source reference, direction, media kind, workflow/revision, graphical settings, and Scout/Explore/Master goal. Home can reopen the newest draft, and a successfully queued submission clears it. Sessions do not live in D1, follow the owner to another device, or replace durable jobs.
+- **Scout direction boards:** choosing Scout for an image with an image source queues Refine, Correct, and Discovery as three independent durable evolution jobs under one study ID. Their retained results stay grouped for comparison while each branch keeps its exact prompt, workflow revision, settings, source provenance, and evolution role.
+- **Generation Recipes:** Create can save and reload an owner-scoped recipe containing the exact executable workflow revision, model identifier, prompt profile, scalar parameters, supported source kinds, and Scout/Explore/Master tier. D1 migration `0014_generation_recipes.sql` adds durable recipe and recipe-evidence records. Evidence can be recorded from an owned terminal job only when its project scope, modality, workflow revision, parameters, model, prompt profile, and executable workflow inputs match. To keep visible-work polling inside the free-plan budget, the consolidated snapshot returns the 50 most recently updated active recipes and the 10 newest evidence observations per recipe; an explicit recipe detail request returns up to 100 observations.
+
+### Project context today, Creative Worlds next
+
+Project context is an optional control for local ComfyUI image and video creation, and it is **off by default**. When enabled, Creative Studio appends bounded text from the current project's description and note, suppresses a whole field already present in the authored direction, strips known provenance-only reference identities, shows the exact added text before submission, and retains the combined text through the existing prompt and workflow stamp. It does not affect music or the optional AFDFW route.
+
+This control is not a persisted Creative World and does not stamp a structured world, character, place, object, canon reference, entity selection, or continuity-rule selection. Typed `World`, `WorldEntity`, `CanonReference`, continuity facet/rule, explicit promote-to-canon, and continuity-directive contracts exist as a foundation only. World persistence, APIs, authoring, selection, evaluation, and structured generation provenance are not implemented in this release.
+
 ### Build and train CreativeDNA
 
 CreativeDNA is a versioned cross-media profile, not a hidden prompt or a model name. It keeps eight measured dimensions, confidence, provenance, rights, source descriptions, lineage, and the reusable generation direction.
@@ -211,6 +223,8 @@ See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the all
 - Video duration choices depend on a recognized control in a compatible workflow. Two-version and three-branch video requests create sequential local jobs, so their total time includes each render.
 - Runtime estimates require comparable completed evidence and exclude unknown queue or cold-model-load time.
 - D1/R2 retention is durable, but current list and snapshot APIs expose bounded recent windows without pagination. Older retained records can therefore fall outside the browser's current history feed.
+- Creative Sessions are browser-and-device local drafts rather than Worker records; they do not synchronize between devices or local-first and remote stores.
+- Project context is an off-by-default local ComfyUI prompt aid, not a persisted World or structured continuity stamp. The typed Worlds contracts are foundation-only in this release.
 - Local and remote data do not synchronize automatically.
 - AFDFW is optional and never an implicit fallback when a local workflow is missing.
 

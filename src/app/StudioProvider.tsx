@@ -31,6 +31,10 @@ import type {
   ModelAdapterReviewDecision,
   ReviewModelTrainingDatasetRequest,
   ReviewModelAdapterResponse,
+  CreateGenerationRecipeRequest,
+  UpdateGenerationRecipeRequest,
+  GenerationRecipe,
+  RecipeEvidenceResponse,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -49,7 +53,7 @@ type StudioContextValue = {
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
-  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPrompt: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds) => Promise<void>;
+  submitWorkflowJob: (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPrompt: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds, idempotencyKey?: string) => Promise<Job>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -57,6 +61,10 @@ type StudioContextValue = {
   uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
   uploadWorkflow: (file: File, name?: string, description?: string) => Promise<WorkflowDefinition>;
   saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
+  createGenerationRecipe: (input: CreateGenerationRecipeRequest) => Promise<GenerationRecipe>;
+  updateGenerationRecipe: (recipeId: string, input: UpdateGenerationRecipeRequest) => Promise<GenerationRecipe>;
+  archiveGenerationRecipe: (recipeId: string) => Promise<GenerationRecipe>;
+  recordGenerationRecipeEvidence: (recipeId: string, jobId: string) => Promise<RecipeEvidenceResponse>;
   startDnaTraining: (input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => Promise<CreativeDnaTrainingJob>;
   cancelDnaTraining: (jobId: string) => Promise<void>;
   reviewDnaTraining: (jobId: string, decision: CreativeDnaTrainingReviewDecision, note: string) => Promise<void>;
@@ -242,7 +250,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
-  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPromptValue: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds) => {
+  const submitWorkflowJob = useCallback(async (workflow: WorkflowDefinition, inputBindings: Record<string, string>, expectedPromptValue: string, dnaArtifactId?: string, videoOperation?: VideoGenerationOperation, performanceMode?: ImagePerformanceMode, videoVariant?: VideoGenerationVariant, evolution?: EvolutionJobContext, videoDurationSeconds?: VideoDurationSeconds, stableIdempotencyKey?: string) => {
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -253,11 +261,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     const expectedPrompt = expectedPromptValue.trim();
     if (!workflowPrompt || !expectedPrompt) throw new Error("workflow_positive_prompt_missing");
     if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
-    await transact(() => adapter.submitJob({
+    return transact(() => adapter.submitJob({
       projectId: activeProjectId,
       dnaArtifactId: dnaId,
       modality,
-      idempotencyKey: operationKey("workflow"),
+      idempotencyKey: stableIdempotencyKey?.trim() || operationKey("workflow"),
       workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings, expectedPrompt },
       performanceMode,
       videoDurationSeconds,
@@ -297,6 +305,22 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     const input: SaveWorkflowRevisionRequest = { baseRevisionId, values };
     return transact(() => adapter.saveWorkflowRevision(workflowId, input));
   }, [adapter, transact]);
+
+  const createGenerationRecipe = useCallback((input: CreateGenerationRecipeRequest) => (
+    transact(() => adapter.createGenerationRecipe(input))
+  ), [adapter, transact]);
+
+  const updateGenerationRecipe = useCallback((recipeId: string, input: UpdateGenerationRecipeRequest) => (
+    transact(() => adapter.updateGenerationRecipe(recipeId, input))
+  ), [adapter, transact]);
+
+  const archiveGenerationRecipe = useCallback((recipeId: string) => (
+    transact(() => adapter.deleteGenerationRecipe(recipeId))
+  ), [adapter, transact]);
+
+  const recordGenerationRecipeEvidence = useCallback((recipeId: string, jobId: string) => (
+    transact(() => adapter.recordGenerationRecipeEvidence(recipeId, jobId))
+  ), [adapter, transact]);
 
   const startDnaTraining = useCallback((input: Omit<CreateCreativeDnaTrainingJobRequest, "projectId" | "idempotencyKey">) => {
     if (!activeProjectId) throw new Error("project_required");
@@ -394,6 +418,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     uploadMedia,
     uploadWorkflow,
     saveWorkflowRevision,
+    createGenerationRecipe,
+    updateGenerationRecipe,
+    archiveGenerationRecipe,
+    recordGenerationRecipeEvidence,
     startDnaTraining,
     cancelDnaTraining,
     reviewDnaTraining,
@@ -404,7 +432,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     enrollLocalRunner,
     revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

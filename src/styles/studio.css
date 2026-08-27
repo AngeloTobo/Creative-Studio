@@ -937,6 +937,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .evolution-study > header small { display: block; color: var(--text-faint); font-size: 8px; }
 .evolution-study > header h2 { margin-top: 3px; font-family: var(--font-display); font-size: 16px; }
 .evolution-study-count { padding: 5px 8px; border-radius: 999px; background: rgba(217,70,239,.12); color: #f0abfc; font-size: 8px; font-weight: 750; }
+.evolution-board-help { max-width: 620px; margin: 7px 0 0; color: var(--text-faint); font-size: 8px; line-height: 1.45; }
 .evolution-study-context { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-top: 10px; }
 .evolution-study-context span { overflow: hidden; color: var(--text-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .evolution-study-context b { margin-right: 5px; color: var(--text-soft); }
@@ -950,6 +951,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .evolution-branch-grid:empty { display: none; }
 .evolution-branch { min-width: 0; }
 .evolution-branch-label { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.evolution-branch-label > b { display: grid; width: 20px; height: 20px; flex: none; place-items: center; border: 1px solid rgba(34,211,238,.22); border-radius: 50%; background: rgba(34,211,238,.07); color: var(--cyan); font-size: 8px; }
 .evolution-branch-label strong { font-size: 9px; text-transform: capitalize; }
 .evolution-branch-label small { margin-left: auto; color: var(--text-faint); font-size: 7px; text-transform: uppercase; }
 .evolution-branch .artifact-card { height: calc(100% - 24px); border: 1px solid var(--border-soft); background: rgba(0,0,0,.11); }
@@ -1604,7 +1606,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .evolution-study > header h2 { display: -webkit-box; margin-top: 2px; overflow: hidden; font-size: 14px; line-height: 1.25; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .evolution-study-count { flex: none; padding: 4px 6px; }
   .evolution-study-context-details { margin-top: 5px; }
-  .evolution-branch-grid { gap: 8px; margin-top: 7px; }
+  .evolution-board-help { margin-top: 5px; font-size: 7px; }
+  .evolution-branch-grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(78vw,1fr); gap: 8px; overflow-x: auto; margin: 7px -4px 0; padding: 0 4px 6px; scroll-padding-inline: 4px; scroll-snap-type: x mandatory; scrollbar-width: thin; }
+  .evolution-branch { scroll-snap-align: start; }
   .evolution-branch-label { margin-bottom: 4px; }
   .evolution-no-media { margin-top: 7px; }
   .evolution-no-media > summary { min-height: 30px; padding-top: 6px; }

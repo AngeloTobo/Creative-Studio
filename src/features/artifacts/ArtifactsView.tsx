@@ -1,13 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { compileCreativeTasteMemory, type Acceptance, type AcceptanceDecision, type Artifact, type CreativeTasteSignal, type EvolutionStudy } from "../../../shared/contracts";
+import {
+  compileCreativeTasteMemory,
+  type Acceptance,
+  type AcceptanceDecision,
+  type Artifact,
+  type CreativeTasteSignal,
+  type EvolutionStudy,
+} from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ArtifactThumb } from "../../components/Visuals";
 import { artifactsForHistoryEntry, orderArtifactHistory, partitionArtifactHistory, type ArtifactHistoryEntry } from "./artifactHistory";
+import { artifactCanSaveWinningRecipe, generationRecipeMatchesArtifact, winningRecipeForArtifact } from "./winningRecipe";
 
 type ReviewIntent = { artifact: Artifact; decision: AcceptanceDecision };
 type ActiveStatusFilter = "all" | Exclude<Artifact["status"], "archived">;
 type ArtifactKindFilter = "all" | Artifact["kind"];
+type RecipePromotionState = {
+  status: "idle" | "saving" | "saved" | "error";
+  message: string;
+  acceptance: AcceptanceDecision | "unreviewed" | null;
+};
 const ARTIFACT_PAGE_SIZE = 8;
 
 function actorName(actor: Acceptance["actor"]) {
@@ -17,6 +30,11 @@ function actorName(actor: Acceptance["actor"]) {
 function downloadName(artifact: Artifact) {
   const name = artifact.name.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
   return `${name || "creative-studio-artifact"}-${artifact.kind}`;
+}
+
+function recipePromotionError(error: unknown) {
+  if (!(error instanceof Error)) return "Creative Studio could not save this recipe.";
+  return error.message.replaceAll("_", " ");
 }
 
 function ModalShell({ labelledBy, onClose, className = "", children }: { labelledBy: string; onClose: () => void; className?: string; children: ReactNode }) {
@@ -186,10 +204,22 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
 }
 
 function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused, compact = false }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean; compact?: boolean }) {
-  const { snapshot, reuseJob, busy } = useStudio();
+  const { snapshot, reuseJob, createGenerationRecipe, recordGenerationRecipeEvidence, busy } = useStudio();
   const [promptExpanded, setPromptExpanded] = useState(false);
+  const [recipePromotion, setRecipePromotion] = useState<RecipePromotionState>({ status: "idle", message: "", acceptance: null });
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
   const training = snapshot?.trainingExamples.find((item) => item.artifactId === artifact.id);
+  const job = snapshot?.jobs.find((item) => item.id === artifact.jobId);
+  const workflow = snapshot?.workflows.find((item) => item.id === artifact.settingsStamp.workflow?.workflowId
+    && item.currentRevision.id === artifact.settingsStamp.workflow?.revisionId);
+  const canSaveRecipe = artifactCanSaveWinningRecipe(artifact, job, snapshot?.adapter.development ?? true, workflow);
+  const artifactRecipe = canSaveRecipe && workflow ? winningRecipeForArtifact(artifact, workflow) : null;
+  const matchingRecipe = artifactRecipe
+    ? (snapshot?.recipes ?? []).find((recipe) => generationRecipeMatchesArtifact(recipe, artifactRecipe))
+    : undefined;
+  const recordedEvidence = matchingRecipe?.evidence.find((evidence) => evidence.jobId === artifact.jobId);
+  const currentAcceptance = decisions[0]?.decision ?? "unreviewed";
+  const recipeEvidenceCurrent = recordedEvidence?.acceptance === currentAcceptance;
   const prompt = artifact.prompt.replace(/\s+/g, " ").trim();
   const hasLongPrompt = prompt.length > 180;
   const reuse = async () => {
@@ -203,6 +233,37 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
   const acceptAction = <button className="btn artifact-accept" disabled={disabled} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>;
   const rejectAction = <button className="btn artifact-reject" disabled={disabled} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>;
   const archiveAction = <button className="btn btn-ghost" disabled={disabled} onClick={() => onReview({ artifact, decision: "archived" })}><Icon name="archive" size={16} /> Archive</button>;
+  const saveWinningRecipe = async () => {
+    if (!artifactRecipe || recipeEvidenceCurrent || recipePromotion.status === "saving") return;
+    setRecipePromotion({ status: "saving", message: "Saving the exact workflow settings and evidence.", acceptance: null });
+    try {
+      const recipe = matchingRecipe ?? await createGenerationRecipe(artifactRecipe);
+      await recordGenerationRecipeEvidence(recipe.id, artifact.jobId);
+      setRecipePromotion({ status: "saved", message: `${recipe.name} is ready to reuse from Create.`, acceptance: currentAcceptance });
+    } catch (caught) {
+      setRecipePromotion({ status: "error", message: recipePromotionError(caught), acceptance: null });
+    }
+  };
+  const promotionSaved = recipeEvidenceCurrent
+    || (recipePromotion.status === "saved" && recipePromotion.acceptance === currentAcceptance);
+  const promotionLabel = promotionSaved
+    ? "Winning recipe saved"
+    : recipePromotion.status === "saving"
+      ? "Saving winning recipe..."
+      : recipePromotion.status === "error"
+        ? "Could not save - retry"
+        : recordedEvidence
+          ? "Update winning evidence"
+          : "Save winning recipe";
+  const promotionAction = canSaveRecipe ? <button
+    type="button"
+    className={compact ? "btn btn-ghost" : "artifact-prompt-toggle"}
+    disabled={busy || promotionSaved || recipePromotion.status === "saving"}
+    aria-label={promotionLabel}
+    aria-live="polite"
+    title={recipePromotion.message || "Keep these exact model settings as a proven master recipe."}
+    onClick={() => void saveWinningRecipe()}
+  ><Icon name="star" size={compact ? 15 : 13} /> {promotionLabel}</button> : null;
   return (
     <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}${compact ? " artifact-card-compact" : ""}`} id={`artifact-card-${artifact.id}`}>
       <div className="artifact-hero">
@@ -226,6 +287,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
               {artifact.kind === "image" && artifact.status === "ready" ? animateAction : null}
               {artifact.status === "ready" || artifact.kind === "image" ? evolveAction : null}
               {reuseAction}
+              {promotionAction}
               {archiveAction}
             </div>
           </details>
@@ -240,6 +302,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
             {rejectAction}
             {archiveAction}
           </div>
+          {promotionAction}
         </>}
         <details className="artifact-details">
           <summary><span><Icon name="history" size={15} /> Details &amp; history</span><small>{decisions.length ? `${decisions.length} ${decisions.length === 1 ? "decision" : "decisions"}` : "Lineage + settings"}</small></summary>
@@ -261,12 +324,13 @@ function EvolutionStudyGroup({ study, artifacts, cardProps, focusArtifactId }: {
   const runsWithoutMedia = branches.filter(({ branch, artifact }) => !artifact && branch.status !== "queued" && branch.status !== "running" && branch.status !== "retaining");
   const renderRun = ({ branch }: (typeof branches)[number]) => <li key={branch.jobId}><span className={`state-pill ${branch.status}`}>{branch.status}</span><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)}</strong><small>{branch.modality} · {branch.jobId}</small></li>;
   return <article className="evolution-study glass">
-    <header><span><small>Evolution · {new Date(study.createdAt).toLocaleString()}</small><h2>{study.sourceName}</h2></span><span className="evolution-study-count">{mediaBranches.length} media · {study.branches.length} runs</span></header>
-    <details className="evolution-study-context-details"><summary>Study direction</summary><div className="evolution-study-context"><span><b>Canon</b>{study.canon.identity || "Not set"}</span><span><b>Current direction</b>{study.canon.currentDirection || "Not set"}</span></div></details>
+    <header><span><small>Direction board · {new Date(study.createdAt).toLocaleString()}</small><h2>{study.sourceName}</h2></span><span className="evolution-study-count">{mediaBranches.length} ready · {study.branches.length} runs</span></header>
+    <p className="evolution-board-help">Compare the directions together. On phone, swipe sideways; accept the strongest result and keep its exact recipe.</p>
+    <details className="evolution-study-context-details"><summary>Shared world direction</summary><div className="evolution-study-context"><span><b>Canon</b>{study.canon.identity || "Not set"}</span><span><b>Current direction</b>{study.canon.currentDirection || "Not set"}</span></div></details>
     {activeRuns.length ? <ol className="evolution-active-runs" aria-label="Active evolution runs">{activeRuns.map(renderRun)}</ol> : null}
     <div className="evolution-branch-grid">
-      {mediaBranches.map(({ branch, artifact }) => <section className="evolution-branch" key={branch.jobId}>
-          <div className="evolution-branch-label"><span className={`state-pill ${branch.status}`}>{branch.status}</span><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)}</strong><small>{branch.modality}</small></div>
+      {mediaBranches.map(({ branch, artifact }, index) => <section className="evolution-branch" key={branch.jobId}>
+          <div className="evolution-branch-label"><b>{String.fromCharCode(65 + index)}</b><span className={`state-pill ${branch.status}`}>{branch.status}</span><strong>{branch.role[0].toUpperCase() + branch.role.slice(1)}</strong><small>{branch.modality}</small></div>
           <ArtifactCard {...cardProps} artifact={artifact} focused={focusArtifactId === artifact.id} />
         </section>)}
     </div>

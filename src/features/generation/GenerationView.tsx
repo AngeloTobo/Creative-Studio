@@ -46,9 +46,12 @@ import {
   type EvolutionJobContext,
   type EvolutionRole,
   type GenerationAspectRatio,
+  type GenerationRecipe,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
+import { useCreativeSessions } from "../sessions";
+import { compileProjectContext } from "./projectContext";
 import {
   preferredQuickWorkflow,
   quickAnimationDirection,
@@ -58,6 +61,15 @@ import {
   type CreateIntent,
   type QuickSourceKind,
 } from "./quickCreate";
+import {
+  GENERATION_GOALS,
+  generationBatchAttempt,
+  generationBatchIdempotencyKey,
+  generationGoalCanScout,
+  generationGoalOutputCount,
+  generationGoalRunLabel,
+  type GenerationGoal,
+} from "./generationGoals";
 import "./GenerationView.css";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
@@ -191,6 +203,7 @@ export function GenerationView({
     submitDevelopmentPreviewJob,
     submitWorkflowJob,
     saveWorkflowRevision,
+    createGenerationRecipe,
     busy,
     error,
   } = useStudio();
@@ -201,7 +214,10 @@ export function GenerationView({
   const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
   const allProjectArtifacts = useMemo(() => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.artifacts]);
   const projectArtifacts = useMemo(() => allProjectArtifacts.filter((artifact) => artifact.retention.state === "retained"), [allProjectArtifacts]);
-  const workflows = snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [];
+  const workflows = useMemo(
+    () => snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [],
+    [snapshot?.workflows],
+  );
   const initialVideoSource = initialVideoExtensionArtifactId
     ? projectArtifacts.find((artifact) => artifact.id === initialVideoExtensionArtifactId && artifact.kind === "video") ?? null
     : null;
@@ -242,8 +258,11 @@ export function GenerationView({
   const [lyrics, setLyrics] = useState("");
   const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? initialDirectSource?.id ?? "");
   const [evolutionEnabled, setEvolutionEnabled] = useState(Boolean(initialEvolutionSource));
-  const [evolutionStudyId] = useState(() => `evolve_${crypto.randomUUID()}`);
+  const [generationGoal, setGenerationGoal] = useState<GenerationGoal>(initialEvolutionSource?.kind === "image" ? "scout" : "explore");
+  const [evolutionStudyId, setEvolutionStudyId] = useState(() => `evolve_${crypto.randomUUID()}`);
+  const [videoPairId, setVideoPairId] = useState(() => `video_pair_${crypto.randomUUID()}`);
   const [workflowId, setWorkflowId] = useState("");
+  const [workflowRestoreBlocked, setWorkflowRestoreBlocked] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
   const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
@@ -254,6 +273,7 @@ export function GenerationView({
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [trainingEligible, setTrainingEligible] = useState(true);
+  const [projectContextEnabled, setProjectContextEnabled] = useState(false);
   const [localError, setLocalError] = useState("");
   const [notice, setNotice] = useState(autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected; model compatibility is checked below.` : "");
   const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
@@ -265,6 +285,26 @@ export function GenerationView({
     transitionSeconds: 0.5,
     audioMode: "keep-source",
   } : null);
+  const { latest: latestSession, save: saveSession, clear: clearSession } = useCreativeSessions(activeProjectId);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const sessionProjectRef = useRef("");
+  const sessionReadyRef = useRef(false);
+  const sessionSaveTimerRef = useRef(0);
+  const sessionSubmittingRef = useRef(false);
+  const sessionPersistRef = useRef<() => void>(() => undefined);
+  const outgoingSessionProjectRef = useRef(activeProjectId);
+  const sessionCompletionBaselineRef = useRef(0);
+  const [sessionCompletionVersion, setSessionCompletionVersion] = useState(0);
+  const lastSavedSessionSignature = useRef("");
+  const lastSubmittedSessionSignature = useRef("");
+  const evolutionBatchAttemptRef = useRef({ id: evolutionStudyId, signature: "" });
+  const videoBatchAttemptRef = useRef({ id: videoPairId, signature: "" });
+
+  useEffect(() => {
+    const previousProjectId = outgoingSessionProjectRef.current;
+    if (previousProjectId && previousProjectId !== activeProjectId) sessionPersistRef.current();
+    outgoingSessionProjectRef.current = activeProjectId;
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (directionProjectId.current !== activeProjectId) {
@@ -275,6 +315,7 @@ export function GenerationView({
       setIntent("image");
       setQuickSourceId("");
       setWorkflowId("");
+      setWorkflowRestoreBlocked("");
       setInputBindings({});
       setWorkflowValues({});
       setValuesRevisionId("");
@@ -286,12 +327,102 @@ export function GenerationView({
       setNotice("");
       setVideoOperation(null);
       setEvolutionEnabled(false);
+      setGenerationGoal("explore");
+      setEvolutionStudyId(`evolve_${crypto.randomUUID()}`);
+      setVideoPairId(`video_pair_${crypto.randomUUID()}`);
+      setProjectContextEnabled(false);
     }
     if (!selected || directionInitialized.current) return;
     directionInitialized.current = true;
     setDirection(selected.source.directive || creativeDnaGenerationPrompt(selected, selected.targetModality));
     setIntent(selected.targetModality);
   }, [activeProjectId, selected]);
+
+  useEffect(() => {
+    if (!activeProjectId || sessionProjectRef.current === activeProjectId) return;
+    sessionProjectRef.current = activeProjectId;
+    sessionReadyRef.current = false;
+    lastSavedSessionSignature.current = "";
+    lastSubmittedSessionSignature.current = "";
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const hasIncomingAction = Boolean(initialVideoSource || initialEvolutionSource || initialDirectSource || initialCreateIntent);
+      if (!hasIncomingAction && latestSession) {
+        const settings = latestSession.graphicalSettings;
+        const restoredWorkflow = latestSession.workflowId
+          ? workflows.find((item) => item.id === latestSession.workflowId) ?? null
+          : null;
+        const savedRevisionId = typeof settings.workflowRevisionId === "string" ? settings.workflowRevisionId : "";
+        const restoredValues: Record<string, WorkflowScalar> = {};
+        const restoredBindings: Record<string, string> = {};
+        for (const [key, value] of Object.entries(settings)) {
+          if (key.startsWith("value:") && value !== null) restoredValues[key.slice(6)] = value;
+          if (key.startsWith("binding:") && typeof value === "string") restoredBindings[key.slice(8)] = value;
+        }
+        const restoredAspect = typeof settings.canvasAspectRatio === "string"
+          && GENERATION_ASPECT_PRESETS.some((preset) => preset.id === settings.canvasAspectRatio)
+          ? settings.canvasAspectRatio as GenerationAspectRatio
+          : null;
+        setSessionId(latestSession.id);
+        lastSavedSessionSignature.current = "restored-session";
+        setIntent(latestSession.mediaKind);
+        setDirection(latestSession.direction);
+        setQuickSourceId(latestSession.retainedArtifactId ?? latestSession.sourceAssetIds[0] ?? "");
+        setWorkflowId(latestSession.workflowId ?? "");
+        setWorkflowRestoreBlocked(latestSession.workflowId && !restoredWorkflow ? latestSession.workflowId : "");
+        setInputBindings(restoredBindings);
+        setWorkflowValues(restoredValues);
+        setValuesRevisionId(restoredWorkflow?.currentRevision.id ?? "");
+        setLyrics(typeof settings.lyrics === "string" ? settings.lyrics : "");
+        setGenerationGoal(latestSession.intentTier);
+        setEvolutionEnabled(latestSession.intentTier === "scout");
+        setProjectContextEnabled(settings.projectContextEnabled === true || settings.worldContinuityEnabled === true);
+        setImagePerformanceMode(settings.imagePerformanceMode === "explicit-custom" ? "explicit-custom" : "fast-default");
+        setVideoDurationSeconds(VIDEO_DURATION_OPTIONS.includes(Number(settings.videoDurationSeconds) as VideoDurationSeconds)
+          ? Number(settings.videoDurationSeconds) as VideoDurationSeconds
+          : 5);
+        setCanvasAspectRatio(restoredAspect);
+        setCanvasMegapixels(typeof settings.canvasMegapixels === "number" && Number.isFinite(settings.canvasMegapixels) ? settings.canvasMegapixels : null);
+        const restoredTransition = settings.videoOperationTransitionSeconds;
+        const restoredVideoOperation: VideoGenerationOperation | null = settings.videoOperationKind === "extend"
+          && typeof settings.videoOperationSourceId === "string"
+          && (settings.videoOperationSource === "upload" || settings.videoOperationSource === "artifact")
+          && (settings.videoOperationOutputMode === "combined" || settings.videoOperationOutputMode === "continuation")
+          && (restoredTransition === 0 || restoredTransition === 0.25 || restoredTransition === 0.5 || restoredTransition === 1)
+          && (settings.videoOperationAudioMode === "keep-source" || settings.videoOperationAudioMode === "mute")
+          ? {
+            kind: "extend" as const,
+            sourceId: settings.videoOperationSourceId,
+            source: settings.videoOperationSource as VideoGenerationOperation["source"],
+            sourceFrame: "last" as const,
+            outputMode: settings.videoOperationOutputMode as VideoGenerationOperation["outputMode"],
+            transitionSeconds: restoredTransition as VideoGenerationOperation["transitionSeconds"],
+            audioMode: settings.videoOperationAudioMode as VideoGenerationOperation["audioMode"],
+          }
+          : null;
+        setVideoOperation(restoredVideoOperation);
+        const restoredAt = new Date(latestSession.updatedAt).toLocaleString();
+        if (latestSession.workflowId && !restoredWorkflow) {
+          setNotice(`Resumed your draft from ${restoredAt}, but its model is no longer available. Choose a model and review the settings before generating.`);
+        } else if (restoredWorkflow && savedRevisionId && savedRevisionId !== restoredWorkflow.currentRevision.id) {
+          setNotice(`Resumed your draft from ${restoredAt}. Its model recipe changed, so the saved settings were migrated to the current revision; review them before generating.`);
+        } else {
+          setNotice(`Resumed your ${latestSession.intentTier} ${latestSession.mediaKind} draft from ${restoredAt}.`);
+        }
+      } else {
+        setSessionId(null);
+        setWorkflowRestoreBlocked("");
+      }
+      sessionReadyRef.current = true;
+    });
+    return () => {
+      cancelled = true;
+      // React StrictMode immediately replays effects in development. Allow the
+      // replay to initialize the same project when the first microtask was cancelled.
+      if (!sessionReadyRef.current && sessionProjectRef.current === activeProjectId) sessionProjectRef.current = "";
+    };
+  }, [activeProjectId, initialCreateIntent, initialDirectSource, initialEvolutionSource, initialVideoSource, latestSession, workflows]);
 
   const sourceIntent = intent === "train" ? "image" : intent;
   const compatibleSourceKinds = new Set<QuickSourceKind>(workflows
@@ -342,6 +473,24 @@ export function GenerationView({
     ? createSongPromptRecommendations({ artDescription: songArtDescription, dna: selected })
     : [];
   const generationIntent = intent === "train" ? "image" : intent;
+  const activeProject = snapshot?.projects.find((project) => project.id === activeProjectId) ?? null;
+  const projectRecipes = (snapshot?.recipes ?? [])
+    .filter((recipe) => !recipe.archivedAt && recipe.mediaKind === generationIntent && (recipe.projectId === activeProjectId || recipe.projectId === null))
+    .sort((left, right) => right.evidenceSummary.accepted - left.evidenceSummary.accepted
+      || (left.evidenceSummary.medianDurationMs ?? Number.MAX_SAFE_INTEGER) - (right.evidenceSummary.medianDurationMs ?? Number.MAX_SAFE_INTEGER)
+      || right.updatedAt.localeCompare(left.updatedAt));
+  const excludedProjectReferenceIdentities = projectDna.flatMap((artifact) => artifact.rights.referenceStoredAsProvenanceOnly && artifact.source.referenceLabel
+    ? [artifact.source.referenceLabel]
+    : []);
+  const projectContext = activeProject && generationIntent !== "music" ? compileProjectContext({
+    description: activeProject.description,
+    note: activeProject.note,
+    authoredDirection: direction,
+    excludedReferenceIdentities: excludedProjectReferenceIdentities,
+  }) : null;
+  const providerDirection = generationIntent !== "music" && projectContextEnabled && projectContext?.text
+    ? `${direction.trim().replace(/[.\s]+$/, "")}. ${projectContext.text}`
+    : direction.trim();
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
@@ -361,9 +510,11 @@ export function GenerationView({
   const runtimeMsByWorkflowId = Object.fromEntries(Object.entries(runtimeHistoryByWorkflowId).map(([id, history]) => [id, history.medianMs]));
   const requestedWorkflow = workflows.find((item) => item.id === workflowId && workflowCreateIntent(item.modality) === generationIntent) ?? null;
   const preferredWorkflow = preferredQuickWorkflow(durationCompatibleWorkflows, generationIntent, videoOperation ? "image" : quickSource?.kind ?? null, runtimeMsByWorkflowId);
-  const workflow = requestedWorkflow && (generationIntent !== "video" || workflowSupportsVideoDuration(requestedWorkflow, videoDurationSeconds))
-    ? requestedWorkflow
-    : preferredWorkflow;
+  const workflow = workflowRestoreBlocked
+    ? null
+    : requestedWorkflow && (generationIntent !== "video" || workflowSupportsVideoDuration(requestedWorkflow, videoDurationSeconds))
+      ? requestedWorkflow
+      : preferredWorkflow;
   const durationFallback = generationIntent === "video" && requestedWorkflow && workflow && requestedWorkflow.id !== workflow.id
     ? `${videoWorkflowDurationProfile(requestedWorkflow).label} supports up to ${videoDurationLabel(videoWorkflowDurationProfile(requestedWorkflow).maxSeconds)}; ${workflow.name} is selected for this length.`
     : null;
@@ -389,7 +540,7 @@ export function GenerationView({
     : parameter.id === workflowLyricsParameter?.id
       ? lyrics
       : workflowPromptParameterIds.has(parameter.id)
-        ? direction.trim()
+        ? providerDirection
         : quickParameterValue(parameter, workflowPromptParameter?.id ?? null, direction, effectiveValues));
   const baseScalarParameters = scalarParameters.map((parameter) => ({ ...parameter, value: baseParameterValue(parameter) }));
   const generationControls = generationControlSet(baseScalarParameters);
@@ -429,7 +580,7 @@ export function GenerationView({
     models: workflow.currentRevision.models,
     inputAssetIds: Object.values(effectiveInputBindings),
     inputArtifactIds: [],
-    prompt: workflowPromptParameter ? String(parameterValue(workflowPromptParameter)).trim() : direction.trim(),
+    prompt: workflowPromptParameter ? String(parameterValue(workflowPromptParameter)).trim() : providerDirection,
     videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
   }) : null;
   const baselineWorkload = workflow ? analyzeGenerationWorkload({
@@ -446,7 +597,7 @@ export function GenerationView({
     : workflowWideHistory?.count && workflowWideHistory.medianMs
       ? { count: workflowWideHistory.count, medianMs: workflowWideHistory.medianMs, exactRevision: false }
       : null;
-  const estimatedOutputCount = evolutionEnabled ? 3 : generationIntent === "video" ? 2 : 1;
+  const estimatedOutputCount = generationGoalOutputCount(generationGoal, generationIntent, evolutionEnabled);
   const runtimeEstimate = estimateGenerationRuntime(runtimeEvidence?.medianMs ?? null, workflowWorkload, baselineWorkload, estimatedOutputCount);
   const displayedScalarParameters = scalarParameters.map((parameter) => ({ ...parameter, value: parameterValue(parameter) }));
   const displayedAspectRatio = inferGenerationAspectRatio(displayedScalarParameters);
@@ -470,9 +621,149 @@ export function GenerationView({
     inputArtifactIds: [],
     prompt: direction.trim(),
   }) : null;
+  const effectiveSessionWorkflowId = workflow?.id ?? workflowId;
+  const effectiveSessionRevisionId = valuesRevisionId || workflow?.currentRevision.id || null;
+  const sessionSourceType = quickSource?.source ?? null;
+  const creativeSessionSignature = JSON.stringify({
+    projectId: activeProjectId,
+    sourceId: quickSourceId,
+    direction,
+    intent: generationIntent,
+    workflowId: effectiveSessionWorkflowId,
+    workflowRevisionId: effectiveSessionRevisionId,
+    generationGoal,
+    evolutionEnabled,
+    lyrics,
+    imagePerformanceMode,
+    videoDurationSeconds,
+    canvasAspectRatio,
+    canvasMegapixels,
+    projectContextEnabled,
+    providerDirection,
+    inputBindings,
+    workflowValues,
+    videoOperation,
+  });
+  const generationRequestSignature = JSON.stringify({
+    projectId: activeProjectId,
+    sourceId: quickSourceId,
+    direction,
+    providerDirection,
+    intent: generationIntent,
+    workflowId: effectiveSessionWorkflowId,
+    workflowModels: workflow?.currentRevision.models ?? [],
+    generationGoal,
+    evolutionEnabled,
+    lyrics,
+    imagePerformanceMode,
+    videoDurationSeconds,
+    canvasAspectRatio,
+    canvasMegapixels,
+    projectContextEnabled,
+    inputBindings,
+    workflowValues,
+    videoOperation,
+  });
+
+  useEffect(() => {
+    sessionPersistRef.current = () => {
+      if (!activeProjectId || !sessionReadyRef.current || sessionSubmittingRef.current || intent === "train") return;
+      if (!direction.trim() && !quickSourceId && !workflowId) return;
+      if (creativeSessionSignature === lastSavedSessionSignature.current || creativeSessionSignature === lastSubmittedSessionSignature.current) return;
+      const graphicalSettings = {
+        workflowRevisionId: effectiveSessionRevisionId,
+        lyrics,
+        imagePerformanceMode,
+        videoDurationSeconds,
+        canvasAspectRatio,
+        canvasMegapixels,
+        projectContextEnabled,
+        videoOperationKind: videoOperation?.kind ?? null,
+        videoOperationSourceId: videoOperation?.sourceId ?? null,
+        videoOperationSource: videoOperation?.source ?? null,
+        videoOperationOutputMode: videoOperation?.outputMode ?? null,
+        videoOperationTransitionSeconds: videoOperation?.transitionSeconds ?? null,
+        videoOperationAudioMode: videoOperation?.audioMode ?? null,
+        ...Object.fromEntries(Object.entries(inputBindings).map(([id, value]) => [`binding:${id}`, value])),
+        ...Object.fromEntries(Object.entries(workflowValues).map(([id, value]) => [`value:${id}`, value])),
+      };
+      const saved = saveSession({
+        id: sessionId ?? undefined,
+        sourceAssetIds: sessionSourceType === "upload" && quickSourceId ? [quickSourceId] : [],
+        retainedArtifactId: sessionSourceType === "artifact" ? quickSourceId : null,
+        direction,
+        mediaKind: generationIntent,
+        workflowId: effectiveSessionWorkflowId || null,
+        graphicalSettings,
+        intentTier: generationGoal,
+      });
+      if (saved) {
+        lastSavedSessionSignature.current = creativeSessionSignature;
+        if (saved.id !== sessionId) setSessionId(saved.id);
+      }
+    };
+  }, [activeProjectId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, projectContextEnabled, quickSourceId, saveSession, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, workflowId, workflowValues]);
+
+  useEffect(() => {
+    if (sessionCompletionVersion !== sessionCompletionBaselineRef.current) {
+      sessionCompletionBaselineRef.current = sessionCompletionVersion;
+      lastSavedSessionSignature.current = creativeSessionSignature;
+      lastSubmittedSessionSignature.current = creativeSessionSignature;
+      sessionSubmittingRef.current = false;
+      return;
+    }
+    if (!activeProjectId || !sessionReadyRef.current || intent === "train") return;
+    if (!direction.trim() && !quickSourceId && !workflowId) return;
+    if (lastSavedSessionSignature.current === "restored-session") {
+      lastSavedSessionSignature.current = creativeSessionSignature;
+      return;
+    }
+    if (creativeSessionSignature === lastSavedSessionSignature.current) return;
+    if (creativeSessionSignature === lastSubmittedSessionSignature.current) return;
+    window.clearTimeout(sessionSaveTimerRef.current);
+    const timer = window.setTimeout(() => {
+      sessionSaveTimerRef.current = 0;
+      sessionPersistRef.current();
+    }, 650);
+    sessionSaveTimerRef.current = timer;
+    return () => {
+      if (sessionSaveTimerRef.current === timer) sessionSaveTimerRef.current = 0;
+      window.clearTimeout(timer);
+    };
+  }, [activeProjectId, creativeSessionSignature, direction, intent, quickSourceId, sessionCompletionVersion, workflowId]);
+
+  useEffect(() => {
+    const flush = () => sessionPersistRef.current();
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
+
+  const beginCreativeSessionSubmission = () => {
+    sessionSubmittingRef.current = true;
+    window.clearTimeout(sessionSaveTimerRef.current);
+    sessionSaveTimerRef.current = 0;
+  };
+
+  const completeCreativeSession = () => {
+    window.clearTimeout(sessionSaveTimerRef.current);
+    sessionSaveTimerRef.current = 0;
+    lastSubmittedSessionSignature.current = creativeSessionSignature;
+    if (sessionId) clearSession(sessionId);
+    setSessionId(null);
+    setSessionCompletionVersion((version) => version + 1);
+  };
+
+  const resumeCreativeSessionAutosave = () => {
+    sessionSubmittingRef.current = false;
+    sessionPersistRef.current();
+  };
 
   const resetWorkflowOverrides = () => {
     setWorkflowId("");
+    setWorkflowRestoreBlocked("");
     setInputBindings({});
     setWorkflowValues({});
     setValuesRevisionId("");
@@ -505,15 +796,42 @@ export function GenerationView({
   };
 
   const chooseIntent = (nextIntent: CreateIntent) => {
-    if (nextIntent !== intent && !evolutionEnabled) setDirection("");
+    if (nextIntent !== intent) {
+      setDirection("");
+      setEvolutionEnabled(false);
+    }
     setIntent(nextIntent);
+    if (nextIntent !== "image" && generationGoal === "scout") {
+      setGenerationGoal("explore");
+      setEvolutionEnabled(false);
+    }
     setVideoOperation(null);
     setSourceGalleryExpanded(false);
     resetWorkflowOverrides();
   };
 
+  const chooseGenerationGoal = (nextGoal: GenerationGoal) => {
+    setGenerationGoal(nextGoal);
+    setLocalError("");
+    if (nextGoal === "scout") {
+      setEvolutionEnabled(true);
+      setImagePerformanceMode("fast-default");
+      setNotice(generationGoalCanScout(generationIntent, quickSource?.kind ?? null)
+        ? "Scout will render Refine, Correct, and Discovery as three fast retained directions."
+        : "Choose an image source to scout three directions.");
+      return;
+    }
+    setEvolutionEnabled(false);
+    if (nextGoal === "master" && generationIntent === "image") setImagePerformanceMode("explicit-custom");
+    if (nextGoal === "explore" && generationIntent === "image") setImagePerformanceMode("fast-default");
+    setNotice(nextGoal === "master"
+      ? "Master uses your exact quality settings and keeps the complete recipe."
+      : "Explore uses the recommended local model and fastest safe settings.");
+  };
+
   const chooseWorkflow = (id: string) => {
     setWorkflowId(id);
+    setWorkflowRestoreBlocked("");
     setInputBindings({});
     setWorkflowValues({});
     setValuesRevisionId("");
@@ -522,6 +840,82 @@ export function GenerationView({
     setCanvasMegapixels(null);
     setLyrics("");
     setNotice("");
+  };
+
+  const applyGenerationRecipe = (recipe: GenerationRecipe) => {
+    const recipeWorkflow = workflows.find((item) => item.id === recipe.workflowId && workflowCreateIntent(item.modality) === recipe.mediaKind);
+    if (!recipeWorkflow) {
+      setLocalError(`${recipe.name} uses a model that is no longer ready on this machine.`);
+      return;
+    }
+    const promptParameter = primaryWorkflowPromptParameter(recipeWorkflow.currentRevision.parameters, recipeWorkflow.modality);
+    const lyricsParameter = musicWorkflowLyricsParameter(recipeWorkflow.currentRevision.parameters, recipeWorkflow.modality);
+    const recipeDuration = videoWorkflowDurationParameters(recipeWorkflow.currentRevision.parameters)
+      .map((parameter) => Number(recipe.parameters[parameter.id]))
+      .find((seconds) => VIDEO_DURATION_OPTIONS.includes(seconds as VideoDurationSeconds));
+    setWorkflowId(recipeWorkflow.id);
+    setWorkflowRestoreBlocked("");
+    setValuesRevisionId(recipeWorkflow.currentRevision.id);
+    setWorkflowValues(recipe.parameters);
+    setInputBindings({});
+    setCanvasAspectRatio(null);
+    setCanvasMegapixels(null);
+    setGenerationGoal(recipe.intentTier);
+    setEvolutionEnabled(recipe.intentTier === "scout");
+    setImagePerformanceMode(recipe.intentTier === "master" ? "explicit-custom" : "fast-default");
+    if (promptParameter && recipe.parameters[promptParameter.id] !== undefined) setDirection(String(recipe.parameters[promptParameter.id]));
+    if (lyricsParameter && recipe.parameters[lyricsParameter.id] !== undefined) setLyrics(String(recipe.parameters[lyricsParameter.id]));
+    if (recipeDuration) setVideoDurationSeconds(recipeDuration as VideoDurationSeconds);
+    setLocalError("");
+    const revisionNotice = recipe.workflowRevisionId === recipeWorkflow.currentRevision.id
+      ? ""
+      : " Its original immutable model revision is retained, but Create is applying the saved values to the model's current revision; review them before generating.";
+    setNotice(`${recipe.name} loaded · ${recipe.evidenceSummary.runs ? `${recipe.evidenceSummary.runs} proven runs` : "ready for its first evidence run"}.${revisionNotice}`);
+  };
+
+  const saveCurrentRecipe = async () => {
+    if (!workflow || !workflowReady || !workflowPromptParameter) return;
+    setLocalError("");
+    try {
+      const modified = Object.fromEntries(scalarParameters
+        .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
+        .map((parameter) => [parameter.id, parameterValue(parameter)]));
+      const recipeWorkflow = Object.keys(modified).length
+        ? await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified)
+        : workflow;
+      const profileIdentity = musicPromptProfile?.id ?? `creative-studio-${generationIntent}-direct-prompt/1.0`;
+      const profileSeparator = profileIdentity.lastIndexOf("/");
+      const sourceKinds = [...new Set([
+        ...(workflowPromptParameter ? ["prompt" as const] : []),
+        ...mediaParameters.flatMap((parameter) => parameter.mediaKind ? [parameter.mediaKind] : []),
+      ])];
+      const recipe = await createGenerationRecipe({
+        name: `${shortDnaName(direction, generationIntent)} · ${GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.shortLabel ?? generationGoal}`,
+        description: `${GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.label ?? generationGoal} recipe saved from Create.`,
+        projectId: activeProjectId,
+        worldId: null,
+        mediaKind: generationIntent,
+        workflowId: recipeWorkflow.id,
+        workflowRevisionId: recipeWorkflow.currentRevision.id,
+        modelIdentifier: recipeWorkflow.currentRevision.models[0] ?? null,
+        promptProfile: {
+          id: profileSeparator > 0 ? profileIdentity.slice(0, profileSeparator) : profileIdentity,
+          version: profileSeparator > 0 ? profileIdentity.slice(profileSeparator + 1) : "1.0",
+          targetModel: musicPromptProfile?.targetModel ?? recipeWorkflow.currentRevision.models[0] ?? recipeWorkflow.name,
+        },
+        parameters: Object.fromEntries(recipeWorkflow.currentRevision.parameters
+          .filter((parameter) => parameter.kind !== "media")
+          .map((parameter) => [parameter.id, parameter.value])),
+        sourceKinds,
+        intentTier: generationGoal,
+      });
+      setWorkflowId(recipeWorkflow.id);
+      setValuesRevisionId(recipeWorkflow.currentRevision.id);
+      setWorkflowValues(Object.fromEntries(recipeWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+      setNotice(`${recipe.name} saved as a reusable recipe. Future review evidence will show whether it is fast and strong.`);
+    } catch {
+      // The provider exposes a normalized visible error.
+    }
   };
 
   const chooseVideoDuration = (seconds: VideoDurationSeconds) => {
@@ -620,15 +1014,55 @@ export function GenerationView({
       setLocalError("This video model does not expose a prompt, so Creative Studio cannot make two distinct versions. Map its prompt input in Models first.");
       return;
     }
+    if (evolutionEnabled && (!quickSource || !workflowPromptParameter || !projectTasteMemory || !personalTaste)) {
+      setLocalError(!quickSource
+        ? "Choose a compatible source before generating this three-direction board."
+        : !workflowPromptParameter
+          ? "This model must expose a prompt before Creative Studio can create three distinct directions."
+          : "Creative taste memory is still loading. Try again in a moment.");
+      return;
+    }
+    beginCreativeSessionSubmission();
     try {
+      let attemptEvolutionStudyId = evolutionStudyId;
+      if (evolutionEnabled) {
+        if (evolutionBatchAttemptRef.current.id !== evolutionStudyId) {
+          evolutionBatchAttemptRef.current = { id: evolutionStudyId, signature: "" };
+        }
+        const attempt = generationBatchAttempt(
+          evolutionBatchAttemptRef.current,
+          generationRequestSignature,
+          () => `evolve_${crypto.randomUUID()}`,
+        );
+        evolutionBatchAttemptRef.current = attempt;
+        attemptEvolutionStudyId = attempt.id;
+        if (attempt.id !== evolutionStudyId) setEvolutionStudyId(attempt.id);
+      }
+      let attemptVideoPairId = videoPairId;
+      if (generationIntent === "video") {
+        if (videoBatchAttemptRef.current.id !== videoPairId) {
+          videoBatchAttemptRef.current = { id: videoPairId, signature: "" };
+        }
+        const attempt = generationBatchAttempt(
+          videoBatchAttemptRef.current,
+          generationRequestSignature,
+          () => `video_pair_${crypto.randomUUID()}`,
+        );
+        videoBatchAttemptRef.current = attempt;
+        attemptVideoPairId = attempt.id;
+        if (attempt.id !== videoPairId) setVideoPairId(attempt.id);
+      }
       const dna = await ensureDna();
-      if (!dna) return;
+      if (!dna) {
+        resumeCreativeSessionAutosave();
+        return;
+      }
       selectDna(dna);
       const videoVersions = generationIntent === "video"
         ? createVideoGenerationVersions({
-          direction: direction.trim(),
+          direction: providerDirection,
           dimensions: dna.shared,
-          pairId: `video_pair_${crypto.randomUUID()}`,
+          pairId: attemptVideoPairId,
           discoverySeed: randomUint32(),
           hasSource: Boolean(quickSource),
         })
@@ -646,7 +1080,7 @@ export function GenerationView({
           ? createVideoGenerationVersions({
             direction: direction.trim(),
             dimensions: dna.shared,
-            pairId: `video_pair_${crypto.randomUUID()}`,
+            pairId: attemptVideoPairId,
             discoverySeed: randomUint32(),
             hasSource: Boolean(quickSource),
           })
@@ -654,9 +1088,9 @@ export function GenerationView({
         let branchWorkflow = runWorkflow;
         for (const role of roles) {
           const prompt = evolutionBranchPrompt({
-            basePrompt: direction.trim(),
+            basePrompt: providerDirection,
             role,
-            canon: projectTasteMemory.canon,
+            canon: { identity: "", currentDirection: "" },
             personalTaste,
             projectTaste: projectTasteMemory.taste,
             dimensions: dna.shared,
@@ -670,7 +1104,7 @@ export function GenerationView({
           branchWorkflow = await saveWorkflowRevision(branchWorkflow.id, branchWorkflow.currentRevision.id, values);
           const evolution: EvolutionJobContext = {
             schemaVersion: "creative-studio-evolution-request/1.0",
-            studyId: evolutionStudyId,
+            studyId: attemptEvolutionStudyId,
             role,
             sourceId: quickSource.id,
             source: quickSource.source,
@@ -685,11 +1119,19 @@ export function GenerationView({
             variant,
             evolution,
             generationIntent === "video" ? videoDurationSeconds : undefined,
+            generationBatchIdempotencyKey(attemptEvolutionStudyId, role),
           );
         }
         setValuesRevisionId(branchWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(branchWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
         setNotice("Refine, Correct, and Discovery queued as one durable evolution study. Review the three retained branches together in Artifacts.");
+        const nextEvolutionStudyId = `evolve_${crypto.randomUUID()}`;
+        const nextVideoPairId = `video_pair_${crypto.randomUUID()}`;
+        evolutionBatchAttemptRef.current = { id: nextEvolutionStudyId, signature: "" };
+        videoBatchAttemptRef.current = { id: nextVideoPairId, signature: "" };
+        setEvolutionStudyId(nextEvolutionStudyId);
+        setVideoPairId(nextVideoPairId);
+        completeCreativeSession();
         if (openQueueAfter) onQueued();
         return;
       }
@@ -707,13 +1149,14 @@ export function GenerationView({
         await submitWorkflowJob(
           runWorkflow,
           effectiveInputBindings,
-          direction.trim(),
+          providerDirection,
           dna.artifactId,
           effectiveVideoOperation ?? undefined,
           undefined,
           aligned.variant,
           undefined,
           videoDurationSeconds,
+          generationBatchIdempotencyKey(attemptVideoPairId, "aligned"),
         );
         await submitWorkflowJob(
           discoveryWorkflow,
@@ -725,8 +1168,13 @@ export function GenerationView({
           discovery.variant,
           undefined,
           videoDurationSeconds,
+          generationBatchIdempotencyKey(attemptVideoPairId, "discovery"),
         );
         setNotice("Aligned and Discovery queued as 2 durable video jobs. They will render one after the other on the Local Runner.");
+        const nextVideoPairId = `video_pair_${crypto.randomUUID()}`;
+        videoBatchAttemptRef.current = { id: nextVideoPairId, signature: "" };
+        setVideoPairId(nextVideoPairId);
+        completeCreativeSession();
         if (openQueueAfter) onQueued();
         return;
       }
@@ -735,7 +1183,7 @@ export function GenerationView({
       await submitWorkflowJob(
         runWorkflow,
         effectiveInputBindings,
-        direction.trim(),
+        providerDirection,
         dna.artifactId,
         effectiveVideoOperation ?? undefined,
         generationIntent === "image" ? imagePerformanceMode : undefined,
@@ -744,8 +1192,10 @@ export function GenerationView({
         generationIntent === "video" ? videoDurationSeconds : undefined,
       );
       setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
+      completeCreativeSession();
       if (openQueueAfter) onQueued();
     } catch {
+      resumeCreativeSessionAutosave();
       // The provider exposes a normalized visible error.
     }
   };
@@ -785,13 +1235,19 @@ export function GenerationView({
   const submitRemote = async () => {
     if (generationIntent === "video") return;
     setLocalError("");
+    beginCreativeSessionSubmission();
     try {
       const dna = await ensureDna();
-      if (!dna) return;
+      if (!dna) {
+        resumeCreativeSessionAutosave();
+        return;
+      }
       selectDna(dna);
       await submitAfdfwJob(generationIntent, dna.artifactId);
       setNotice(`Optional AFDFW ${generationIntent} job queued.`);
+      completeCreativeSession();
     } catch {
+      resumeCreativeSessionAutosave();
       // The provider exposes a normalized visible error.
     }
   };
@@ -799,19 +1255,27 @@ export function GenerationView({
   const submitDevelopmentPreview = async () => {
     if (generationIntent === "video") return;
     setLocalError("");
+    beginCreativeSessionSubmission();
     try {
       const dna = await ensureDna();
-      if (!dna) return;
+      if (!dna) {
+        resumeCreativeSessionAutosave();
+        return;
+      }
       selectDna(dna);
       await submitDevelopmentPreviewJob(generationIntent, dna.artifactId);
       setNotice(`Development ${generationIntent} preview queued. This is simulated media.`);
+      completeCreativeSession();
     } catch {
+      resumeCreativeSessionAutosave();
       // The provider exposes a normalized visible error.
     }
   };
 
   const sourceRequirement = missingMediaParameters[0]?.mediaKind;
   const generationLabel = generationIntent === "music" ? "song" : generationIntent;
+  const scoutReady = generationGoal !== "scout" || generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
+  const evolutionReady = !evolutionEnabled || Boolean(quickSource && workflowPromptParameter && projectTasteMemory && personalTaste);
   const basePrimaryLabel = !workflow
     ? "Choose a model"
     : selectedSourceCompatibilityError
@@ -819,7 +1283,7 @@ export function GenerationView({
     : !workflowReady
       ? `Choose ${sourceRequirement ?? "source"}`
       : evolutionEnabled
-        ? `Generate 3 ${generationLabel} branches`
+        ? generationGoal === "scout" ? generationGoalRunLabel(generationGoal, generationIntent) : `Generate 3 ${generationLabel} branches`
       : settingsChanged
         ? effectiveVideoOperation ? "Save & extend 2 versions" : generationIntent === "video" ? "Save & generate 2 videos" : `Save & generate ${generationLabel}`
         : effectiveVideoOperation
@@ -860,10 +1324,27 @@ export function GenerationView({
           {intent !== "train" ? <em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em> : null}
         </div>
 
+        {intent !== "train" && !(evolutionEnabled && initialEvolutionSource) ? <section className="quick-generation-goals" aria-label="Creation goal">
+          <div className="quick-generation-goal-options" role="group" aria-label="Choose creation goal">
+            {GENERATION_GOALS.map((goal) => {
+              const unavailable = goal.id === "scout" && !generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
+              return <button type="button" key={goal.id} className={generationGoal === goal.id ? "on" : ""} aria-pressed={generationGoal === goal.id} disabled={busy || (goal.id === "scout" && generationIntent !== "image")} onClick={() => chooseGenerationGoal(goal.id)} title={goal.id === "scout" && generationIntent !== "image" ? "Scout Board begins with images; video already creates two directions." : goal.description}><span>{goal.shortLabel}</span><small>{goal.id === "scout" ? unavailable ? "Choose an image" : "3 fast directions" : goal.id === "explore" ? "Recommended" : "Exact settings"}</small></button>;
+            })}
+          </div>
+          <p>{GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.description}<small>{sessionId ? "Draft autosaved on this device." : "Changes autosave on this device."}</small></p>
+        </section> : null}
+
+        {intent !== "train" && generationIntent !== "music" && workflow && !uiOnlyDevelopment && projectContext?.text ? <section className={`quick-project-context${projectContextEnabled ? " on" : ""}`}>
+          <button type="button" className="quick-project-context-toggle" aria-pressed={projectContextEnabled} onClick={() => setProjectContextEnabled((current) => !current)}>
+            <Icon name="projects" size={15} /><span><strong>{activeProject?.name} project context</strong><small>{projectContextEnabled ? "Added to this local Comfy prompt" : "Optional · off by default"}{projectContext.excludedReferenceIdentityMentions ? ` · ${projectContext.excludedReferenceIdentityMentions} provenance identity ${projectContext.excludedReferenceIdentityMentions === 1 ? "mention" : "mentions"} excluded` : ""}</small></span><em>{projectContextEnabled ? "On" : "Off"}</em>
+          </button>
+          <details><summary>Inspect exact added text</summary><p>{projectContext.text}</p></details>
+        </section> : null}
+
         {evolutionEnabled && initialEvolutionSource ? <details className="quick-evolution-brief">
-          <summary><span><Icon name="star" size={15} /><strong>Evolving {initialEvolutionSource.name}</strong><small>Refine + Correct + Discovery</small></span><Icon name="chevronDown" size={14} /></summary>
+          <summary><span><Icon name="star" size={15} /><strong>Evolving {quickSource?.name ?? initialEvolutionSource.name}</strong><small>Refine + Correct + Discovery</small></span><Icon name="chevronDown" size={14} /></summary>
           <section className="evolution-create-plan" aria-label="Evolution study">
-          <header><span><Icon name="star" size={16} /><strong>Evolve {initialEvolutionSource.name}</strong></span><button type="button" className="link-btn" onClick={() => setEvolutionEnabled(false)}>Use as a normal source</button></header>
+          <header><span><Icon name="star" size={16} /><strong>Evolve {quickSource?.name ?? initialEvolutionSource.name}</strong></span><button type="button" className="link-btn" onClick={() => { setEvolutionEnabled(false); if (generationGoal === "scout") setGenerationGoal("explore"); }}>Use as a normal source</button></header>
           <p>One request creates three retained branches with the same source, taste evidence, model settings, and study stamp. Project canon stays in lineage; song prompts use only music-specific evidence.</p>
           <div><span><b>Refine</b><small>strengthen what already works</small></span><span><b>Correct</b><small>resolve review feedback</small></span><span><b>Discovery</b><small>take a distinct new path</small></span></div>
           <footer><span>{projectTasteMemory?.taste.signalCount ?? 0} project signals</span><span>{personalTaste?.signalCount ?? 0} personal signals</span><span>{projectTasteMemory?.canon.identity ? "Canon attached" : "Add canon in Projects"}</span></footer>
@@ -901,6 +1382,11 @@ export function GenerationView({
           {musicPromptProfile ? <small className="quick-model-prompt-profile">Gemma formats this for {musicPromptProfile.targetModel}: {musicPromptProfile.outputFormat === "structured-caption" ? "Global Metadata + Vocal Details + section-by-section Arrangement" : "one concise natural-language audio prompt"}.</small> : null}
           </div>
         </details> : null}
+
+        {intent !== "train" && workflow && !uiOnlyDevelopment ? <section className="quick-recipe-tools" aria-label="Reusable generation recipes">
+          <label><Icon name="star" size={14} /><span><strong>Recipe</strong><small>{projectRecipes.length ? `${projectRecipes.length} saved · best evidence first` : "Save these exact settings"}</small></span><select aria-label="Load a generation recipe" defaultValue="" disabled={busy || !projectRecipes.length} onChange={(event) => { const recipe = projectRecipes.find((item) => item.id === event.target.value); if (recipe) applyGenerationRecipe(recipe); event.currentTarget.value = ""; }}><option value="">{projectRecipes.length ? "Choose saved recipe" : "No saved recipes yet"}</option>{projectRecipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.name}{recipe.evidenceSummary.runs ? ` · ${recipe.evidenceSummary.accepted}/${recipe.evidenceSummary.runs} accepted` : " · untested"}</option>)}</select></label>
+          <button type="button" className="btn btn-ghost" disabled={busy || !workflowReady || !directionReady} onClick={() => void saveCurrentRecipe()}><Icon name="plus" size={14} /> Save recipe</button>
+        </section> : null}
 
         {intent !== "train" && generationIntent === "image" && workflow ? <details className="quick-setting-panel quick-speed-panel">
           <summary><span><Icon name="generate" size={14} /><strong>Speed</strong></span><em>{imagePerformanceMode === "fast-default" ? "Fast" : "Custom"}</em><small>{fastImageBlocked ? "Needs custom" : compactEstimate}</small><Icon name="chevronDown" size={13} /></summary>
@@ -1013,7 +1499,7 @@ export function GenerationView({
         </div> : <>
           <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
           {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
-          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{estimatedOutputCount} {estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || selectedSourceCompatibilityError || fastImageBlocked || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
+          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{estimatedOutputCount} {estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || selectedSourceCompatibilityError || fastImageBlocked || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>
@@ -1053,7 +1539,7 @@ export function GenerationView({
             setWorkflowValues({ ...displayedValues, [parameter.id]: value });
           }} />)}</div>{advancedSettingsChanged ? <button type="button" className="btn btn-ghost workflow-run-reset" disabled={busy} onClick={() => { if (!workflow) return; setImagePerformanceMode("fast-default"); setCanvasAspectRatio(null); setCanvasMegapixels(null); setLyrics(""); setValuesRevisionId(workflow.currentRevision.id); setWorkflowValues(Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={14} /> Return to workflow defaults</button> : null}</section> : null}
 
-          {workflowWorkload ? <details className="workflow-performance create-performance quick-advanced-wide"><summary><span><Icon name="analytics" size={15} /><strong>Speed & quality evidence</strong><small>{settingsChanged ? "New settings" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} runs` : "No exact-revision history"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m alert</em></summary><div className="workflow-performance-body">{workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No workload controls are exposed by this workflow.</p>}{workflow.currentRevision.models.length ? <div className="job-performance-models"><small>Models</small><div>{workflow.currentRevision.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}<p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No high-cost setting stands out."}</p><small>{workflowWorkload.promptAssessment}</small></div></details> : null}
+          {workflow && workflowWorkload ? <details className="workflow-performance create-performance quick-advanced-wide"><summary><span><Icon name="analytics" size={15} /><strong>Speed & quality evidence</strong><small>{settingsChanged ? "New settings" : workflowHistory?.count ? `Median ${formatGenerationDuration(workflowHistory.medianMs)} · ${workflowHistory.count} runs` : "No exact-revision history"}</small></span><em>{Math.round(GENERATION_LONG_RUN_THRESHOLD_MS / 60_000)}m alert</em></summary><div className="workflow-performance-body">{workflowWorkload.facts.length ? <div className="job-performance-facts">{workflowWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div> : <p>No workload controls are exposed by this workflow.</p>}{workflow.currentRevision.models.length ? <div className="job-performance-models"><small>Models</small><div>{workflow.currentRevision.models.map((model) => <code key={model}>{model}</code>)}</div></div> : null}<p>{workflowWorkload.likelyContributors.length ? `Likely cost drivers: ${workflowWorkload.likelyContributors.join(", ")}.` : "No high-cost setting stands out."}</p><small>{workflowWorkload.promptAssessment}</small></div></details> : null}
 
           {afdfwCapability ? <details className="generation-optional-route create-remote-route quick-advanced-wide"><summary><span>Optional remote route · AFDFW</span><em className={afdfwCapability.state}>{afdfwCapability.state}</em></summary><p>{afdfwCapability.detail}</p>{afdfwImageWorkload && afdfwImageProfile ? <div className="direct-generation-profile"><div>{afdfwImageWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div><details><summary>Model evidence · {afdfwImageProfile.models.length} files</summary>{afdfwImageProfile.models.map((model) => <code key={model}>{model}</code>)}</details></div> : null}<button className="btn btn-ghost" disabled={busy || afdfwCapability.state !== "available" || !directionReady} onClick={() => void submitRemote()}><Icon name="send" size={16} /> Generate remotely with AFDFW</button></details> : null}
           {selected?.rights.referenceStoredAsProvenanceOnly ? <div className="rights-panel quick-advanced-wide"><Icon name="shield" size={18} /><div><strong>Reference identity stays in lineage only.</strong></div></div> : null}

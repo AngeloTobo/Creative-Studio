@@ -14,10 +14,22 @@ import {
   type CreativeTrainingExample,
   type CreateProjectRequest,
   type GenerationSettingsStamp,
+  type CreateGenerationRecipeRequest,
+  type GenerationRecipe,
+  type GenerationRecipePromptProfile,
+  type GenerationRecipeSourceKind,
   type Job,
   type MediaAsset,
   type MediaKind,
   type Project,
+  type RecipeEvidence,
+  type RecipeEvidenceAcceptance,
+  type UpdateGenerationRecipeRequest,
+  type WorkflowParameter,
+  type WorkflowScalar,
+  generationRecipePromptProfileForSettingsStamp,
+  generationRecipeSourceKindsForWorkflow,
+  summarizeRecipeEvidence,
   type RunnerMediaInput,
   type UpdateProjectRequest,
 } from "../shared/contracts";
@@ -73,6 +85,360 @@ export async function createProject(env: Env, ownerId: string, input: CreateProj
   await env.DB.prepare(`insert into creative_projects (id, owner_id, name, type, status, description, note, hue, initials, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(project.id, ownerId, project.name, project.type, project.status, project.description, project.note, project.hue, project.initials, now, now).run();
   return project;
+}
+
+type GenerationRecipeRow = {
+  id: string;
+  projectId: string | null;
+  worldId: string | null;
+  name: string;
+  description: string;
+  mediaKind: GenerationRecipe["mediaKind"];
+  workflowId: string;
+  workflowRevisionId: string;
+  modelIdentifier: string | null;
+  promptProfileJson: string;
+  parametersJson: string;
+  sourceKindsJson: string;
+  intentTier: GenerationRecipe["intentTier"];
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+};
+
+type RecipeEvidenceRow = {
+  id: string;
+  recipeId: string;
+  jobId: string;
+  outcome: RecipeEvidence["outcome"];
+  durationMs: number | null;
+  failure: string | null;
+  acceptance: RecipeEvidenceAcceptance;
+  observedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type RecipeWorkflowRow = {
+  modality: string;
+  executionState: string;
+  format: string;
+  parametersJson: string;
+  modelsJson: string;
+};
+
+const GENERATION_RECIPE_LIST_LIMIT = 50;
+const GENERATION_RECIPE_EVIDENCE_WINDOW = 10;
+const GENERATION_RECIPE_DETAIL_EVIDENCE_LIMIT = 100;
+
+const GENERATION_RECIPE_COLUMNS = `id, project_id as projectId, world_id as worldId, name, description,
+  media_kind as mediaKind, workflow_id as workflowId, workflow_revision_id as workflowRevisionId,
+  model_identifier as modelIdentifier, prompt_profile_json as promptProfileJson, parameters_json as parametersJson,
+  source_kinds_json as sourceKindsJson, intent_tier as intentTier, created_at as createdAt,
+  updated_at as updatedAt, archived_at as archivedAt`;
+
+const RECIPE_EVIDENCE_COLUMNS = `id, recipe_id as recipeId, job_id as jobId, outcome,
+  duration_ms as durationMs, failure, acceptance, observed_at as observedAt,
+  created_at as createdAt, updated_at as updatedAt`;
+
+function storedJson<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function recipeEvidenceFromRow(row: RecipeEvidenceRow): RecipeEvidence {
+  return { ...row, durationMs: row.durationMs === null ? null : Number(row.durationMs) };
+}
+
+function generationRecipeFromRow(row: GenerationRecipeRow, evidenceRows: RecipeEvidenceRow[] = []): GenerationRecipe {
+  const evidence = evidenceRows.map(recipeEvidenceFromRow);
+  return {
+    schemaVersion: "creative-studio-generation-recipe/1.0",
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    projectId: row.projectId,
+    worldId: row.worldId,
+    mediaKind: row.mediaKind,
+    workflowId: row.workflowId,
+    workflowRevisionId: row.workflowRevisionId,
+    modelIdentifier: row.modelIdentifier,
+    promptProfile: storedJson<GenerationRecipePromptProfile>(row.promptProfileJson, { id: "unknown", version: "unknown", targetModel: null }),
+    parameters: storedJson<Record<string, WorkflowScalar>>(row.parametersJson, {}),
+    sourceKinds: storedJson<GenerationRecipeSourceKind[]>(row.sourceKindsJson, []),
+    intentTier: row.intentTier,
+    evidence,
+    evidenceSummary: summarizeRecipeEvidence(evidence),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt,
+  };
+}
+
+function normalizedRecipeParameter(value: unknown): WorkflowScalar | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return value.length <= 100_000 ? value : null;
+  return null;
+}
+
+function normalizedRecipeParameters(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_recipe_parameters");
+  const entries = Object.entries(value);
+  if (entries.length > 100) throw new Error("invalid_recipe_parameters");
+  const parameters: Record<string, WorkflowScalar> = {};
+  for (const [rawId, rawValue] of entries) {
+    const parameterValue = normalizedRecipeParameter(rawValue);
+    if (!rawId || rawId.length > 180 || parameterValue === null) throw new Error("invalid_recipe_parameters");
+    parameters[rawId] = parameterValue;
+  }
+  return parameters;
+}
+
+function normalizedRecipePromptProfile(value: unknown): GenerationRecipePromptProfile {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_recipe_prompt_profile");
+  const profile = value as Partial<GenerationRecipePromptProfile>;
+  const idValue = boundedText(profile.id, 120);
+  const version = boundedText(profile.version, 40);
+  if (!idValue || !version) throw new Error("invalid_recipe_prompt_profile");
+  return { id: idValue, version, targetModel: boundedText(profile.targetModel, 200) || null };
+}
+
+function recipeMediaKind(modality: string): GenerationRecipe["mediaKind"] | null {
+  if (modality === "audio" || modality === "music") return "music";
+  if (modality === "image" || modality === "video") return modality;
+  return null;
+}
+
+async function recipeWorkflowRevision(env: Env, ownerId: string, workflowId: string, workflowRevisionId: string) {
+  return env.DB.prepare(`select w.modality, w.execution_state as executionState, r.format,
+    r.parameters_json as parametersJson, r.models_json as modelsJson
+    from creative_workflows w join creative_workflow_revisions r on r.workflow_id = w.id
+    where w.id = ? and w.owner_id = ? and r.id = ? and r.owner_id = ?`)
+    .bind(workflowId, ownerId, workflowRevisionId, ownerId).first<RecipeWorkflowRow>();
+}
+
+async function generationRecipeValues(env: Env, ownerId: string, input: CreateGenerationRecipeRequest) {
+  const name = boundedText(input.name, 100);
+  if (!name) throw new Error("recipe_name_required");
+  if (!(["music", "image", "video"] as string[]).includes(input.mediaKind)) throw new Error("invalid_recipe_media_kind");
+  if (!(["scout", "explore", "master"] as string[]).includes(input.intentTier)) throw new Error("invalid_recipe_intent_tier");
+  const workflowId = boundedText(input.workflowId, 100);
+  const workflowRevisionId = boundedText(input.workflowRevisionId, 100);
+  if (!workflowId || !workflowRevisionId) throw new Error("recipe_workflow_required");
+  const workflow = await recipeWorkflowRevision(env, ownerId, workflowId, workflowRevisionId);
+  if (!workflow) throw new Error("recipe_workflow_revision_not_found");
+  if (workflow.executionState !== "ready" || workflow.format !== "comfyui-api") throw new Error("recipe_workflow_not_executable");
+  if (recipeMediaKind(workflow.modality) !== input.mediaKind) throw new Error("recipe_workflow_media_kind_mismatch");
+
+  const projectId = boundedText(input.projectId, 100) || null;
+  if (projectId) {
+    const project = await projectById(env, ownerId, projectId);
+    if (!project) throw new Error("project_not_found");
+    if (project.status === "archived") throw new Error("project_archived");
+  }
+
+  const workflowParameters = storedJson<WorkflowParameter[]>(workflow.parametersJson, []);
+  const suppliedParameters = normalizedRecipeParameters(input.parameters);
+  const knownParameterIds = new Set(workflowParameters.map((parameter) => parameter.id));
+  if (Object.keys(suppliedParameters).some((parameterId) => !knownParameterIds.has(parameterId))) {
+    throw new Error("recipe_parameter_not_in_workflow");
+  }
+  const parameters = Object.fromEntries(workflowParameters.map((parameter) => [parameter.id, parameter.value])) as Record<string, WorkflowScalar>;
+  Object.assign(parameters, suppliedParameters);
+
+  if (!Array.isArray(input.sourceKinds)) throw new Error("invalid_recipe_source_kinds");
+  const allowedSourceKinds = new Set<GenerationRecipeSourceKind>(["prompt", "image", "audio", "video"]);
+  const requestedSourceKinds = new Set(input.sourceKinds);
+  const sourceKinds = [...requestedSourceKinds].filter((kind): kind is GenerationRecipeSourceKind => allowedSourceKinds.has(kind as GenerationRecipeSourceKind));
+  if (!sourceKinds.length || sourceKinds.length !== requestedSourceKinds.size) throw new Error("invalid_recipe_source_kinds");
+  const workflowSourceKinds = new Set(generationRecipeSourceKindsForWorkflow(workflowParameters));
+  if (sourceKinds.length !== workflowSourceKinds.size || sourceKinds.some((kind) => !workflowSourceKinds.has(kind))) {
+    throw new Error("recipe_source_kind_not_in_workflow");
+  }
+
+  const models = storedJson<string[]>(workflow.modelsJson, []);
+  const requestedModel = boundedText(input.modelIdentifier, 240) || null;
+  if (requestedModel && models.length && !models.includes(requestedModel)) throw new Error("recipe_model_not_in_workflow");
+  return {
+    name,
+    description: boundedText(input.description, 800),
+    projectId,
+    worldId: boundedText(input.worldId, 100) || null,
+    mediaKind: input.mediaKind,
+    workflowId,
+    workflowRevisionId,
+    modelIdentifier: requestedModel ?? (models.length === 1 ? models[0] : null),
+    promptProfile: normalizedRecipePromptProfile(input.promptProfile),
+    parameters,
+    sourceKinds,
+    intentTier: input.intentTier,
+  };
+}
+
+export async function listGenerationRecipes(env: Env, ownerId: string, includeArchived = false): Promise<GenerationRecipe[]> {
+  const archiveFilter = includeArchived ? "" : "and archived_at is null";
+  const [recipeResult, evidenceResult] = await Promise.all([
+    env.DB.prepare(`select ${GENERATION_RECIPE_COLUMNS} from creative_generation_recipes
+      where owner_id = ? ${archiveFilter}
+      order by updated_at desc, id desc limit ${GENERATION_RECIPE_LIST_LIMIT}`).bind(ownerId).all<GenerationRecipeRow>(),
+    env.DB.prepare(`select ${RECIPE_EVIDENCE_COLUMNS.replaceAll(/\b(?:id|recipe_id|job_id|outcome|duration_ms|failure|acceptance|observed_at|created_at|updated_at)\b/g, (column) => `e.${column}`)}
+      from (
+        select id from creative_generation_recipes
+        where owner_id = ? ${archiveFilter}
+        order by updated_at desc, id desc limit ${GENERATION_RECIPE_LIST_LIMIT}
+      ) selected
+      join creative_generation_recipe_evidence e on e.owner_id = ? and e.recipe_id = selected.id
+        and e.id in (
+          select recent.id from creative_generation_recipe_evidence recent
+          where recent.owner_id = ? and recent.recipe_id = selected.id
+          order by recent.observed_at desc, recent.id desc limit ${GENERATION_RECIPE_EVIDENCE_WINDOW}
+        )
+      order by e.observed_at desc, e.id desc
+      limit ${GENERATION_RECIPE_LIST_LIMIT * GENERATION_RECIPE_EVIDENCE_WINDOW}`)
+      .bind(ownerId, ownerId, ownerId).all<RecipeEvidenceRow>(),
+  ]);
+  const evidenceByRecipe = new Map<string, RecipeEvidenceRow[]>();
+  for (const evidence of evidenceResult.results ?? []) {
+    const values = evidenceByRecipe.get(evidence.recipeId) ?? [];
+    values.push(evidence);
+    evidenceByRecipe.set(evidence.recipeId, values);
+  }
+  return (recipeResult.results ?? []).map((row) => generationRecipeFromRow(row, evidenceByRecipe.get(row.id) ?? []));
+}
+
+export async function generationRecipeById(env: Env, ownerId: string, recipeId: string): Promise<GenerationRecipe | null> {
+  const row = await env.DB.prepare(`select ${GENERATION_RECIPE_COLUMNS} from creative_generation_recipes where id = ? and owner_id = ?`)
+    .bind(recipeId, ownerId).first<GenerationRecipeRow>();
+  if (!row) return null;
+  const evidence = await env.DB.prepare(`select ${RECIPE_EVIDENCE_COLUMNS} from creative_generation_recipe_evidence
+    where owner_id = ? and recipe_id = ? order by observed_at desc, id desc limit ${GENERATION_RECIPE_DETAIL_EVIDENCE_LIMIT}`)
+    .bind(ownerId, recipeId).all<RecipeEvidenceRow>();
+  return generationRecipeFromRow(row, evidence.results ?? []);
+}
+
+export async function createGenerationRecipe(env: Env, ownerId: string, input: CreateGenerationRecipeRequest) {
+  const values = await generationRecipeValues(env, ownerId, input);
+  const now = new Date().toISOString();
+  const recipeId = id("recipe");
+  await env.DB.prepare(`insert into creative_generation_recipes (
+    id, owner_id, project_id, world_id, name, description, media_kind, workflow_id, workflow_revision_id,
+    model_identifier, prompt_profile_json, parameters_json, source_kinds_json, intent_tier,
+    created_at, updated_at, archived_at
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`)
+    .bind(recipeId, ownerId, values.projectId, values.worldId, values.name, values.description, values.mediaKind,
+      values.workflowId, values.workflowRevisionId, values.modelIdentifier, JSON.stringify(values.promptProfile),
+      JSON.stringify(values.parameters), JSON.stringify(values.sourceKinds), values.intentTier, now, now).run();
+  return (await generationRecipeById(env, ownerId, recipeId))!;
+}
+
+export async function updateGenerationRecipe(env: Env, ownerId: string, recipeId: string, input: UpdateGenerationRecipeRequest) {
+  const current = await generationRecipeById(env, ownerId, recipeId);
+  if (!current) throw new Error("generation_recipe_not_found");
+  if (current.archivedAt) throw new Error("generation_recipe_archived");
+  const values = await generationRecipeValues(env, ownerId, {
+    name: input.name ?? current.name,
+    description: input.description ?? current.description,
+    projectId: input.projectId === undefined ? current.projectId : input.projectId,
+    worldId: input.worldId === undefined ? current.worldId : input.worldId,
+    mediaKind: input.mediaKind ?? current.mediaKind,
+    workflowId: input.workflowId ?? current.workflowId,
+    workflowRevisionId: input.workflowRevisionId ?? current.workflowRevisionId,
+    modelIdentifier: input.modelIdentifier === undefined ? current.modelIdentifier : input.modelIdentifier,
+    promptProfile: input.promptProfile ?? current.promptProfile,
+    parameters: input.parameters ?? current.parameters,
+    sourceKinds: input.sourceKinds ?? current.sourceKinds,
+    intentTier: input.intentTier ?? current.intentTier,
+  });
+  const executionChanged = values.mediaKind !== current.mediaKind
+    || values.workflowId !== current.workflowId
+    || values.workflowRevisionId !== current.workflowRevisionId
+    || values.modelIdentifier !== current.modelIdentifier
+    || values.intentTier !== current.intentTier
+    || JSON.stringify(values.promptProfile) !== JSON.stringify(current.promptProfile)
+    || canonicalRecipeParameters(values.parameters) !== canonicalRecipeParameters(current.parameters)
+    || [...values.sourceKinds].sort().join("|") !== [...current.sourceKinds].sort().join("|");
+  if (current.evidence.length && executionChanged) throw new Error("recipe_evidence_settings_immutable");
+  const now = new Date().toISOString();
+  await env.DB.prepare(`update creative_generation_recipes set project_id = ?, world_id = ?, name = ?, description = ?,
+    media_kind = ?, workflow_id = ?, workflow_revision_id = ?, model_identifier = ?, prompt_profile_json = ?,
+    parameters_json = ?, source_kinds_json = ?, intent_tier = ?, updated_at = ? where id = ? and owner_id = ? and archived_at is null`)
+    .bind(values.projectId, values.worldId, values.name, values.description, values.mediaKind, values.workflowId,
+      values.workflowRevisionId, values.modelIdentifier, JSON.stringify(values.promptProfile), JSON.stringify(values.parameters),
+      JSON.stringify(values.sourceKinds), values.intentTier, now, recipeId, ownerId).run();
+  return (await generationRecipeById(env, ownerId, recipeId))!;
+}
+
+/** Soft deletion keeps the recipe and its observed evidence available for audit and reproducibility. */
+export async function deleteGenerationRecipe(env: Env, ownerId: string, recipeId: string) {
+  const current = await generationRecipeById(env, ownerId, recipeId);
+  if (!current) throw new Error("generation_recipe_not_found");
+  if (!current.archivedAt) {
+    const now = new Date().toISOString();
+    await env.DB.prepare(`update creative_generation_recipes set archived_at = ?, updated_at = ? where id = ? and owner_id = ? and archived_at is null`)
+      .bind(now, now, recipeId, ownerId).run();
+  }
+  return (await generationRecipeById(env, ownerId, recipeId))!;
+}
+
+function canonicalRecipeParameters(parameters: Record<string, WorkflowScalar>) {
+  return JSON.stringify(Object.entries(parameters).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+export async function recordGenerationRecipeEvidence(env: Env, ownerId: string, recipeId: string, jobId: string) {
+  const recipe = await generationRecipeById(env, ownerId, recipeId);
+  if (!recipe) throw new Error("generation_recipe_not_found");
+  if (recipe.archivedAt) throw new Error("generation_recipe_archived");
+  const job = await jobById(env, ownerId, boundedText(jobId, 100));
+  if (!job) throw new Error("job_not_found");
+  if (!(["completed", "failed", "cancelled"] as string[]).includes(job.status)) throw new Error("recipe_evidence_job_not_terminal");
+  if (recipe.projectId && recipe.projectId !== job.projectId) throw new Error("recipe_evidence_project_mismatch");
+  if (job.modality !== recipe.mediaKind
+    || job.settingsStamp.workflow?.workflowId !== recipe.workflowId
+    || job.settingsStamp.workflow?.revisionId !== recipe.workflowRevisionId) throw new Error("recipe_evidence_workflow_mismatch");
+  if (canonicalRecipeParameters(job.settingsStamp.parameters) !== canonicalRecipeParameters(recipe.parameters)) {
+    throw new Error("recipe_evidence_parameters_mismatch");
+  }
+  if (recipe.modelIdentifier && !job.settingsStamp.models.includes(recipe.modelIdentifier)) throw new Error("recipe_evidence_model_mismatch");
+  const expectedPromptProfile = generationRecipePromptProfileForSettingsStamp(job.settingsStamp, job.modality);
+  if (!expectedPromptProfile
+    || expectedPromptProfile.id !== recipe.promptProfile.id
+    || expectedPromptProfile.version !== recipe.promptProfile.version
+    || expectedPromptProfile.targetModel !== recipe.promptProfile.targetModel) {
+    throw new Error("recipe_evidence_prompt_profile_mismatch");
+  }
+  const workflow = await recipeWorkflowRevision(env, ownerId, recipe.workflowId, recipe.workflowRevisionId);
+  if (!workflow) throw new Error("recipe_evidence_workflow_mismatch");
+  const executableSourceKinds = generationRecipeSourceKindsForWorkflow(storedJson<WorkflowParameter[]>(workflow.parametersJson, []));
+  if ([...executableSourceKinds].sort().join("|") !== [...recipe.sourceKinds].sort().join("|")) {
+    throw new Error("recipe_evidence_source_kind_mismatch");
+  }
+
+  const latestAcceptance = job.artifactId
+    ? await env.DB.prepare(`select decision from creative_acceptances where owner_id = ? and artifact_id = ? order by created_at desc limit 1`)
+      .bind(ownerId, job.artifactId).first<{ decision: RecipeEvidenceAcceptance }>()
+    : null;
+  const acceptance = latestAcceptance?.decision ?? "unreviewed";
+  const startedAt = Date.parse(job.startedAt ?? job.createdAt);
+  const finishedAt = Date.parse(job.completedAt ?? job.updatedAt);
+  const durationMs = Number.isFinite(startedAt) && Number.isFinite(finishedAt) && finishedAt >= startedAt ? finishedAt - startedAt : null;
+  const observedAt = job.completedAt ?? job.updatedAt;
+  const now = new Date().toISOString();
+  const evidenceId = id("recipeevidence");
+  await env.DB.prepare(`insert into creative_generation_recipe_evidence (
+    id, owner_id, recipe_id, job_id, outcome, duration_ms, failure, acceptance, observed_at, created_at, updated_at
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  on conflict(owner_id, recipe_id, job_id) do update set outcome = excluded.outcome, duration_ms = excluded.duration_ms,
+    failure = excluded.failure, acceptance = excluded.acceptance, observed_at = excluded.observed_at, updated_at = excluded.updated_at`)
+    .bind(evidenceId, ownerId, recipeId, job.id, job.status, durationMs, boundedText(job.error, 500) || null,
+      acceptance, observedAt, now, now).run();
+  const evidenceRow = await env.DB.prepare(`select ${RECIPE_EVIDENCE_COLUMNS} from creative_generation_recipe_evidence
+    where owner_id = ? and recipe_id = ? and job_id = ?`).bind(ownerId, recipeId, job.id).first<RecipeEvidenceRow>();
+  if (!evidenceRow) throw new Error("recipe_evidence_not_found");
+  return { recipe: (await generationRecipeById(env, ownerId, recipeId))!, evidence: recipeEvidenceFromRow(evidenceRow) };
 }
 
 type MediaRow = {

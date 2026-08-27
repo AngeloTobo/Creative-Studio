@@ -12,6 +12,7 @@ import type { StudioView } from "../../app/views";
 import { Icon, type IconName } from "../../components/Icon";
 import { ArtifactThumb, StatusDot } from "../../components/Visuals";
 import type { CreateIntent } from "../generation/quickCreate";
+import { useCreativeSessions } from "../sessions";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   energy: "Energy",
@@ -108,6 +109,7 @@ export function PortalView({
   onTrain: (sourceId: string) => void;
 }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, busy, error } = useStudio();
+  const { latest: latestSession } = useCreativeSessions(activeProjectId);
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [localError, setLocalError] = useState("");
@@ -213,11 +215,12 @@ export function PortalView({
     {(localError || error) ? <div className="inline-error" role="alert">{localError || error}</div> : null}
 
     <section className="home-continue glass" aria-label="Continue working">
-      <header><span><small>CONTINUE</small><strong>{activeJobs.length ? `${activeJobs.length} ${activeJobs.length === 1 ? "run" : "runs"} active` : recentArtifacts.length ? "Newest work" : "Ready to make"}</strong></span><button className="link-btn" onClick={() => navigate("work")}>Open Work <Icon name="arrow" size={13} /></button></header>
+      <header><span><small>CONTINUE</small><strong>{activeJobs.length ? `${activeJobs.length} ${activeJobs.length === 1 ? "run" : "runs"} active` : latestSession ? `Resume ${latestSession.intentTier} ${latestSession.mediaKind}` : recentArtifacts.length ? "Newest work" : "Ready to make"}</strong></span><button className="link-btn" onClick={() => navigate("work")}>Open Work <Icon name="arrow" size={13} /></button></header>
       <div className="home-continue-rail">
         {activeJobs.slice(0, 3).map((job) => <button className="home-run-chip" key={job.id} onClick={() => navigate("queue")}><StatusDot status={job.status} /><span><strong>{job.prompt.trim() || (job.modality === "music" ? "Song" : job.modality)}</strong><small>{job.status} · {job.progress}%</small></span></button>)}
+        {latestSession ? <button className="home-run-chip home-draft-chip" onClick={() => navigate("dna")}><Icon name="wand" size={17} /><span><strong>{latestSession.direction || `Untitled ${latestSession.mediaKind}`}</strong><small>{latestSession.intentTier} draft · saved {new Date(latestSession.updatedAt).toLocaleString()}</small></span><Icon name="arrow" size={14} /></button> : null}
         {recentArtifacts.map((artifact) => <button className="home-artifact-chip" key={artifact.id} onClick={() => navigate("gallery")}><ArtifactThumb artifact={artifact} compact /><span><strong>{artifact.name}</strong><small>{artifact.kind} · {artifact.status}</small></span></button>)}
-        {!activeJobs.length && !recentArtifacts.length ? <button className="home-empty-continue" onClick={() => navigate("dna")}><Icon name="wand" size={17} /><span><strong>Create the first result</strong><small>Choose a model and begin.</small></span><Icon name="arrow" size={14} /></button> : null}
+        {!activeJobs.length && !latestSession && !recentArtifacts.length ? <button className="home-empty-continue" onClick={() => navigate("dna")}><Icon name="wand" size={17} /><span><strong>Create the first result</strong><small>Choose a model and begin.</small></span><Icon name="arrow" size={14} /></button> : null}
       </div>
     </section>
   </div>;

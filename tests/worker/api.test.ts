@@ -86,6 +86,8 @@ async function clearData() {
     env.DB.prepare("delete from creative_dna_training_evidence_reservations"),
     env.DB.prepare("delete from creative_dna_training_jobs"),
     env.DB.prepare("delete from creative_training_examples"),
+    env.DB.prepare("delete from creative_generation_recipe_evidence"),
+    env.DB.prepare("delete from creative_generation_recipes"),
     env.DB.prepare("delete from creative_workflow_revisions"),
     env.DB.prepare("delete from creative_workflows"),
     env.DB.prepare("delete from creative_media_assets"),
@@ -783,6 +785,371 @@ describe("Creative Studio Worker API", () => {
     });
   });
 
+  it("persists reusable generation recipes with exact workflow settings and observed job evidence", async () => {
+    const ownerId = "owner-recipes";
+    const local = workerEnv("afdfw", afdfwFor(ownerId));
+    const project = await testProject(ownerId, "Recipe Study");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Recipe direction",
+      directive: "A polished translucent form in a dark studio.",
+      targetModality: "image",
+    });
+    const graph = {
+      "1": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" }, _meta: { title: "Load model" } },
+      "2": { class_type: "PrimitiveStringMultiline", inputs: { value: "A polished translucent form in a dark studio" }, _meta: { title: "Prompt" } },
+      "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] }, _meta: { title: "Sampler" } },
+      "4": { class_type: "SaveImage", inputs: { filename_prefix: "result", images: ["3", 0] }, _meta: { title: "Save image" } },
+      "5": { class_type: "EmptySD3LatentImage", inputs: { width: 1024, height: 1024, batch_size: 1 }, _meta: { title: "Image size" } },
+    };
+    const raw = JSON.stringify(graph);
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("recipe-image.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(raw).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("Recipe Image"),
+      },
+      body: raw,
+    }), local)) as {
+      workflow: {
+        id: string;
+        name: string;
+        currentRevision: {
+          id: string;
+          version: number;
+          format: "comfyui-api";
+          contentHash: string;
+          parameters: Array<{ id: string; value: string | number | boolean }>;
+          models: string[];
+        };
+      };
+    };
+    const parameters = Object.fromEntries(imported.workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
+
+    const incompatibleSources = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Invalid image-input recipe",
+        projectId: project.id,
+        mediaKind: "image",
+        workflowId: imported.workflow.id,
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        promptProfile: { id: "creative-studio-image-direct-prompt", version: "1.0", targetModel: "z_image_turbo_bf16.safetensors" },
+        parameters,
+        sourceKinds: ["image"],
+        intentTier: "scout",
+      }),
+    }), local);
+    expect(incompatibleSources.status).toBe(400);
+    expect(await result(incompatibleSources)).toMatchObject({ error: "recipe_source_kind_not_in_workflow" });
+
+    const createdResponse = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Fast translucent scout",
+        description: "The exact known-fast Z-Image setup.",
+        projectId: project.id,
+        worldId: "world_translucent_forms",
+        mediaKind: "image",
+        workflowId: imported.workflow.id,
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        modelIdentifier: "z_image_turbo_bf16.safetensors",
+        promptProfile: { id: "creative-studio-image-direct-prompt", version: "1.0", targetModel: "z_image_turbo_bf16.safetensors" },
+        parameters,
+        sourceKinds: ["prompt"],
+        intentTier: "scout",
+      }),
+    }), local);
+    expect(createdResponse.status).toBe(201);
+    const created = await result(createdResponse) as { recipe: { id: string; workflowRevisionId: string; parameters: Record<string, unknown>; evidence: unknown[]; evidenceSummary: { runs: number } } };
+    expect(created.recipe).toMatchObject({ workflowRevisionId: imported.workflow.currentRevision.id, parameters, evidence: [], evidenceSummary: { runs: 0 } });
+
+    const settingsStamp = {
+      schemaVersion: 1 as const,
+      source: "comfyui-workflow" as const,
+      createdAt: "2026-08-26T12:00:00.000Z",
+      reusedFromJobId: null,
+      prompt: "A polished translucent form in a dark studio",
+      provider: "local-comfyui",
+      modality: "image" as const,
+      performanceMode: "explicit-custom" as const,
+      workflow: {
+        workflowId: imported.workflow.id,
+        revisionId: imported.workflow.currentRevision.id,
+        version: imported.workflow.currentRevision.version,
+        name: imported.workflow.name,
+        format: imported.workflow.currentRevision.format,
+        contentHash: imported.workflow.currentRevision.contentHash,
+      },
+      parameters,
+      models: imported.workflow.currentRevision.models,
+      inputAssetIds: [],
+      inputArtifactIds: [],
+      inputSources: [],
+      inputBindings: {},
+    };
+    const otherProject = await testProject(ownerId, "Other Recipe Study");
+    const otherDna = await createLocalDna(env, ownerId, {
+      projectId: otherProject.id,
+      name: "Other direction",
+      directive: "The same workflow in a separate project.",
+      targetModality: "image",
+    });
+    const otherProjectJob = await createQueuedJob(env, ownerId, {
+      projectId: otherProject.id,
+      dna: otherDna,
+      modality: "image",
+      idempotencyKey: "recipe_other_project_001",
+      provider: "local-comfyui",
+      reconcileEmail: null,
+      executionTarget: "local-comfyui",
+      workflowId: imported.workflow.id,
+      workflowRevisionId: imported.workflow.currentRevision.id,
+      settingsStampOverride: { ...settingsStamp, createdAt: "2026-08-26T11:58:00.000Z" },
+    });
+    await env.DB.prepare(`update creative_jobs set status = 'failed', progress = 100, error = 'Test failure',
+      started_at = ?, completed_at = ?, updated_at = ?, execution_stage = 'failed', stage_updated_at = ? where id = ?`)
+      .bind("2026-08-26T11:58:00.000Z", "2026-08-26T11:58:04.000Z", "2026-08-26T11:58:04.000Z", "2026-08-26T11:58:04.000Z", otherProjectJob.job.id).run();
+    const projectMismatch = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: otherProjectJob.job.id }),
+    }), local);
+    expect(projectMismatch.status).toBe(400);
+    expect(await result(projectMismatch)).toMatchObject({ error: "recipe_evidence_project_mismatch" });
+
+    const globalRecipeResponse = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Owner-wide translucent scout",
+        projectId: null,
+        mediaKind: "image",
+        workflowId: imported.workflow.id,
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        modelIdentifier: "z_image_turbo_bf16.safetensors",
+        promptProfile: { id: "creative-studio-image-direct-prompt", version: "1.0", targetModel: "z_image_turbo_bf16.safetensors" },
+        parameters,
+        sourceKinds: ["prompt"],
+        intentTier: "scout",
+      }),
+    }), local);
+    expect(globalRecipeResponse.status).toBe(201);
+    const globalRecipe = await result(globalRecipeResponse) as { recipe: { id: string } };
+    const globalEvidence = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${globalRecipe.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: otherProjectJob.job.id }),
+    }), local);
+    expect(globalEvidence.status).toBe(201);
+
+    const failed = await createQueuedJob(env, ownerId, {
+      projectId: project.id,
+      dna,
+      modality: "image",
+      idempotencyKey: "recipe_failed_001",
+      provider: "local-comfyui",
+      reconcileEmail: null,
+      executionTarget: "local-comfyui",
+      workflowId: imported.workflow.id,
+      workflowRevisionId: imported.workflow.currentRevision.id,
+      settingsStampOverride: settingsStamp,
+    });
+    await env.DB.prepare(`update creative_jobs set status = 'failed', progress = 100, error = 'CUDA out of memory',
+      started_at = ?, completed_at = ?, updated_at = ?, execution_stage = 'failed', stage_updated_at = ? where id = ?`)
+      .bind("2026-08-26T12:00:00.000Z", "2026-08-26T12:00:12.000Z", "2026-08-26T12:00:12.000Z", "2026-08-26T12:00:12.000Z", failed.job.id).run();
+    const wrongProfileResponse = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Wrong prompt profile",
+        projectId: project.id,
+        mediaKind: "image",
+        workflowId: imported.workflow.id,
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        modelIdentifier: "z_image_turbo_bf16.safetensors",
+        promptProfile: { id: "creative-studio-image-direct-prompt", version: "1.0", targetModel: "Wrong target" },
+        parameters,
+        sourceKinds: ["prompt"],
+        intentTier: "scout",
+      }),
+    }), local);
+    const wrongProfile = await result(wrongProfileResponse) as { recipe: { id: string } };
+    const promptProfileMismatch = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${wrongProfile.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: failed.job.id }),
+    }), local);
+    expect(promptProfileMismatch.status).toBe(400);
+    expect(await result(promptProfileMismatch)).toMatchObject({ error: "recipe_evidence_prompt_profile_mismatch" });
+    const failedEvidence = await result(await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: failed.job.id }),
+    }), local));
+    expect(failedEvidence).toMatchObject({
+      ok: true,
+      evidence: { jobId: failed.job.id, outcome: "failed", durationMs: 12_000, failure: "CUDA out of memory", acceptance: "unreviewed" },
+      recipe: { evidenceSummary: { runs: 1, failed: 1 } },
+    });
+
+    const completed = await createQueuedJob(env, ownerId, {
+      projectId: project.id,
+      dna,
+      modality: "image",
+      idempotencyKey: "recipe_completed_001",
+      provider: "local-comfyui",
+      reconcileEmail: null,
+      executionTarget: "local-comfyui",
+      workflowId: imported.workflow.id,
+      workflowRevisionId: imported.workflow.currentRevision.id,
+      settingsStampOverride: { ...settingsStamp, createdAt: "2026-08-26T12:01:00.000Z" },
+    });
+    const artifactId = "artifact_recipe_completed";
+    await env.DB.batch([
+      env.DB.prepare(`insert into creative_artifacts (
+        id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt,
+        preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id,
+        created_at, updated_at, settings_stamp_json
+      ) values (?, ?, ?, ?, ?, 'image', ?, 'ready', 'local-comfyui', ?, 'remote-media', null, ?, ?, null, null, ?, ?, ?)`)
+        .bind(artifactId, ownerId, project.id, completed.job.id, dna.artifactId, "Recipe result", settingsStamp.prompt,
+          "#111827", "#6d28d9", "2026-08-26T12:01:09.000Z", "2026-08-26T12:01:09.000Z", JSON.stringify(settingsStamp)),
+      env.DB.prepare(`update creative_jobs set status = 'completed', progress = 100, artifact_id = ?,
+        started_at = ?, completed_at = ?, updated_at = ?, execution_stage = 'completed', stage_updated_at = ? where id = ?`)
+        .bind(artifactId, "2026-08-26T12:01:00.000Z", "2026-08-26T12:01:09.000Z", "2026-08-26T12:01:09.000Z", "2026-08-26T12:01:09.000Z", completed.job.id),
+      env.DB.prepare(`insert into creative_acceptances (id, owner_id, artifact_id, decision, note, actor, created_at)
+        values ('accept_recipe_completed', ?, ?, 'accepted', 'Strong form and speed.', 'angelo', ?)`)
+        .bind(ownerId, artifactId, "2026-08-26T12:02:00.000Z"),
+    ]);
+    const completedEvidence = await result(await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: completed.job.id }),
+    }), local));
+    expect(completedEvidence).toMatchObject({
+      evidence: { jobId: completed.job.id, outcome: "completed", durationMs: 9_000, acceptance: "accepted" },
+      recipe: { evidenceSummary: { runs: 2, completed: 1, failed: 1, accepted: 1, acceptanceRate: 1, medianDurationMs: 10_500 } },
+    });
+
+    for (let index = 0; index < 10; index += 1) {
+      const observed = new Date(Date.UTC(2026, 7, 26, 12, 10 + index)).toISOString();
+      const evidenceJob = await createQueuedJob(env, ownerId, {
+        projectId: project.id,
+        dna,
+        modality: "image",
+        idempotencyKey: `recipe_window_job_${String(index).padStart(3, "0")}`,
+        provider: "local-comfyui",
+        reconcileEmail: null,
+        executionTarget: "local-comfyui",
+        workflowId: imported.workflow.id,
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        settingsStampOverride: { ...settingsStamp, createdAt: observed },
+      });
+      await env.DB.prepare(`update creative_jobs set status = 'failed', progress = 100, error = 'Window evidence',
+        started_at = ?, completed_at = ?, updated_at = ?, execution_stage = 'failed', stage_updated_at = ? where id = ?`)
+        .bind(observed, observed, observed, observed, evidenceJob.job.id).run();
+      const recorded = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}/evidence`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jobId: evidenceJob.job.id }),
+      }), local);
+      expect(recorded.status).toBe(201);
+    }
+
+    const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), local)) as { snapshot: { recipes: Array<{ id: string; evidence: unknown[] }> } };
+    expect(snapshot.snapshot.recipes.map((recipe) => recipe.id)).toContain(created.recipe.id);
+    expect(snapshot.snapshot.recipes.find((recipe) => recipe.id === created.recipe.id)?.evidence).toHaveLength(10);
+    const detailedRecipe = await result(await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}`), local)) as { recipe: { evidence: unknown[] } };
+    expect(detailedRecipe.recipe.evidence).toHaveLength(12);
+    const immutableSettings = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ intentTier: "master" }),
+    }), local);
+    expect(immutableSettings.status).toBe(409);
+    expect(await result(immutableSettings)).toMatchObject({ error: "recipe_evidence_settings_immutable" });
+    const updated = await result(await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Proven translucent scout" }),
+    }), local));
+    expect(updated).toMatchObject({ recipe: { name: "Proven translucent scout", intentTier: "scout", worldId: "world_translucent_forms" } });
+
+    const notOwned = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}`), workerEnv("afdfw", afdfwFor("owner-recipes-other")));
+    expect(notOwned.status).toBe(404);
+    await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${globalRecipe.recipe.id}`, { method: "DELETE" }), local);
+    await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${wrongProfile.recipe.id}`, { method: "DELETE" }), local);
+    await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${created.recipe.id}`, { method: "DELETE" }), local);
+    const active = await result(await routeCreativeStudioApi(request("/api/creative-studio/recipes"), local)) as { recipes: unknown[] };
+    expect(active.recipes).toHaveLength(0);
+    const archived = await result(await routeCreativeStudioApi(request("/api/creative-studio/recipes?includeArchived=true"), local)) as { recipes: Array<{ id: string; archivedAt: string | null }> };
+    expect(archived.recipes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: created.recipe.id, archivedAt: expect.any(String) }),
+      expect.objectContaining({ id: globalRecipe.recipe.id, archivedAt: expect.any(String) }),
+      expect.objectContaining({ id: wrongProfile.recipe.id, archivedAt: expect.any(String) }),
+    ]));
+  });
+
+  it("bounds normal recipe snapshots to the newest 50 active records", async () => {
+    const ownerId = "owner-recipe-window";
+    const local = workerEnv("afdfw", afdfwFor(ownerId));
+    const project = await testProject(ownerId, "Recipe Window");
+    const graph = JSON.stringify({
+      "1": { class_type: "PrimitiveStringMultiline", inputs: { value: "A bounded recipe window" }, _meta: { title: "Prompt" } },
+      "2": { class_type: "SaveImage", inputs: { images: ["1", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("recipe-window.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; name: string; currentRevision: { id: string; parameters: Array<{ id: string; value: string | number | boolean }> } } };
+    const parameters = Object.fromEntries(imported.workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
+    const baseResponse = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Recipe window base",
+        projectId: project.id,
+        mediaKind: "image",
+        workflowId: imported.workflow.id,
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        promptProfile: { id: "creative-studio-image-direct-prompt", version: "1.0", targetModel: imported.workflow.name },
+        parameters,
+        sourceKinds: ["prompt"],
+        intentTier: "scout",
+      }),
+    }), local);
+    const base = await result(baseResponse) as { recipe: { id: string } };
+    await env.DB.batch(Array.from({ length: 55 }, (_, index) => {
+      const recipeId = `recipe_window_${String(index).padStart(2, "0")}`;
+      const timestamp = new Date(Date.UTC(2027, 0, 1, 0, index)).toISOString();
+      return env.DB.prepare(`insert into creative_generation_recipes (
+        id, owner_id, project_id, world_id, name, description, media_kind, workflow_id, workflow_revision_id,
+        model_identifier, prompt_profile_json, parameters_json, source_kinds_json, intent_tier, created_at, updated_at, archived_at
+      ) select ?, owner_id, project_id, world_id, ?, description, media_kind, workflow_id, workflow_revision_id,
+        model_identifier, prompt_profile_json, parameters_json, source_kinds_json, intent_tier, ?, ?, null
+        from creative_generation_recipes where id = ? and owner_id = ?`)
+        .bind(recipeId, `Recipe window ${index}`, timestamp, timestamp, base.recipe.id, ownerId);
+    }));
+
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/recipes"), local)) as { recipes: Array<{ id: string; archivedAt: string | null }> };
+    expect(listed.recipes).toHaveLength(50);
+    expect(listed.recipes[0].id).toBe("recipe_window_54");
+    expect(listed.recipes.every((recipe) => recipe.archivedAt === null)).toBe(true);
+    const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), local)) as { snapshot: { recipes: Array<{ id: string }> } };
+    expect(snapshot.snapshot.recipes).toHaveLength(50);
+  });
+
   it("rejects unsupported media before writing R2", async () => {
     const ownerId = "owner-unsupported-media";
     const project = await testProject(ownerId, "Unsupported Media");
@@ -1128,7 +1495,7 @@ describe("Creative Studio Worker API", () => {
         "x-cs-workflow-name": encodeURIComponent("MiniMax Music 3"),
       },
       body: graph,
-    }), local)) as { workflow: { id: string; currentRevision: { id: string; parameters: Array<{ id: string; label: string }> } } };
+    }), local)) as { workflow: { id: string; name: string; currentRevision: { id: string; parameters: Array<{ id: string; label: string; value: string | number | boolean }>; models: string[] } } };
     const caption = imported.workflow.currentRevision.parameters.find((parameter) => /caption/i.test(`${parameter.id} ${parameter.label}`));
     expect(caption).toBeTruthy();
     const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
@@ -1210,12 +1577,50 @@ describe("Creative Studio Worker API", () => {
     }), local);
     expect(completed.status).toBe(200);
     const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as {
-      artifacts: Array<{ prompt: string; settingsStamp: { promptEnhancement?: { sourcePrompt: string; enhancedPrompt: string } } }>;
+      artifacts: Array<{ jobId: string; projectId: string; kind: "music"; prompt: string; settingsStamp: {
+        workflow: { workflowId: string; revisionId: string; name: string };
+        models: string[];
+        parameters: Record<string, string | number | boolean>;
+        promptEnhancement?: { sourcePrompt: string; enhancedPrompt: string; promptProfileId: string; targetModel: string };
+      } }>;
     };
     expect(history.artifacts[0]).toMatchObject({
       prompt: enhancedPrompt,
       settingsStamp: { promptEnhancement: { sourcePrompt: created.job.prompt, enhancedPrompt } },
     });
+    const musicArtifact = history.artifacts[0];
+    const createMusicRecipe = async (targetModel: string) => result(await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: `MiniMax winner ${targetModel}`,
+        projectId: musicArtifact.projectId,
+        mediaKind: "music",
+        workflowId: musicArtifact.settingsStamp.workflow.workflowId,
+        workflowRevisionId: musicArtifact.settingsStamp.workflow.revisionId,
+        modelIdentifier: musicArtifact.settingsStamp.models[0] ?? null,
+        promptProfile: { id: "minimax-music-3-structured-caption", version: "1.0", targetModel },
+        parameters: musicArtifact.settingsStamp.parameters,
+        sourceKinds: ["prompt"],
+        intentTier: "master",
+      }),
+    }), local)) as Promise<{ recipe: { id: string } }>;
+    const wrongMusicRecipe = await createMusicRecipe("Wrong music target");
+    const wrongMusicEvidence = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${wrongMusicRecipe.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: musicArtifact.jobId }),
+    }), local);
+    expect(wrongMusicEvidence.status).toBe(400);
+    expect(await result(wrongMusicEvidence)).toMatchObject({ error: "recipe_evidence_prompt_profile_mismatch" });
+    const musicRecipe = await createMusicRecipe("MiniMax Music 3");
+    const musicEvidence = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${musicRecipe.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: musicArtifact.jobId }),
+    }), local);
+    expect(musicEvidence.status).toBe(201);
+    expect(await result(musicEvidence)).toMatchObject({ evidence: { jobId: musicArtifact.jobId, outcome: "completed" } });
   });
 
   it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
@@ -1415,11 +1820,55 @@ describe("Creative Studio Worker API", () => {
       body: extensionBytes,
     }), local);
     expect(extensionComplete.status).toBe(200);
-    const extendedHistory = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ lineage: { sourceArtifactIds: string[] }; settingsStamp: { videoOperation?: { kind: string } } }> };
+    const extendedHistory = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{
+      id: string;
+      jobId: string;
+      projectId: string;
+      lineage: { sourceArtifactIds: string[] };
+      settingsStamp: {
+        workflow: { workflowId: string; revisionId: string; name: string };
+        models: string[];
+        parameters: Record<string, string | number | boolean>;
+        inputSources: Array<{ kind: string }>;
+        videoOperation?: { kind: string };
+      };
+    }> };
     expect(extendedHistory.artifacts[0]).toMatchObject({
       lineage: { sourceArtifactIds: [history.artifacts[0].id] },
       settingsStamp: { videoOperation: { kind: "extend" } },
     });
+    expect(extendedHistory.artifacts[0].settingsStamp.inputSources).toEqual([expect.objectContaining({ kind: "video" })]);
+    const extensionArtifact = extendedHistory.artifacts[0];
+    const extensionRecipeResponse = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Executable final-frame extension",
+        projectId: extensionArtifact.projectId,
+        mediaKind: "video",
+        workflowId: extensionArtifact.settingsStamp.workflow.workflowId,
+        workflowRevisionId: extensionArtifact.settingsStamp.workflow.revisionId,
+        modelIdentifier: extensionArtifact.settingsStamp.models[0] ?? null,
+        promptProfile: {
+          id: "creative-studio-video-direct-prompt",
+          version: "1.0",
+          targetModel: extensionArtifact.settingsStamp.models[0] ?? extensionArtifact.settingsStamp.workflow.name,
+        },
+        parameters: extensionArtifact.settingsStamp.parameters,
+        sourceKinds: ["prompt", "image"],
+        intentTier: "master",
+      }),
+    }), local);
+    expect(extensionRecipeResponse.status).toBe(201);
+    const extensionRecipe = await result(extensionRecipeResponse) as { recipe: { id: string; sourceKinds: string[] } };
+    expect(extensionRecipe.recipe.sourceKinds).toEqual(["prompt", "image"]);
+    const extensionEvidence = await routeCreativeStudioApi(request(`/api/creative-studio/recipes/${extensionRecipe.recipe.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobId: extensionArtifact.jobId }),
+    }), local);
+    expect(extensionEvidence.status).toBe(201);
+    expect(await result(extensionEvidence)).toMatchObject({ evidence: { jobId: extensionArtifact.jobId, outcome: "completed" } });
 
     const remixGraph = JSON.stringify({
       "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },

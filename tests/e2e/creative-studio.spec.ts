@@ -1,5 +1,57 @@
 import { expect, test } from "@playwright/test";
 
+test("a Create draft survives navigation and resumes from Home", async ({ page }) => {
+  const createdAt = "2026-08-27T05:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "project_session", activeDnaArtifactId: null, name: "Resumable study", type: "Image", status: "active", description: "", note: "", hue: "#d946ef", initials: "RS", createdAt: time, updatedAt: time }],
+      dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
+    }));
+  }, { createdAt });
+
+  await page.goto("/#/dna");
+  const direction = page.getByRole("textbox", { name: "Describe the image" });
+  await direction.fill("A suspended glass seed holding a tiny electric storm.");
+  await expect(page.getByText("Changes autosave on this device.")).toBeVisible();
+  await page.waitForTimeout(750);
+
+  await page.goto("/#/portal");
+  const draft = page.locator(".home-draft-chip");
+  await expect(draft).toContainText("A suspended glass seed holding a tiny electric storm.");
+  await expect(draft).toContainText("explore draft");
+  await draft.click();
+  await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.getByRole("textbox", { name: "Describe the image" })).toHaveValue("A suspended glass seed holding a tiny electric storm.");
+  await expect(page.getByText(/Resumed your explore image draft/)).toBeVisible();
+});
+
+test("a restored draft requires an explicit replacement when its model disappeared", async ({ page }) => {
+  const createdAt = "2026-08-27T05:10:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "project_missing_model", activeDnaArtifactId: null, name: "Model recovery", type: "Image", status: "active", description: "", note: "", hue: "#d946ef", initials: "MR", createdAt: time, updatedAt: time }],
+      workflows: [{
+        id: "workflow_available", projectId: "project_missing_model", name: "Available image model", description: "", sourceFileName: "available.json", modality: "image", executionState: "ready", createdAt: time, updatedAt: time,
+        currentRevision: { id: "workflowrev_available", workflowId: "workflow_available", version: 1, parentRevisionId: null, format: "comfyui-api", contentHash: "availablehash", nodeCount: 2, models: ["available.safetensors"], createdAt: time, parameters: [{ id: "2::text", label: "Prompt", kind: "text", value: "Available prompt", mediaKind: null, binding: { format: "comfyui-api", nodeId: "2", inputName: "text" } }] },
+      }],
+      dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
+    }));
+    localStorage.setItem("creative-studio:create-sessions", JSON.stringify({
+      schemaVersion: 2,
+      sessions: [{ schemaVersion: 2, id: "session_missing_model", projectId: "project_missing_model", sourceAssetIds: [], retainedArtifactId: null, direction: "A mirrored seed opening under moonlight.", mediaKind: "image", workflowId: "workflow_removed", graphicalSettings: { workflowRevisionId: "workflowrev_removed" }, intentTier: "explore", updatedAt: time }],
+    }));
+  }, { createdAt });
+
+  await page.goto("/#/dna");
+  await expect(page.getByText(/model is no longer available/i)).toBeVisible();
+  await expect(page.locator(".quick-compose-model > summary")).toContainText("No image model ready");
+  await expect(page.locator(".quick-primary")).toContainText("Choose a model");
+  await expect(page.locator(".quick-primary")).toBeDisabled();
+  await page.locator(".quick-compose-model > summary").click();
+  await page.getByRole("button", { name: /Available image model/ }).click();
+  await expect(page.locator(".quick-compose-model > summary")).toContainText("Available image model");
+});
+
 test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-tap animation brief", async ({ page }) => {
   const createdAt = "2026-08-23T23:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
@@ -223,10 +275,12 @@ test("evolution results stay in one side-by-side study instead of repeating in a
   await expect(page.getByRole("feed", { name: "Artifact history, newest first" })).toBeVisible();
   await expect(study).toHaveCount(1);
   await expect(study.locator(".evolution-branch")).toHaveCount(3);
+  await expect(study).toContainText("Direction board");
   await expect(study).toContainText("Refine");
   await expect(study).toContainText("Correct");
   await expect(study).toContainText("Discovery");
-  await expect(study).toContainText("3 media · 4 runs");
+  await expect(study.locator(".evolution-branch-label > b")).toHaveText(["A", "B", "C"]);
+  await expect(study).toContainText("3 ready · 4 runs");
   const noMedia = study.locator(".evolution-no-media");
   await expect(noMedia).toContainText("1 run without media");
   await expect(noMedia.getByText("job_cancelled", { exact: false })).toBeHidden();

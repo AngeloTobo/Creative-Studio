@@ -28,6 +28,11 @@ import {
   type ModelAdapterReviewDecision,
   type ReviewModelAdapterResponse,
   type ReviewModelTrainingDatasetRequest,
+  type CreateGenerationRecipeRequest,
+  type GenerationRecipeResponse,
+  type GenerationRecipesResponse,
+  type RecipeEvidenceResponse,
+  type UpdateGenerationRecipeRequest,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -173,6 +178,41 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify(input),
       });
       return result.workflow;
+    },
+    async listGenerationRecipes(includeArchived = false) {
+      const query = includeArchived ? "?includeArchived=true" : "";
+      const result = await request<GenerationRecipesResponse>(`${CREATIVE_STUDIO_ROUTES.recipes}${query}`);
+      return result.recipes;
+    },
+    async getGenerationRecipe(recipeId: string) {
+      const result = await request<GenerationRecipeResponse>(`${CREATIVE_STUDIO_ROUTES.recipes}/${encodeURIComponent(recipeId)}`);
+      return result.recipe;
+    },
+    async createGenerationRecipe(input: CreateGenerationRecipeRequest) {
+      const result = await request<GenerationRecipeResponse>(CREATIVE_STUDIO_ROUTES.recipes, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.recipe;
+    },
+    async updateGenerationRecipe(recipeId: string, input: UpdateGenerationRecipeRequest) {
+      const result = await request<GenerationRecipeResponse>(`${CREATIVE_STUDIO_ROUTES.recipes}/${encodeURIComponent(recipeId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
+      return result.recipe;
+    },
+    async deleteGenerationRecipe(recipeId: string) {
+      const result = await request<GenerationRecipeResponse>(`${CREATIVE_STUDIO_ROUTES.recipes}/${encodeURIComponent(recipeId)}`, {
+        method: "DELETE",
+      });
+      return result.recipe;
+    },
+    async recordGenerationRecipeEvidence(recipeId: string, jobId: string) {
+      return request<RecipeEvidenceResponse>(`${CREATIVE_STUDIO_ROUTES.recipes}/${encodeURIComponent(recipeId)}/evidence`, {
+        method: "POST",
+        body: JSON.stringify({ jobId }),
+      });
     },
     async startCreativeDnaTraining(input: CreateCreativeDnaTrainingJobRequest) {
       const result = await request<CreativeDnaTrainingJobResponse>(CREATIVE_STUDIO_ROUTES.trainingJobs, {
