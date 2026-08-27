@@ -1,34 +1,122 @@
 # Creative Studio
 
-Creative Studio is a standalone creative workstation. It owns its React frontend, typed contracts, Worker/BFF, D1 history, and review decisions. AFDFW is an optional backend capability provider; it is not the product shell and is never exposed as a generic browser proxy.
+Creative Studio is Angelo's private, standalone creative workstation for turning an idea or retained source into images, video, music, CreativeDNA, and reusable training evidence.
 
-## Run locally on this hardware
+**Idea or source -> CreativeDNA -> generate -> retain -> review -> evolve**
 
-Start ComfyUI at `http://127.0.0.1:8188`, then launch the complete local-first application:
+[Open the production studio](https://cs.angelotoborg.com) | [Build reality](docs/BUILD_REALITY.md) | [Local-first guide](docs/LOCAL_FIRST.md)
+
+Creative Studio owns its interface, projects, typed contracts, jobs, media, artifact history, model library, training records, and review decisions. Production uses one narrow AFDFW approved-session handoff; AFDFW generation is a separate, optional image/music route that must be selected explicitly. AFDFW is not the application shell and is never exposed to the browser through a generic proxy.
+
+## The four working surfaces
+
+| Surface | Purpose | Direct actions |
+| --- | --- | --- |
+| **Home** | Start from the newest or selected image, audio file, or video and see its real CreativeDNA profile. | Upload, analyze, create an image, animate, make a song, or train. |
+| **Create** | Run the complete media workflow without moving between pages. | Choose Image, Video, Song, or Train; select a model and source; edit the direction and graphical settings; submit. |
+| **Work** | Follow the durable production lifecycle for the active project. | Resolve owner actions, inspect running jobs, cancel or retry, review retained results, extend, animate, reuse, or evolve. |
+| **Studio** | Manage the workspace behind creation. | Create and switch projects, browse media and CreativeDNA memory, import models, and inspect or pair local systems. |
+
+Legacy deep links still resolve into the correct Work or Studio section, but the primary desktop and mobile navigation stays limited to these four destinations.
+
+## What the app can do
+
+### Create across media
+
+- **Images:** generate through an imported ComfyUI workflow, choose 1:1, 9:16, 16:9, 3:4, or 4:3, and use graphical quality, steps, and seed controls when the model exposes them. Image jobs default to a bounded fast mode; larger or slower settings require an explicit Custom choice.
+- **Video:** generate from text or a retained first frame, animate an image in one action, extend a retained clip, and create 5, 10, 15, 30, or 60 second outputs when the selected workflow supports the workload. A normal video request creates two sequential, independent results: **Aligned** follows the authored direction and **Discovery** uses a random-DNA-led interpretation. Evolution can instead create Refine, Correct, and Discovery branches.
+- **Music:** derive editable song ideas from retained art and CreativeDNA, keep lyrics optional and separate, and compile the final prompt for the selected model. MiniMax Music 3 receives its required structured caption; Stable Audio receives a concise natural-language prompt. The exact authored brief, compiled prompt, model profile, and Gemma provenance remain stamped on the job.
+- **Workflows as models:** import a ComfyUI JSON once in **Studio -> Models**, inspect detected inputs and models, edit allowlisted scalar controls graphically, and save immutable revisions. Create selects compatible owner-library workflows directly; it never asks for a JSON during ordinary generation.
+
+Every submitted workflow job retains its exact revision, SHA-256 content stamp, model files, prompt, parameters, media bindings, CreativeDNA version, source lineage, timing, and retry lineage.
+
+### Build and train CreativeDNA
+
+CreativeDNA is a versioned cross-media profile, not a hidden prompt or a model name. It keeps eight measured dimensions, confidence, provenance, rights, source descriptions, lineage, and the reusable generation direction.
+
+- Analyze consented image, audio, and video uploads with the Local Runner, deterministic media measurements, FFmpeg/Sharp, and the bundled Gemma 4 multimodal ComfyUI workflow.
+- Retain both a detailed `longSummary` and a concise reusable `shortSummary`, along with the exact analysis prompt, model, workflow version, ComfyUI prompt ID, and inference settings.
+- Create immutable root and child DNA versions instead of overwriting history.
+- Compare a trained version with its baseline and source evidence before activation. Approval and rejection both require a note; only approved trained DNA can generate or become another training baseline.
+- Turn accepted artifact prompts and settings into fresh training evidence exactly once. Failed or cancelled training releases its reservation instead of silently consuming it.
+
+CreativeDNA analysis is evidence-backed profile synthesis. It does not change image or video model weights.
+
+### Train an ACE-Step music LoRA
+
+The separate music-model path performs real local ACE-Step 1.5 LoRA training:
+
+1. Select or upload at least three consented recordings.
+2. Let Gemma draft grounded music captions and local Whisper draft vocal lyrics.
+3. Review every caption and lyric field and add a dataset approval note.
+4. Run preprocessing and GPU training through the pinned ACE-Step runtime.
+5. Inspect the retained checkpoint and explicitly approve it before project activation.
+
+The proof, balanced, and deep recipes remain visible, and the checkpoint hash, size, dataset, recipe, progress, evaluation notes, and activation decisions stay durable. The runner advertises this capability only when the official runtime and real Base, VAE, and Qwen encoder weights are installed. An active adapter binds only to a compatible ACE-Step workflow with detected LoRA file and strength controls.
+
+### Keep a durable production record
+
+- Generation and training continue without an open browser.
+- Every completed result is retained and size-verified before a job becomes complete; accept, reject, and archive do not control retention.
+- Work is ordered newest to oldest. Archived artifacts stay collapsed, video cards use lazy first-frame JPEGs, and only an explicitly opened video mounts a player.
+- Image, audio, and video review use the correct media controls. Accept and reject require a note, and the append-only decision history keeps the actor and time.
+- Cancellation preserves the original run and immediately exposes recovery. Retry creates a new lineage-linked job rather than rewriting history.
+- A 20-minute threshold creates an awareness warning without cancelling legitimate long local renders. Workload evidence exposes resolution, steps, frames, duration, models, and observed exact-revision timing when available.
+
+## Runtime modes
+
+| Mode | Start | Execution and storage |
+| --- | --- | --- |
+| **Local-first** | `npm run local` | Vite, Wrangler-local BFF, local D1/R2, Local Runner, ComfyUI, and this machine's GPU. No Cloudflare or AFDFW runtime traffic. |
+| **Remote production** | [cs.angelotoborg.com](https://cs.angelotoborg.com) | Cloudflare Access, Creative Studio Worker/D1/R2/Queue, and a paired Windows Local Runner. AFDFW remains a separate optional image/music route. |
+| **UI development** | `npm run dev` | Explicitly labeled browser-local metadata and preview behavior only. It starts empty and cannot retain real uploads, pair runners, or train models. |
+
+Local and remote stores are intentionally separate. Nothing synchronizes or publishes local projects, media, settings stamps, or decisions in the background.
+
+## Run locally on this workstation
+
+### Requirements
+
+- Windows PowerShell and the repository checkout.
+- Node.js 24 and npm. The current verified toolchain is Node `24.16.0` and npm `11.13.0`.
+- ComfyUI available at `http://127.0.0.1:8188`.
+- The model files and custom nodes required by the workflows you intend to execute.
+- At least one ComfyUI **API-format** workflow for real generation. A UI-format graph may be retained and edited, but it is not executable until exported in API format.
+- Chrome installed when running the configured Playwright suite.
+
+### Start the complete local stack
 
 ```powershell
-npm install
+npm ci
 npm run local
 ```
 
-Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default). This one command runs the UI, Wrangler-local BFF, local D1/R2 stores, and Local Runner 1.9. Image, audio/music, video, multimodal CreativeDNA analysis, and reviewed ACE-Step music LoRA jobs use this machine's GPU. Cloudflare and AFDFW are not used by the local process.
+Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.9.1, and starts Vite.
 
-Local mode requires a real imported ComfyUI API-format workflow for generation and never substitutes the development renderer. It automatically creates or reuses an ACL-protected localhost runner credential outside the repository. Local data remains local and is not silently synchronized to the remote site. See [docs/LOCAL_FIRST.md](docs/LOCAL_FIRST.md) for the exact ownership and shutdown boundaries.
+Then:
 
-For UI-only work, the explicitly labeled browser-persistent development adapter remains available. It starts empty and creates no example projects or artifacts:
+1. Create a project in **Studio -> Project**.
+2. Import an API-format ComfyUI workflow in **Studio -> Models**.
+3. Upload or select a source from Home, Create, or **Studio -> Media**.
+4. Choose the model in Create and submit.
+5. Follow the durable run and review its result in Work.
+
+Press `Ctrl+C` in the launcher terminal to stop the processes it started. A BFF that was already running is reused and is not stopped. Local D1/R2 state lives under the ignored `.wrangler` directory.
+
+For UI-only development, run:
 
 ```powershell
 npm run dev
 ```
 
-The individual local BFF commands remain available for diagnostics:
+For split local diagnostics:
 
 ```powershell
 npm run db:local
 npm run dev:worker
 ```
 
-Then start the UI in a second PowerShell window:
+Then, in a second PowerShell window:
 
 ```powershell
 $env:VITE_CREATIVE_STUDIO_ADAPTER = "http"
@@ -36,82 +124,158 @@ $env:VITE_CREATIVE_STUDIO_LOCAL = "true"
 npm run dev
 ```
 
-The Vite client calls only `http://127.0.0.1:8787/api/creative-studio/*` through its same-origin development proxy.
+The browser still calls only `/api/creative-studio/*`; Vite proxies those requests to the localhost BFF.
 
-## Local Runner 1.9
+## Pair this workstation with the remote studio
 
-Local Runner 1.9 executes imported ComfyUI API-format workflows, CreativeDNA evidence synthesis, and reviewed ACE-Step 1.5 music LoRA jobs on this Windows machine without keeping Creative Studio open. In the deployed app, open **Settings**, create a one-time machine token, then run from this repository:
+1. Open **Studio -> System -> Runners** in the production app.
+2. Create a shown-once machine credential.
+3. From this repository, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-runner.ps1
 ```
 
-The installer prompts for the one-time token, writes it to `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers an at-logon task, and starts it. ComfyUI must be available at `http://127.0.0.1:8188`. Runner credentials are hashed in D1 and can be revoked in Settings. The machine agent talks only to the token-authenticated `runner.cs.angelotoborg.com` API; that hostname serves no application shell or owner-session routes.
+The installer prompts for that bearer credential, stores the configuration at `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers an at-logon task, and starts the runner. Creative Studio stores only its hash, while the installed runner continues using the credential until the machine is revoked from the same Runners panel. ComfyUI remains localhost-only.
 
-Install the pinned official ACE-Step 1.5 runtime and Base checkpoints once. The script uses `D:\AI\ACE-Step-1.5` by default, keeps Python and model files outside this repository, and sets only user-level non-secret runtime paths:
+Install the optional pinned ACE-Step 1.5 runtime and Base checkpoints once:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-ace-step-training.ps1
 ```
 
-The runner advertises `ace-step-1.5-lora` only after the Python environment, Base model, VAE, and text encoder all have real weight and config files. A training run unloads idle ComfyUI models, requires at least 18 GB free VRAM, runs the official corrected preprocessing/training CLI, retains the checkpoint locally, and waits for a noted owner approval before activation. Gemma captions and any lyrics are reviewable before GPU training; BPM and key are left blank unless the owner verifies them.
+The default runtime location is `D:\AI\ACE-Step-1.5`, outside the repository. Training requires a GPU with at least 20 GB total VRAM and refuses to start until at least 18 GB is free.
 
-For a foreground diagnostic run with the installed configuration:
+Run one foreground runner diagnostic with the installed configuration:
 
 ```powershell
 $env:CS_RUNNER_CONFIG = "$env:LOCALAPPDATA\Creative Studio Runner\config.json"
 npm run runner:once
 ```
 
-For an isolated local-BFF diagnostic, `CS_RUNNER_API_BASE`, `CS_RUNNER_TOKEN`, `CS_COMFY_URL`, and `CS_RUNNER_POLL_MS` override the installed configuration for that process only. Do not save or print a one-time runner token.
+Never print or commit a runner credential; keep the installed configuration outside the repository.
 
-The runner makes one unified claim at most once per minute while idle, one combined job/machine heartbeat per minute while active, and bounded heartbeats when execution changes stage. UI-format ComfyUI files remain editable and versioned, but must be exported in API format before execution. Image, music/audio, and video workflows plus ACE-Step music LoRA are supported; image/video model training and 3D execution are deliberately outside this release.
+## Architecture and ownership
+
+```mermaid
+flowchart LR
+  UI["React + TypeScript"] -->|"/api/creative-studio/*"| BFF["Creative Studio Worker / BFF"]
+  BFF --> D1["Creative Studio D1"]
+  BFF --> R2["Creative Studio R2"]
+  BFF --> Q["Durable job queue"]
+  Q -->|"explicit remote jobs only"| AF["Allowlisted AFDFW capabilities"]
+  LR["Windows Local Runner"] <-->|"leases, heartbeats, retained output"| BFF
+  LR -->|"localhost"| COMFY["ComfyUI + local GPU"]
+```
+
+- The frontend imports shared contracts but no AFDFW frontend code, routes, CSS, components, or branding.
+- Browser traffic is limited to `/api/creative-studio/*`. Unknown API paths return `404`.
+- Creative Studio D1 owns projects, DNA versions, workflows, jobs, training, runners, artifacts, evidence, and decisions.
+- Creative Studio R2 owns uploaded media, every completed result, and retained video thumbnails.
+- Local workflow jobs are claimed by the authenticated machine runner and never enter the AFDFW queue consumer.
+- AFDFW access is method-and-path allowlisted for approved session handoff and explicitly selected image/music generation only. There is no arbitrary forwarder.
+- Accepting an artifact changes only Creative Studio review and training evidence. It never mutates AFDFW profile, Core, feed, or canonical state.
+- Commercial reference identity may stay in provenance while being excluded from provider prompts.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/BACKEND_CONTRACT.md](docs/BACKEND_CONTRACT.md) for the complete contract.
+
+## Cloudflare production boundary
+
+Production is private behind the `Angelo only` Cloudflare Access policy.
+
+| Resource | Production binding |
+| --- | --- |
+| Worker | `creative-studio` |
+| D1 | `creative-studio` |
+| R2 | `creative-studio-artifacts` |
+| Queue | `creative-studio-jobs` -> `creative-studio-jobs-dlq` |
+| Recovery | Hourly scheduled sweep |
+| Local runner API | `runner.cs.angelotoborg.com` with revocable bearer credentials and no application shell |
+| Optional backend | Same-account `AFDFW` service binding to `art-feed-dfw` |
+
+The production configuration disables the generic `workers.dev` route. Snapshot reads replace many parallel requests, browser polling runs only for visible active work, remote polling is bounded and backs off after failures, and the Local Runner uses a unified claim/heartbeat cadence. `npm run check:cloudflare-free` enforces a modeled baseline of at most 2,904 Worker requests per day for one remote runner, one visible active browser, and the hourly recovery trigger. Extra tabs, enrolled runners, owner actions, Queue deliveries, and other account Workers add requests; this is not a hard account ceiling.
+
+See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the allowance model and rate-limit response.
+
+## Known boundaries
+
+- New installations start empty. No project, artifact, media, or generation result is seeded as placeholder data.
+- Media uploads and runner generation outputs are limited to 100 MB each, retained video thumbnails to 2 MB, and workflow JSON imports to 1 MB.
+- Models and System can be viewed before a project exists, but media, memory, and model import require an active project.
+- Real generation requires the selected workflow's models and custom nodes to exist in ComfyUI.
+- UI-format ComfyUI JSON is not automatically converted into an executable API graph.
+- CreativeDNA analysis changes a versioned evidence profile, not model weights.
+- ACE-Step music LoRA is implemented; image and video model training remain future work.
+- Non-instrumental ACE-Step datasets require a working local Whisper executable for draft transcription. Adapter approval does not claim a scored A/B quality proof; automatic validation generations are not implemented yet.
+- Image, audio/music, and video workflow execution are supported. 3D workflows may be inspected but are rejected at execution in this release.
+- Video duration choices depend on a recognized control in a compatible workflow. Two-version and three-branch video requests create sequential local jobs, so their total time includes each render.
+- Runtime estimates require comparable completed evidence and exclude unknown queue or cold-model-load time.
+- D1/R2 retention is durable, but current list and snapshot APIs expose bounded recent windows without pagination. Older retained records can therefore fall outside the browser's current history feed.
+- Local and remote data do not synchronize automatically.
+- AFDFW is optional and never an implicit fallback when a local workflow is missing.
 
 ## Verify
 
+Run the canonical full source and browser gate:
+
 ```powershell
-npm run check
-npm run test:e2e
+npm run check:all
 ```
 
-`npm run check` covers lint, browser-domain unit tests, Workers-runtime API tests with isolated D1 migrations, environment validation, TypeScript, production build, and a source secret-signature scan. The browser suite runs the entire CreativeDNA versioning and note-gated artifact acceptance loop in desktop and mobile Chrome, verifies the production cockpit, durable cancel/retry behavior, and the real-media boundary, and includes keyboard-focus and reduced-motion gates. Training-review, production-loop, and cockpit tests enforce that a completed trained version awaiting its first activation remains an owner action, that an unreviewed or rejected trained DNA cannot generate, become a parent, or seed another training run, that accepted prompt/settings evidence is not silently reused across durable training runs, and that retry history remains durable without leaving a resolved failure in the action inbox.
+`npm run check` runs ESLint, browser-domain Vitest, Workers-runtime tests against isolated D1 migrations, the Local Runner self-test, environment validation, the Cloudflare free-tier guard, TypeScript, the production build, and the source secret scan. `check:all` adds the serial desktop/mobile Playwright matrix.
 
-The production contract is configured and can be checked independently:
+The current four-surface release passed 69 browser-domain tests, 26 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 32 Playwright checks with 26 exercised passes plus six intentional device-specific skips. Rendered checks at 390 x 844 and 1440 x 900 reported zero horizontal overflow and zero console errors or warnings. Exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
+
+Production configuration can be checked without deploying:
 
 ```powershell
 npm run check:env:production
 ```
 
-## Runtime modes
-
-- `development`: explicitly labeled browser-local project, job, and history persistence. It contains no seeded records and never pretends that an uploaded file was retained.
-- `http`: the frontend calls only the Creative Studio BFF. The Worker uses standalone D1 and either its development renderer or narrow AFDFW adapters.
-- `BACKEND_MODE=development`: no AFDFW calls; suitable for local Worker verification.
-- `BACKEND_MODE=afdfw`: the production Worker uses the same-account `art-feed-dfw` service binding for approved-session handoff and generation only. Do not put tokens in Vite environment variables.
-
-## Production
-
-The independent production application is live at [cs.angelotoborg.com](https://cs.angelotoborg.com). Cloudflare Access protects `cs.angelotoborg.com/*` with the `Angelo only` policy.
-
-- Worker: `creative-studio`
-- D1: `creative-studio`
-- R2: `creative-studio-artifacts`
-- Queue: `creative-studio-jobs` with `creative-studio-jobs-dlq`
-- Scheduled recovery: hourly
-- Backend service binding: `AFDFW` -> `art-feed-dfw`
-- Generic `workers.dev` route: disabled in production
-- Local runner endpoint: `runner.cs.angelotoborg.com` with revocable bearer credentials and no public application shell
-
-The production configuration uses only Cloudflare free-plan-compatible services. Browser reads are consolidated into one snapshot, active polling runs at most once per minute only while the tab is visible, runner work polling is one request per minute, and failed refreshes back off rather than retrying into a limit. `npm run check:cloudflare-free` enforces a 2,904-request/day maximum baseline before explicit actions or active Queue deliveries. See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the allowance and troubleshooting boundary.
-
-CreativeDNA, projects, generation jobs, CreativeDNA training jobs, training reviews, runner registrations, uploaded-media records, ComfyUI workflow revisions, artifacts, training evidence, and decisions remain in Creative Studio D1. Create is one task-first surface for Image, Video, Song, and Train: choose a reusable model already in the owner's library, upload or select project media, describe the result, and generate. Workflow JSON import and maintenance live in Model Library instead of interrupting creation. Models can be reused across the owner's projects, while every job, DNA version, media binding, artifact, and decision remains scoped to the active project. Phase 3 adds a Worker-derived production loop for every project: activate a DNA version, produce through a durable job, review the retained result, and evolve from newly accepted evidence. The loop always exposes the next owner action and routes directly to it. Phase 4 adds the cross-project Production cockpit: its owner inbox, notification count, run history, queue positions, execution durations, 20-minute long-run warnings, runner/GPU state, and verified storage totals are freshly derived by the Worker from durable records. Project, modality, workflow, DNA-version, and decision filters do not create a second source of truth. Review actions route to the exact artifact or trained version; generation recovery creates a new retry job while preserving the failed run, and an already-retried failure no longer remains actionable. Accepted prompt/settings evidence is fresh until a waiting, running, or completed training job reserves it through a D1 uniqueness constraint; cancelled and failed runs atomically release that evidence, while live and completed runs prevent silent double inclusion, including concurrent requests. Project uploads stream directly to Creative Studio R2, are size-verified before metadata is committed, and retain explicit training consent plus owner provenance. Uploading alone does not train: the owner selects eligible uploads and starts a durable run for Local Runner 1.4. The paired machine downloads only that exact consented bundle, measures real image pixels or decoded audio/video samples, and uses the bundled Gemma 4 ComfyUI graph to write a detailed reusable explanation of each image, audio file, or video. The source retains its analysis prompt, exact Gemma model and settings, workflow version, and ComfyUI prompt ID; deterministic measurements and accepted-result prompt/settings evidence remain bounded inputs to the new immutable CreativeDNA version. A completed trained version remains pending: the review workspace compares it with its baseline, exposes every source description and observation, keeps technical metrics collapsed on demand, and requires an explicit noted approve or reject decision. Approval activates that exact version; rejection preserves or restores the prior active baseline. Every decision is append-only with actor, note, time, and post-decision active DNA. The Worker independently blocks pending or rejected trained DNA from generation, child-version creation, retry/reuse, or further training. This is evidence-backed profile synthesis, not LoRA or foundation-model fine-tuning. Workflow JSONs can be imported once, inspected, customized through safe detected controls, saved as immutable revisions, selected directly as models in Create, versioned by content hash, and exported exactly. Retained generated image, audio, and video artifacts can be selected as compatible inputs to later workflows without leaving Creative Studio. AFDFW remains available for its narrow image/music adapters; API-format image, music/audio, and video workflow jobs instead wait for Local Runner 1.4, which records queue, preparation, render, download, and retention stages, downloads only the bound inputs, submits the immutable graph to localhost ComfyUI, renews a lease, tolerates a busy ComfyUI history endpoint, and uploads the completed output directly into verified Creative Studio R2 retention. Local Runner 1.4.2 also extracts and retains frame zero for every new video; Artifacts displays that thumbnail and the real player in one top media frame, with a same-origin browser fallback for older retained videos. Twenty minutes is an awareness threshold, not a local cancellation. Queue combines exact stamped dimensions, steps, frames, models, inputs, and prompt length with measured exact-revision history so likely cost drivers are visible without inventing a provider bottleneck. A retry after a transient runner, download, or retention failure resumes the recorded ComfyUI prompt instead of regenerating it. Every completed result keeps its workflow revision, hash, parameters, models, input bindings, prompt, timing, and retry lineage. Acceptance does not control retention. Artifact review is media-aware for image, audio, and video. Accept and reject require a review note; every append-only decision visibly retains its note, actor, and time. Generated prompts and settings enter a CreativeDNA candidate set, and artifact acceptance or rejection explicitly makes that evidence training-ready or excluded.
-
-New accounts and cleared environments start empty. Projects are created, edited, paused, and archived only through explicit user actions; production code does not seed project or artifact records.
-
-To run the verified release sequence:
+The production release command runs the full gate, validates production configuration, applies remote D1 migrations, and publishes the Worker and assets. It assumes the Cloudflare D1, R2, Queues, custom domains, Access application, and service binding are already provisioned and Wrangler is authenticated:
 
 ```powershell
 npm run deploy:production
 ```
 
-See [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md) and [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) for the live evidence and operating boundaries.
+## Useful commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run local` | Start the complete local-first stack. |
+| `npm run dev` | Start the UI-only development adapter. |
+| `npm run dev:worker` | Start the Wrangler-local Worker on port 8787. |
+| `npm run runner:once` | Run one foreground Local Runner cycle. |
+| `npm run runner:check` | Run the Local Runner self-test. |
+| `npm run check` | Run the complete non-browser source, runtime, build, and secret gate. |
+| `npm run check:all` | Add the desktop/mobile Playwright matrix to `check`. |
+| `npm run check:env:production` | Validate production bindings and environment without publishing. |
+| `npm run db:production` | Apply production D1 migrations. This changes remote state. |
+| `npm run deploy:production` | Verify, migrate, and deploy production. |
+
+## Repository map
+
+```text
+src/                 React application and four product surfaces
+shared/contracts/    Typed browser/Worker/runner domain and API contracts
+worker/              Creative Studio Worker, durable jobs, storage, retention, and adapters
+runner/              Windows Local Runner, ComfyUI execution, media analysis, and ACE-Step training
+migrations/          Creative Studio-owned D1 schema history
+tests/unit/          Browser-domain and contract tests
+tests/worker/        Workers-runtime integration tests
+tests/e2e/           Desktop/mobile product and accessibility flows
+scripts/             Local launcher, runner installers, validation, and release guards
+docs/                Architecture, contracts, prompt profiles, operations, and verified reality
+```
+
+## Documentation
+
+- [Local-first operation](docs/LOCAL_FIRST.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Backend contract and AFDFW allowlist](docs/BACKEND_CONTRACT.md)
+- [Model-specific prompt profiles](docs/MODEL_PROMPT_PROFILES.md)
+- [Cloudflare free-plan budget](docs/CLOUDFLARE_FREE_BUDGET.md)
+- [Production release checklist](docs/PRODUCTION_READINESS.md)
+- [Verified build and production reality](docs/BUILD_REALITY.md)
+
+`docs/BUILD_REALITY.md` is authoritative for current executable versions, migrations, verification counts, and production deployment state. Architecture and readiness documents may retain historical rollout version labels.
