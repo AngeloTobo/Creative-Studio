@@ -7,9 +7,15 @@ import type {
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 
-type CockpitViewProps = {
+export type CockpitViewMode = "dashboard" | "needs-action" | "running" | "history";
+
+export type CockpitViewProps = {
   focusRunId?: string;
   onOpen: (action: ProductionCockpitAction) => void;
+  embedded?: boolean;
+  mode?: CockpitViewMode;
+  projectId?: string;
+  onRunStatusChange?: (status: "cancelled") => void;
 };
 
 type RunScope = "all" | "active" | "review" | "failed";
@@ -58,7 +64,7 @@ function isActive(run: ProductionCockpitRun) {
   return run.status === "queued" || run.status === "running" || run.status === "waiting-for-runner";
 }
 
-export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
+export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dashboard", projectId, onRunStatusChange }: CockpitViewProps) {
   const { snapshot, refresh, retryJob, cancelJob, cancelDnaTraining, busy } = useStudio();
   const cockpit = snapshot?.productionCockpit;
   const [scope, setScope] = useState<RunScope>("all");
@@ -87,22 +93,25 @@ export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
     return [...found.entries()];
   }, [cockpit?.runs]);
 
-  const runs = useMemo(() => [...(cockpit?.runs ?? [])]
+  const projectRuns = useMemo(() => (cockpit?.runs ?? []).filter((run) => !projectId || run.projectId === projectId), [cockpit?.runs, projectId]);
+  const effectiveScope: RunScope = mode === "running" ? "active" : scope;
+  const runs = useMemo(() => [...projectRuns]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .filter((run) => {
       if (run.id === focusRunId) return true;
-      if (scope === "active" && !isActive(run)) return false;
-      if (scope === "review" && run.decision !== "unreviewed") return false;
-      if (scope === "failed" && run.status !== "failed" && run.status !== "cancelled") return false;
+      if (effectiveScope === "active" && !isActive(run)) return false;
+      if (effectiveScope === "review" && run.decision !== "unreviewed") return false;
+      if (effectiveScope === "failed" && run.status !== "failed" && run.status !== "cancelled") return false;
       if (project !== "all" && run.projectId !== project) return false;
       if (modality !== "all" && run.modality !== modality) return false;
       if (workflow !== "all" && (workflow === "direct" ? run.workflowName !== null : run.workflowName !== workflow)) return false;
       if (dna !== "all" && run.dnaArtifactId !== dna) return false;
       if (decision !== "all" && run.decision !== decision) return false;
       return true;
-    }), [cockpit?.runs, decision, dna, focusRunId, modality, project, scope, workflow]);
+    }), [decision, dna, effectiveScope, focusRunId, modality, project, projectRuns, workflow]);
 
   const actions = (cockpit?.actions ?? []).filter((action) => {
+    if (projectId && action.projectId && action.projectId !== projectId) return false;
     if (project !== "all" && action.projectId !== project) return false;
     if (modality !== "all" && action.modality !== modality) return false;
     return true;
@@ -115,6 +124,12 @@ export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
       return;
     }
     onOpen(action);
+  };
+
+  const cancelRun = async (run: ProductionCockpitRun) => {
+    if (run.kind === "training") await cancelDnaTraining(run.id);
+    else await cancelJob(run.id);
+    onRunStatusChange?.("cancelled");
   };
 
   const openRun = (run: ProductionCockpitRun) => {
@@ -156,7 +171,9 @@ export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
   if (!cockpit) return <section className="cockpit-view fade-up"><div className="empty-state glass"><Icon name="analytics" size={34} /><h2>Production state unavailable</h2><p>Refresh the Worker-backed snapshot to load the dashboard.</p></div></section>;
 
   const awaitingReview = cockpit.summary.outputsAwaitingReview + cockpit.summary.trainingAwaitingReview;
-  const reviewRunCount = cockpit.runs.filter((run) => run.decision === "unreviewed").length;
+  const reviewRunCount = projectRuns.filter((run) => run.decision === "unreviewed").length;
+  const activeRunCount = projectRuns.filter(isActive).length;
+  const failedRunCount = projectRuns.filter((run) => run.status === "failed" || run.status === "cancelled").length;
   const summary = [
     { label: "Needs attention", value: cockpit.summary.actionRequired, detail: cockpit.summary.actionRequired ? `${cockpit.summary.failedRuns} failed` : "All caught up", accent: "var(--pink)", icon: "bell" as const },
     { label: "In progress", value: cockpit.summary.activeRuns, detail: `${cockpit.summary.runningRuns} running · ${cockpit.summary.queuedRuns} waiting`, accent: "var(--cyan)", icon: "queue" as const },
@@ -164,28 +181,29 @@ export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
     { label: "Retained", value: cockpit.summary.retainedOutputs, detail: `${bytes(cockpit.summary.storedBytes)} · ${cockpit.summary.retainedFiles} files`, accent: "var(--teal)", icon: "archive" as const },
   ];
   const runnerAvailable = cockpit.runners.filter((runner) => runner.state === "online" || runner.state === "busy").length;
-  const shownActions = showAllActions ? actions : actions.slice(0, 3);
+  const actionPreviewLimit = embedded ? 5 : 3;
+  const shownActions = showAllActions ? actions : actions.slice(0, actionPreviewLimit);
 
-  return <section className="cockpit-view fade-up" aria-labelledby="cockpit-title">
-    <header className="cockpit-head">
+  return <section className={`cockpit-view fade-up${embedded ? " cockpit-embedded" : ""} cockpit-mode-${mode}`} aria-label={embedded ? mode === "running" ? "Running work" : mode === "needs-action" ? "Work needing action" : mode === "history" ? "Run history" : "Production activity" : undefined} aria-labelledby={embedded ? undefined : "cockpit-title"}>
+    {!embedded ? <header className="cockpit-head">
       <div><h2 id="cockpit-title">Production Dashboard</h2><p>Live work, decisions, retained outputs, and local execution in one place.</p></div>
       <button className="btn btn-ghost cockpit-refresh" aria-label="Refresh production" disabled={busy} onClick={() => void refresh()}><Icon name="rerun" size={16} /><span>Refresh</span></button>
-    </header>
+    </header> : null}
 
-    <div className="cockpit-summary">
+    {!embedded ? <div className="cockpit-summary">
       {summary.map((item) => <article className="glass" key={item.label} style={{ "--cockpit-accent": item.accent } as React.CSSProperties}><span><Icon name={item.icon} size={17} /> {item.label}</span><strong>{item.value}</strong><small>{item.detail}</small></article>)}
-    </div>
+    </div> : null}
 
-    <div className="cockpit-fact-strip glass" aria-label="Production totals">
+    {!embedded ? <div className="cockpit-fact-strip glass" aria-label="Production totals">
       <span><small>All runs</small><strong>{cockpit.runs.length}</strong></span>
       <span><small>Generated</small><strong>{cockpit.summary.generationRuns}</strong></span>
       <span><small>Training</small><strong>{cockpit.summary.trainingRuns}</strong></span>
       <span><small>Completed</small><strong>{cockpit.summary.completedRuns}</strong></span>
       <span><small>Projects</small><strong>{cockpit.summary.activeProjects}</strong></span>
       <span><small>Local Runner</small><strong>{cockpit.runners.length ? `${runnerAvailable}/${cockpit.runners.length}` : "Not paired"}</strong></span>
-    </div>
+    </div> : null}
 
-    <section className={`cockpit-inbox glass${actions.length ? " has-actions" : ""}`} aria-labelledby="cockpit-inbox-title">
+    {mode === "dashboard" || mode === "needs-action" ? <section className={`cockpit-inbox glass${actions.length ? " has-actions" : ""}`} aria-labelledby="cockpit-inbox-title">
       <header><div><span className="eyebrow">Next actions</span><h3 id="cockpit-inbox-title">{actions.length ? `${actions.length} ${actions.length === 1 ? "item needs" : "items need"} attention` : "Nothing needs attention"}</h3></div>{actions.length ? <span className="cockpit-count">{actions.length}</span> : <Icon name="check" size={20} />}</header>
       {actions.length ? <div className="cockpit-actions">
         {shownActions.map((action) => <article className={`cockpit-action ${action.severity}`} key={action.id}>
@@ -193,24 +211,24 @@ export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
           <span><small>{action.projectName ?? "Production system"} · {relative(action.createdAt)}</small><strong>{action.title}</strong><p>{action.detail}</p></span>
           <button className="btn btn-ghost" disabled={busy} onClick={() => void act(action)}>{action.actionLabel} <Icon name="arrow" size={14} /></button>
         </article>)}
-        {actions.length > 3 ? <button className="cockpit-more" onClick={() => setShowAllActions((value) => !value)}>{showAllActions ? "Show less" : `Show all ${actions.length}`}</button> : null}
+        {actions.length > actionPreviewLimit ? <button className="cockpit-more" onClick={() => setShowAllActions((value) => !value)}>{showAllActions ? "Show less" : `Show all ${actions.length}`}</button> : null}
       </div> : <div className="cockpit-clear"><Icon name="check" size={20} /><span><strong>All caught up.</strong><small>No review or recovery actions are waiting.</small></span></div>}
-    </section>
+    </section> : null}
 
-    <section className="cockpit-history glass" aria-labelledby="cockpit-history-title">
-      <header><div><span className="eyebrow">Newest to oldest</span><h3 id="cockpit-history-title">Activity</h3></div><span>{runs.length} of {cockpit.runs.length}</span></header>
-      <div className="cockpit-scope" aria-label="Filter production activity">
+    {mode !== "needs-action" ? <section className="cockpit-history glass" aria-labelledby="cockpit-history-title">
+      <header><div><span className="eyebrow">Newest to oldest</span><h3 id="cockpit-history-title">{mode === "running" ? "Current runs" : "Activity"}</h3></div><span>{runs.length} of {projectRuns.length}</span></header>
+      {mode !== "running" ? <div className="cockpit-scope" aria-label="Filter production activity">
         {([
-          ["all", `All ${cockpit.runs.length}`],
-          ["active", `Active ${cockpit.summary.activeRuns}`],
+          ["all", `All ${projectRuns.length}`],
+          ["active", `Active ${activeRunCount}`],
           ["review", `Review ${reviewRunCount}`],
-          ["failed", `Failed ${cockpit.summary.failedRuns}`],
+          ["failed", `Failed ${failedRunCount}`],
         ] as Array<[RunScope, string]>).map(([value, label]) => <button className={scope === value ? "on" : ""} key={value} onClick={() => setScope(value)}>{label}</button>)}
-      </div>
+      </div> : null}
       <details className="cockpit-filter-drawer">
         <summary><Icon name="grid" size={14} /> More filters</summary>
         <div className="cockpit-filters">
-          <label><span>Project</span><select value={project} onChange={(event) => setProject(event.target.value)}><option value="all">All projects</option>{snapshot?.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          {!projectId ? <label><span>Project</span><select value={project} onChange={(event) => setProject(event.target.value)}><option value="all">All projects</option>{snapshot?.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
           <label><span>Type</span><select value={modality} onChange={(event) => setModality(event.target.value)}><option value="all">All types</option><option value="image">Image</option><option value="music">Music</option><option value="video">Video</option><option value="training">Training</option></select></label>
           <label><span>Workflow</span><select value={workflow} onChange={(event) => setWorkflow(event.target.value)}><option value="all">All workflows</option><option value="direct">Direct / training</option>{workflowOptions.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
           <label><span>CreativeDNA</span><select value={dna} onChange={(event) => setDna(event.target.value)}><option value="all">All versions</option>{dnaOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
@@ -243,21 +261,21 @@ export function CockpitView({ focusRunId, onOpen }: CockpitViewProps) {
             </div>
             <footer>
               {(run.status === "failed" || run.status === "cancelled") && run.kind === "generation" ? <button className="btn btn-ghost" disabled={busy} onClick={() => void act({ id: `retry-generation:${run.id}`, kind: "retry-generation", severity: "warning", projectId: run.projectId, projectName: run.projectName, entityId: run.id, modality: run.modality, title: run.title, detail: run.error ?? run.detail, actionLabel: "Retry", surface: "queue", createdAt: run.updatedAt })}><Icon name="rerun" size={14} /> Retry</button> : null}
-              {isActive(run) ? <button className="btn btn-ghost" disabled={busy} onClick={() => void (run.kind === "training" ? cancelDnaTraining(run.id) : cancelJob(run.id))}>Cancel</button> : null}
+              {isActive(run) ? <button className="btn btn-ghost" disabled={busy} onClick={() => void cancelRun(run)}>Cancel</button> : null}
               {run.artifactId || run.kind === "training" ? <button className="btn btn-primary" onClick={() => openRun(run)}>{run.artifactId ? "Open artifact" : "Open training"} <Icon name="arrow" size={14} /></button> : null}
             </footer>
           </details>
         </article>)}
         {!runs.length ? <p className="empty-copy">No durable activity matches these filters.</p> : null}
       </div>
-    </section>
+    </section> : null}
 
-    <details className="cockpit-runners glass">
+    {!embedded ? <details className="cockpit-runners glass">
       <summary><span><span className="eyebrow">Local execution</span><strong>Runner health</strong></span><span>{cockpit.runners.length ? `${runnerAvailable}/${cockpit.runners.length} available` : "Not paired"} <Icon name="chevronDown" size={14} /></span></summary>
       <div>
         {cockpit.runners.map((runner) => <article key={runner.id}><i className={runner.state} /><span><strong>{runner.name}</strong><small>{runner.device ?? "Device not reported"}</small></span><span><b>{runner.state}</b><small>{runner.lastHeartbeatAt ? relative(runner.lastHeartbeatAt) : "Never connected"}</small></span><span><b>{runner.version ? `v${runner.version}` : "No version"}</b><small>{runner.activeJobId ? `Active ${runner.activeJobId}` : "Idle"}</small></span></article>)}
         {!cockpit.runners.length ? <p className="empty-copy">No Local Runner has been paired.</p> : null}
       </div>
-    </details>
+    </details> : null}
   </section>;
 }

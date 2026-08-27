@@ -5,8 +5,8 @@ import { Icon } from "../../components/Icon";
 import { WorkflowParameterField } from "./WorkflowParameterField";
 import { sameWorkflowValue } from "./workflowValues";
 
-export function FlowsView() {
-  const { snapshot, busy, error, uploadWorkflow, saveWorkflowRevision } = useStudio();
+export function FlowsView({ embedded = false }: { embedded?: boolean } = {}) {
+  const { snapshot, activeProjectId, busy, error, uploadWorkflow, saveWorkflowRevision } = useStudio();
   const inputRef = useRef<HTMLInputElement>(null);
   const workflows = snapshot?.workflows ?? [];
   const [selectedId, setSelectedId] = useState("");
@@ -17,12 +17,14 @@ export function FlowsView() {
   const [values, setValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
+  const projectRequired = !activeProjectId;
+  const importDisabled = busy || uiOnlyDevelopment || projectRequired;
 
   const effectiveValues = selected && valuesRevisionId === selected.currentRevision.id ? values : {};
   const changed = selected?.currentRevision.parameters.some((parameter) => !sameWorkflowValue(parameter.value, effectiveValues[parameter.id] ?? parameter.value)) ?? false;
 
   const importFile = async () => {
-    if (!file) return;
+    if (!file || projectRequired) return;
     const imported = await uploadWorkflow(file, name, description);
     setSelectedId(imported.id);
     setValuesRevisionId(imported.currentRevision.id);
@@ -41,26 +43,30 @@ export function FlowsView() {
     await saveWorkflowRevision(selected.id, selected.currentRevision.id, modified);
   };
 
-  return <section className="flows-view fade-up">
-    <section className="workflow-import glass">
-      <div className="workflow-import-copy"><span className="eyebrow">Model library</span><h2>Add a ComfyUI workflow</h2><p>Import once, then select this model from Create in any project. The graph and every settings revision remain immutable and content-hashed.</p></div>
+  return <section className={`flows-view flows-view-compact fade-up${embedded ? " embedded" : ""}`}>
+    <details className="workflow-import-shell glass" open={!workflows.length || undefined}>
+      <summary><span><span className="media-drop-icon"><Icon name="flows" size={18} /></span><span><strong>Import a ComfyUI model</strong><small>{projectRequired ? "Select a project to import · browsing stays available" : "JSON graph · immutable revisions"}</small></span></span><span>{workflows.length} saved</span><Icon name="chevronDown" size={16} /></summary>
+      <section className="workflow-import workflow-import-compact">
+      <div className="workflow-import-copy"><span className="eyebrow">Model library</span><h2>Add a workflow</h2><p>Import into the active project, then use the model from Create. The graph and every settings revision remain immutable and content-hashed.</p></div>
+      {projectRequired ? <div className="workflow-project-required workflow-notice" role="note"><Icon name="projects" size={18} /><span><strong>Create or select a project to import.</strong><small>Models are project-owned. You can still browse and inspect every saved model below.</small></span></div> : null}
       <label className="workflow-drop">
-        <input ref={inputRef} type="file" accept="application/json,.json" disabled={busy || uiOnlyDevelopment} onChange={(event) => {
+        <input ref={inputRef} type="file" accept="application/json,.json" disabled={importDisabled} onChange={(event) => {
           const next = event.target.files?.[0] ?? null;
           setFile(next);
           if (next && !name) setName(next.name.replace(/\.json$/i, "").replaceAll("_", " "));
         }} />
         <span className="media-drop-icon"><Icon name="flows" size={23} /></span>
         <strong>{file?.name ?? "Choose workflow JSON"}</strong>
-        <small>{uiOnlyDevelopment ? "Connect through the Creative Studio Worker to import real workflows." : "ComfyUI API and UI graph exports · maximum 1 MB"}</small>
+        <small>{projectRequired ? "Project required before a workflow can be stored." : uiOnlyDevelopment ? "Connect through the Creative Studio Worker to import real workflows." : "ComfyUI API and UI graph exports · maximum 1 MB"}</small>
       </label>
       <div className="workflow-import-fields">
-        <label className="field"><span>Workflow name</span><input value={name} disabled={busy || uiOnlyDevelopment} onChange={(event) => setName(event.target.value)} placeholder="Defaults to the JSON filename" /></label>
-        <label className="field"><span>Description</span><input value={description} disabled={busy || uiOnlyDevelopment} onChange={(event) => setDescription(event.target.value)} placeholder="What this workflow is for" /></label>
-        <button className="btn btn-primary" disabled={!file || busy || uiOnlyDevelopment} onClick={() => void importFile()}><Icon name="plus" size={16} /> Import workflow</button>
+        <label className="field"><span>Workflow name</span><input value={name} disabled={importDisabled} onChange={(event) => setName(event.target.value)} placeholder="Defaults to the JSON filename" /></label>
+        <label className="field"><span>Description</span><input value={description} disabled={importDisabled} onChange={(event) => setDescription(event.target.value)} placeholder="What this workflow is for" /></label>
+        <button className="btn btn-primary" disabled={!file || importDisabled} onClick={() => void importFile()}><Icon name="plus" size={16} /> Import workflow</button>
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
-    </section>
+      </section>
+    </details>
 
     <div className="workflow-layout">
       <aside className="workflow-list glass">

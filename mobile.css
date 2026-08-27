@@ -1,10 +1,14 @@
 /* mobile.css */
 .mshell { display: flex; flex-direction: column; height: 100%; position: relative; z-index: 1; }
 .mtop { display: flex; align-items: center; gap: 12px; padding: 16px 18px 10px; flex: none; }
+.mt-brand { display: flex; min-width: 0; align-items: center; gap: 10px; text-align: left; }
 .mtop .mt-mark { width: 34px; height: 34px; flex: none; position: relative; }
 .mtop .mt-mark .bm-orb { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 38% 32%, #fff, var(--accent-2) 24%, var(--accent) 55%, #2a1259 90%); box-shadow: 0 0 14px -2px var(--accent); }
 .mtop .mt-name { font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: .04em; background: linear-gradient(110deg, #fff, var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .mtop .mt-sp { flex: 1; }
+.mobile-project-switch { position: relative; display: flex; min-width: 0; max-width: 112px; align-items: center; border: 1px solid var(--border-soft); border-radius: 999px; background: var(--surface); }
+.mobile-project-switch select { width: 100%; min-width: 0; appearance: none; border: 0; outline: 0; padding: 8px 24px 8px 11px; background: transparent; color: var(--text-soft); font-size: 11px; font-weight: 700; text-overflow: ellipsis; }
+.mobile-project-switch svg { position: absolute; right: 8px; pointer-events: none; color: var(--text-faint); }
 .mbody { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 18px 100px; }
 
 .mhead { padding: 8px 2px 18px; text-align: center; }
@@ -46,7 +50,7 @@
   display: flex; padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border-soft);
   background: color-mix(in oklab, var(--bg-0) 82%, transparent); backdrop-filter: blur(20px); }
-.mtab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; color: var(--text-faint); font-size: 10.5px; font-weight: 600; transition: color .18s; }
+.mtab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; color: var(--text-faint); font-size: 11px; font-weight: 600; transition: color .18s; }
 .mtab.on { color: var(--accent-2); }
 .mtab.on .mtab-ic { filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent-2) 70%, transparent)); }
 
@@ -65,3 +69,9 @@
 .mview-head { padding: 6px 2px 16px; }
 .mview-head h1 { font-family: var(--font-display); font-size: 26px; font-weight: 600; }
 .mview-head p { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
+
+@media (max-width: 390px) {
+  .mtop { gap: 8px; padding-inline: 14px; }
+  .mtop .mt-name { font-size: 16px; }
+  .mobile-project-switch { max-width: 98px; }
+}

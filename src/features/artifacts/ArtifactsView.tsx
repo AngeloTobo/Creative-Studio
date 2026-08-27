@@ -21,19 +21,72 @@ function downloadName(artifact: Artifact) {
 
 function ModalShell({ labelledBy, onClose, className = "", children }: { labelledBy: string; onClose: () => void; className?: string; children: ReactNode }) {
   const panel = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panel.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+    const dialog = panel.current;
+    if (!dialog) return;
+
+    const obscured: Array<{ element: HTMLElement; inert: boolean; ariaHidden: string | null }> = [];
+    let modalBranch: HTMLElement | null = dialog.parentElement;
+    while (modalBranch && modalBranch !== document.body) {
+      const parent: HTMLElement | null = modalBranch.parentElement;
+      if (!parent) break;
+      for (const sibling of Array.from(parent.children)) {
+        if (!(sibling instanceof HTMLElement) || sibling === modalBranch) continue;
+        obscured.push({ element: sibling, inert: sibling.inert, ariaHidden: sibling.getAttribute("aria-hidden") });
+        sibling.inert = true;
+        sibling.setAttribute("aria-hidden", "true");
+      }
+      modalBranch = parent;
+    }
+
+    const focusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    const initialFocus = dialog.querySelector<HTMLElement>("[autofocus]") ?? focusableElements()[0] ?? dialog;
+    initialFocus.focus();
+
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = focusableElements();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("keydown", containFocus);
     return () => {
-      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("keydown", containFocus);
+      for (const { element, inert, ariaHidden } of obscured) {
+        element.inert = inert;
+        if (ariaHidden === null) element.removeAttribute("aria-hidden");
+        else element.setAttribute("aria-hidden", ariaHidden);
+      }
       previous?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="studio-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -51,7 +104,7 @@ export function ArtifactMediaReview({ artifact, onInspect, onExtend }: { artifac
     return (
       <section className="artifact-audio-review" aria-label={`Audio review for ${artifact.name}`}>
         <div><Icon name="music" size={18} /><span><strong>Retained audio</strong><small>Listen to the full result before deciding.</small></span></div>
-        <audio controls preload="metadata" src={mediaUrl}>Your browser does not support audio playback.</audio>
+        <audio controls preload="none" src={mediaUrl}>Your browser does not support audio playback.</audio>
         <a className="btn btn-ghost artifact-download" href={mediaUrl} download={downloadName(artifact)}><Icon name="arrow" size={15} /> Download audio</a>
       </section>
     );
@@ -132,7 +185,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused, compact = false }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean; compact?: boolean }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [promptExpanded, setPromptExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -143,8 +196,15 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
     await reuseJob(artifact.jobId);
     onQueued();
   };
+  const disabled = busy || artifact.status === "retaining";
+  const animateAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Animate</button> : null;
+  const evolveAction = <button className="btn artifact-evolve" disabled={disabled} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>;
+  const reuseAction = <button className="btn btn-ghost artifact-reuse" disabled={disabled} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>;
+  const acceptAction = <button className="btn artifact-accept" disabled={disabled} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>;
+  const rejectAction = <button className="btn artifact-reject" disabled={disabled} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>;
+  const archiveAction = <button className="btn btn-ghost" disabled={disabled} onClick={() => onReview({ artifact, decision: "archived" })}><Icon name="archive" size={16} /> Archive</button>;
   return (
-    <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}`} id={`artifact-card-${artifact.id}`}>
+    <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}${compact ? " artifact-card-compact" : ""}`} id={`artifact-card-${artifact.id}`}>
       <div className="artifact-hero">
         <ArtifactThumb artifact={artifact} />
         {artifact.kind === "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => onInspect(artifact)} /> : null}
@@ -156,16 +216,31 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
         {hasLongPrompt ? <button type="button" className="artifact-prompt-toggle" aria-expanded={promptExpanded} onClick={() => setPromptExpanded((value) => !value)}>{promptExpanded ? "Show less" : "Read full prompt"}</button> : null}
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
         {artifact.kind !== "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => undefined} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} /> : null}
-        <div className="artifact-actions artifact-create-actions" aria-label={`Create from ${artifact.name}`}>
-          {artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={busy || artifact.status === "retaining"} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Animate</button> : null}
-          <button className="btn artifact-evolve" disabled={busy || artifact.status === "retaining"} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>
-          <button className="btn btn-ghost artifact-reuse" disabled={busy || artifact.status === "retaining"} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>
-        </div>
-        <div className="artifact-review-actions" aria-label={`Review ${artifact.name}`}>
-          <button className="btn artifact-accept" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>
-          <button className="btn artifact-reject" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>
-          <button className="btn btn-ghost" disabled={busy || artifact.status === "retaining"} onClick={() => onReview({ artifact, decision: "archived" })}><Icon name="archive" size={16} /> Archive</button>
-        </div>
+        {compact ? <div className="artifact-compact-actions" aria-label={`Actions for ${artifact.name}`}>
+          {artifact.status === "ready" ? acceptAction : artifact.kind === "image" ? animateAction : evolveAction}
+          <details>
+            <summary className="btn btn-ghost"><Icon name="more" size={16} /> More actions</summary>
+            <div>
+              {artifact.status !== "ready" ? acceptAction : null}
+              {rejectAction}
+              {artifact.kind === "image" && artifact.status === "ready" ? animateAction : null}
+              {artifact.status === "ready" || artifact.kind === "image" ? evolveAction : null}
+              {reuseAction}
+              {archiveAction}
+            </div>
+          </details>
+        </div> : <>
+          <div className="artifact-actions artifact-create-actions" aria-label={`Create from ${artifact.name}`}>
+            {animateAction}
+            {evolveAction}
+            {reuseAction}
+          </div>
+          <div className="artifact-review-actions" aria-label={`Review ${artifact.name}`}>
+            {acceptAction}
+            {rejectAction}
+            {archiveAction}
+          </div>
+        </>}
         <details className="artifact-details">
           <summary><span><Icon name="history" size={15} /> Details &amp; history</span><small>{decisions.length ? `${decisions.length} ${decisions.length === 1 ? "decision" : "decisions"}` : "Lineage + settings"}</small></summary>
           <DecisionHistory decisions={decisions} />
@@ -204,7 +279,9 @@ function LearnedNotice({ signals, onClose }: { signals: CreativeTasteSignal[]; o
   return <div className="creative-learned" role="status"><Icon name="dna" size={18} /><span><strong>Creative Studio learned from that decision</strong>{signals.map((signal) => <small key={signal.id}><b>{signal.kind}</b> · {signal.text}</small>)}</span><button className="icon-button" aria-label="Close learned feedback" onClick={onClose}><Icon name="close" size={15} /></button></div>;
 }
 
-export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focusArtifactId?: string }) {
+export type ArtifactsViewProps = { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focusArtifactId?: string; embedded?: boolean; compact?: boolean };
+
+export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focusArtifactId, embedded = false, compact = embedded }: ArtifactsViewProps) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [playingVideo, setPlayingVideo] = useState<Artifact | null>(null);
@@ -254,14 +331,14 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
   }, [focusArtifactId, focusArtifactArchived, effectiveActiveVisibleCount]);
 
   const renderHistoryEntry = (entry: ArtifactHistoryEntry) => entry.kind === "study"
-    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate }} />
-    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} focused={focusArtifactId === entry.artifact.id} />;
+    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate, compact }} />
+    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} focused={focusArtifactId === entry.artifact.id} compact={compact} />;
   return (
-    <section className="artifacts-view fade-up">
-      <div className="artifacts-toolbar glass">
+    <section className={`artifacts-view fade-up${embedded ? " artifacts-embedded" : ""}`} aria-label={embedded ? "Completed results" : undefined}>
+      {!embedded ? <div className="artifacts-toolbar glass">
         <div><strong>{partitionedHistory.active.length}</strong><span>active {partitionedHistory.active.length === 1 ? "item" : "items"}</span>{partitionedHistory.archived.length ? <small>{partitionedHistory.archived.length} archived</small> : null}</div>
         <button type="button" className="btn btn-primary" onClick={onContinueLoop}><Icon name="star" size={16} /> Create new</button>
-      </div>
+      </div> : null}
       {artifacts.length ? <div className="artifact-filters" role="toolbar" aria-label="Filter active artifacts">
         <button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => { setStatusFilter("all"); setActiveVisibleCount(ARTIFACT_PAGE_SIZE); }}>All <b>{artifacts.length - artifacts.filter((artifact) => artifact.status === "archived").length}</b></button>
         {artifactCounts.map(({ status, count }) => <button type="button" className={statusFilter === status ? "active" : ""} aria-pressed={statusFilter === status} onClick={() => { setStatusFilter(status); setActiveVisibleCount(ARTIFACT_PAGE_SIZE); }} key={status}>{status} <b>{count}</b></button>)}

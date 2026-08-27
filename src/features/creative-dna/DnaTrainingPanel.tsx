@@ -4,6 +4,7 @@ import { creativeDnaCanGenerate, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { TrainingReviewPanel } from "./TrainingReviewPanel";
 import { AceStepTrainingPanel } from "./AceStepTrainingPanel";
+import "./TrainingWorkspace.css";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
@@ -13,7 +14,9 @@ function statusLabel(status: string) {
   return status.replaceAll("-", " ");
 }
 
-export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, onReviewJobHandled }: { onMedia: () => void; initialAssetIds?: string[]; reviewJobId?: string; onReviewJobHandled?: () => void }) {
+type TrainingPath = "analyze" | "model";
+
+export function DnaTrainingPanel({ onMedia, initialAssetIds = [], initialPath, reviewJobId, onReviewJobHandled }: { onMedia: () => void; initialAssetIds?: string[]; initialPath?: TrainingPath; reviewJobId?: string; onReviewJobHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, startDnaTraining, cancelDnaTraining, reviewDnaTraining, busy, error } = useStudio();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const eligibleAssets = useMemo(() => snapshot?.mediaAssets
@@ -30,8 +33,15 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
   const [reviewingJobId, setReviewingJobId] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState("");
+  const inferredInitialPath: TrainingPath = reviewJobId
+    ? "analyze"
+    : initialPath ?? (initialAssetIds.length >= 3 && initialAssetIds.every((assetId) => eligibleAssets.find((asset) => asset.id === assetId)?.kind === "audio") ? "model" : "analyze");
+  const [path, setPath] = useState<TrainingPath>(inferredInitialPath);
   const selectedAssetIds = selected.filter((assetId) => eligibleAssets.some((asset) => asset.id === assetId));
   const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
+  const consentedAudioCount = eligibleAssets.filter((asset) => asset.kind === "audio").length;
+  const modelActionCount = (snapshot?.modelTrainingJobs.filter((job) => job.projectId === activeProjectId && ["waiting-for-runner", "waiting-for-review", "running"].includes(job.status)).length ?? 0)
+    + (snapshot?.modelAdapters.filter((adapter) => adapter.projectId === activeProjectId && adapter.status === "review-required").length ?? 0);
 
   const toggle = (assetId: string) => setSelected((current) => current.includes(assetId)
     ? current.filter((id) => id !== assetId)
@@ -85,16 +95,26 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
     : [];
   const activeDnaArtifactId = snapshot?.projects.find((project) => project.id === activeProjectId)?.activeDnaArtifactId ?? null;
   const activeDnaReviewed = snapshot && activeDna ? creativeDnaCanGenerate(snapshot, activeDna) : true;
+  const activeAnalysisJob = jobs.find((job) => job.status === "waiting-for-runner" || job.status === "running");
+  const pendingAnalysisReview = jobs.find((job) => job.status === "completed" && job.resultDnaArtifactId && !snapshot?.trainingReviews.some((review) => review.trainingJobId === job.id));
+  const analysisStep = pendingAnalysisReview || reviewingJob ? 2 : activeAnalysisJob ? 1 : activeDnaReviewed && activeDna?.training ? 3 : 0;
 
-  return <><AceStepTrainingPanel onMedia={onMedia} /><details className="dna-analysis-disclosure glass" open={initialAssetIds.length > 0 || Boolean(reviewJobId)}><summary><span><Icon name="image" size={17} /><strong>Analyze CreativeDNA</strong></span><small>Images, audio, and video · does not change model weights</small></summary><section className="dna-training" id="creative-dna-training" aria-labelledby="dna-training-title">
+  return <section className="training-hub" aria-labelledby="training-hub-title">
+    <header className="training-hub-head"><div><span className="eyebrow">Learn from your work</span><h2 id="training-hub-title">Train</h2></div><span className="training-hub-local"><i /> Local-first</span></header>
+    <div className="training-path-tabs" role="tablist" aria-label="Training path">
+      <button type="button" role="tab" aria-selected={path === "analyze"} aria-controls="creative-dna-analysis-panel" className={path === "analyze" ? "on" : ""} onClick={() => setPath("analyze")}><span><Icon name="image" size={18} /></span><strong>Analyze media</strong><small>Describe files and evolve CreativeDNA</small><em>{selectedAssetIds.length ? `${selectedAssetIds.length} selected` : `${eligibleAssets.length} eligible`}</em></button>
+      <button type="button" role="tab" aria-selected={path === "model"} aria-controls="music-model-training-panel" className={path === "model" ? "on" : ""} onClick={() => setPath("model")}><span><Icon name="music" size={18} /></span><strong>Train music LoRA</strong><small>Create real ACE-Step LoRA weights</small><em>{modelActionCount ? `${modelActionCount} needs action` : consentedAudioCount >= 3 ? `${consentedAudioCount} tracks ready` : `${3 - consentedAudioCount} more needed`}</em></button>
+    </div>
+    {path === "model" ? <div id="music-model-training-panel" role="tabpanel"><AceStepTrainingPanel onMedia={onMedia} initialAssetIds={initialAssetIds} /></div> : <div id="creative-dna-analysis-panel" role="tabpanel"><section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
-      <div><span className="eyebrow">Evidence synthesis</span><h2 id="dna-training-title">Analyze CreativeDNA</h2><p>Gemma 4 retains a long analysis and a short generation summary for every selected image, audio file, and video while measured evidence shapes the DNA. This changes CreativeDNA evidence, not model weights.</p></div>
+      <div><span className="eyebrow">CreativeDNA analysis</span><h2 id="dna-training-title">Analyze media</h2><p>Gemma describes each file, measures its signals, and creates a reviewable DNA version. Model weights stay unchanged.</p></div>
       <span className="training-runner-state"><i /> Local runner + Gemma 4</span>
     </header>
+    <ol className="training-steps" aria-label="CreativeDNA analysis progress">{["Sources", "Analyze", "Review", "Active"].map((label, index) => <li key={label} className={index < analysisStep ? "complete" : index === analysisStep ? "current" : ""}><span>{index < analysisStep ? <Icon name="check" size={11} /> : index + 1}</span><strong>{label}</strong></li>)}</ol>
 
     <div className="dna-training-layout">
       <div className="dna-training-inputs">
-        <div className="training-section-head"><span><strong>Training uploads</strong><small>{eligibleAssets.length} eligible</small></span><button className="link-btn" onClick={onMedia}>Full media library</button></div>
+        <div className="training-section-head"><span><strong>Sources</strong><small>{selectedAssetIds.length} selected / {eligibleAssets.length} eligible</small></span><button className="link-btn" onClick={onMedia}>Media library</button></div>
         <div className={`training-inline-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
           <input ref={uploadInputRef} type="file" accept={ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => chooseUpload(event.target.files?.[0] ?? null)} />
           <button className="btn btn-ghost" disabled={busy || uiOnlyDevelopment} onClick={() => uploadInputRef.current?.click()}><Icon name="plus" size={15} /> Choose media</button>
@@ -123,7 +143,7 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
 
     {error ? <div className="inline-error" role="alert">{error}</div> : null}
     <div className="training-runs">
-      <div className="training-section-head"><span><strong>Training runs</strong><small>{jobs.length} recorded</small></span></div>
+      <div className="training-section-head"><span><strong>Analysis runs</strong><small>{jobs.length} recorded</small></span></div>
       {jobs.slice(0, 3).map((job) => <article className="training-run" key={job.id}>
         <span className={`state-pill ${job.status}`}>{statusLabel(job.status)}</span>
         <span><strong>{job.name}</strong><small>{job.assetIds.length} uploads · {job.trainingExampleIds.length} accepted examples · {job.targetModality}</small></span>
@@ -144,5 +164,6 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], reviewJobId, o
       onClose={() => { setReviewingJobId(""); onReviewJobHandled?.(); }}
       onDecision={(decision, note) => reviewDnaTraining(reviewingJob.id, decision, note)}
     /> : null}
-  </section></details></>;
+  </section></div>}
+  </section>;
 }

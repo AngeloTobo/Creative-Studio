@@ -35,7 +35,7 @@ function DatasetReview({ jobId, sourceItems }: { jobId: string; sourceItems: Mod
   </div>;
 }
 
-export function AceStepTrainingPanel({ onMedia }: { onMedia: () => void }) {
+export function AceStepTrainingPanel({ onMedia, initialAssetIds = [] }: { onMedia: () => void; initialAssetIds?: string[] }) {
   const { snapshot, activeProjectId, activeDna, busy, error, uploadMedia, startModelTraining, cancelModelTraining, reviewModelAdapter } = useStudio();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const audio = useMemo(() => (snapshot?.mediaAssets
@@ -45,7 +45,7 @@ export function AceStepTrainingPanel({ onMedia }: { onMedia: () => void }) {
   const adapters = snapshot?.modelAdapters.filter((adapter) => adapter.projectId === activeProjectId) ?? [];
   const capability = snapshot?.capabilities.find((item) => item.key === "model-adapter-training");
   const project = snapshot?.projects.find((item) => item.id === activeProjectId) ?? null;
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(initialAssetIds);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [rules, setRules] = useState("");
@@ -56,12 +56,23 @@ export function AceStepTrainingPanel({ onMedia }: { onMedia: () => void }) {
   const recipe = modelTrainingRecipe("music-style", preset);
   const explicitSelectedIds = selected.filter((id) => audio.some((asset) => asset.id === id));
   const selectedIds = explicitSelectedIds.length ? explicitSelectedIds : audio.slice(0, 3).map((asset) => asset.id);
+  const selectionSource = explicitSelectedIds.length ? "chosen recordings" : "newest selected automatically";
   const effectiveName = name.trim() || `${project?.name || "Creative Studio"} music LoRA`;
   const effectiveDescription = description.trim() || "Learn the recurring musical production, vocal space, rhythm, harmony, dynamics, texture, and arrangement shared across these consented recordings without retaining artist identity.";
   const canStart = selectedIds.length >= recipe.dataset.minimumItems;
   const pendingDataset = jobs.find((job) => job.status === "waiting-for-review" && job.stage === "dataset-review" && job.dataset);
   const pendingAdapter = adapters.find((adapter) => adapter.status === "review-required");
   const activeRun = jobs.find((job) => ["waiting-for-runner", "waiting-for-review", "running"].includes(job.status));
+  const activeAdapter = adapters.find((adapter) => adapter.status === "active");
+  const modelStep = activeAdapter
+    ? 4
+    : pendingAdapter
+      ? 3
+      : activeRun && /train|checkpoint|evaluate/i.test(activeRun.stage)
+        ? 2
+        : pendingDataset || activeRun
+          ? 1
+          : 0;
 
   const start = async (assetIds = selectedIds) => {
     await startModelTraining({
@@ -109,27 +120,28 @@ export function AceStepTrainingPanel({ onMedia }: { onMedia: () => void }) {
 
   return <section className="ace-training glass" aria-labelledby="ace-training-title">
     <header className="ace-training-head">
-      <div><span className="eyebrow">Actual model training</span><h2 id="ace-training-title">Upload songs. Train a LoRA.</h2><p>Choose at least three recordings once. Creative Studio retains them, starts the durable proof run, and uses your RTX 3090 for ACE-Step training.</p></div>
+      <div><span className="eyebrow">Real model weights</span><h2 id="ace-training-title">Train a music LoRA</h2><p>Choose three recordings. ACE-Step trains locally and keeps the run durable when this browser closes.</p></div>
       <span className={`ace-runtime ${capability?.state ?? "unavailable"}`}><i /> {capability?.state === "available" ? "ACE-Step ready" : "Setup required"}</span>
     </header>
+    <ol className="training-steps" aria-label="Music model training progress">{["Sources", "Captions", "Training", "Activate"].map((label, index) => <li key={label} className={index < modelStep ? "complete" : index === modelStep ? "current" : ""}><span>{index < modelStep ? <Icon name="check" size={11} /> : index + 1}</span><strong>{label}</strong></li>)}</ol>
     {capability?.state !== "available" ? <div className="ace-runtime-callout"><Icon name="runtime" size={19} /><span><strong>Training is honest about readiness.</strong><small>{capability?.detail ?? "Pair the Local Runner and install ACE-Step 1.5 Base checkpoints."}</small></span></div> : null}
     <div className="ace-primary-action"><div className="ace-proof-ready"><span><Icon name="dna" size={19} /></span><div><strong>{canStart ? `${selectedIds.length} tracks ready` : `${recipe.dataset.minimumItems - selectedIds.length} more needed`}</strong><small>{effectiveName} · {recipe.estimate.minimumMinutes}–{recipe.estimate.maximumMinutes} min local estimate</small></div></div><button className="btn btn-primary training-start" disabled={busy || !canStart || Boolean(activeRun) || snapshot?.adapter.id === "development-local-storage"} onClick={() => void start()}><Icon name="dna" size={17} /> {activeRun ? "Training run in progress" : `Train ${selectedIds.length} selected tracks`}</button></div>
 
     <div className="ace-builder">
       <div className="ace-audio-picker">
-        <div className="training-section-head"><span><strong>Your recordings</strong><small>{selectedIds.length} selected · 3 minimum · newest selected automatically</small></span><div className="ace-audio-actions"><input ref={uploadInputRef} type="file" multiple accept={AUDIO_ACCEPT} disabled={busy || snapshot?.adapter.id === "development-local-storage"} onChange={(event) => void uploadAndStart(event.target.files)} /><button className="btn btn-ghost" disabled={busy || snapshot?.adapter.id === "development-local-storage"} onClick={() => uploadInputRef.current?.click()}><Icon name="plus" size={14} /> Upload &amp; start</button><button className="link-btn" onClick={onMedia}>Library</button></div></div>
+        <div className="training-section-head"><span><strong>Your recordings</strong><small>{selectedIds.length} selected · 3 minimum · {selectionSource}</small></span><div className="ace-audio-actions"><input ref={uploadInputRef} type="file" multiple accept={AUDIO_ACCEPT} disabled={busy || snapshot?.adapter.id === "development-local-storage"} onChange={(event) => void uploadAndStart(event.target.files)} /><button className="btn btn-ghost" disabled={busy || snapshot?.adapter.id === "development-local-storage"} onClick={() => uploadInputRef.current?.click()}><Icon name="plus" size={14} /> Upload &amp; start</button><button className="link-btn" onClick={onMedia}>Library</button></div></div>
         {audio.length ? <div className="ace-audio-grid">{audio.map((asset) => <article key={asset.id} className={selectedIds.includes(asset.id) ? "selected" : ""}>
           <button className="ace-audio-select" onClick={() => setSelected((current) => {
             const valid = current.filter((id) => audio.some((item) => item.id === id));
             const effective = valid.length ? valid : audio.slice(0, 3).map((item) => item.id);
             return effective.includes(asset.id) ? effective.filter((id) => id !== asset.id) : [...effective, asset.id];
           })} aria-pressed={selectedIds.includes(asset.id)}><span><Icon name={selectedIds.includes(asset.id) ? "check" : "music"} size={17} /></span><strong>{asset.name}</strong><small>{(asset.size / 1_048_576).toFixed(1)} MB</small></button>
-          <audio controls preload="metadata" src={asset.contentUrl} />
+          <audio controls preload="none" src={asset.contentUrl} />
         </article>)}</div> : <div className="training-empty"><Icon name="music" size={24} /><span><strong>No consented audio yet.</strong><small>Select three or more songs; upload and dataset preparation begin in this panel.</small></span><button className="btn btn-ghost" onClick={() => uploadInputRef.current?.click()}>Choose songs</button></div>}
       </div>
 
       <div className="ace-config">
-        <p className="training-boundary">Starts immediately and survives closing the browser. Gemma writes identity-safe music captions and local Whisper drafts lyrics; one compact review protects training quality before the GPU stage.</p>
+        <p className="training-boundary">Gemma drafts grounded captions; local Whisper drafts lyrics. You approve both before GPU training.</p>
         <details className="ace-training-options"><summary><span>Training options</span><small>{preset} · {instrumental ? "instrumental" : "vocals + local transcript"}</small></summary><div>
           <label className="field"><span>Style name</span><input className="input" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} placeholder={effectiveName} /></label>
           <label className="field"><span>What should the LoRA learn?</span><textarea className="input" value={description} maxLength={1200} onChange={(event) => setDescription(event.target.value)} placeholder={effectiveDescription} /></label>

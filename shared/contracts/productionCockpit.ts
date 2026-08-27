@@ -262,12 +262,13 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       actionLabel: "Review output", surface: "gallery", createdAt: artifact.updatedAt,
     });
   }
-  for (const job of input.jobs.filter((item) => item.status === "failed" && !retriedJobIds.has(item.id))) {
+  for (const job of input.jobs.filter((item) => (item.status === "failed" || item.status === "cancelled") && !retriedJobIds.has(item.id))) {
     const project = projects.get(job.projectId);
+    const cancelled = job.status === "cancelled";
     actions.push({
       id: `retry-generation:${job.id}`, kind: "retry-generation", severity: "warning", projectId: job.projectId,
       projectName: project?.name ?? "Unknown project", entityId: job.id, modality: job.modality,
-      title: `${job.modality} production failed`, detail: job.error || "The durable job failed and can be retried without deleting its history.",
+      title: `${job.modality} production ${cancelled ? "cancelled" : "failed"}`, detail: cancelled ? "This cancelled run remains in durable history. Retry creates a new job with the same stamped settings." : job.error || "The durable job failed and can be retried without deleting its history.",
       actionLabel: "Retry as new job", surface: "queue", createdAt: job.completedAt ?? job.updatedAt,
     });
   }

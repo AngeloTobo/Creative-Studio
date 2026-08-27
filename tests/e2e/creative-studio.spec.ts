@@ -32,6 +32,8 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await page.getByRole("button", { name: /Animate/ }).click();
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
+  await page.locator(".quick-compose-source > summary").click();
   await expect(page.getByRole("button", { name: "Use Rebecca embryo upload" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
   await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
@@ -39,7 +41,9 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
 
   await page.goto("/#/portal");
   await page.getByRole("button", { name: /Train DNA/ }).click();
-  await expect(page.getByRole("heading", { name: "Analyze CreativeDNA" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Train", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Analyze media/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Analyze media" })).toBeVisible();
 });
 
 test("creation keeps image speed safe and never reuses an imported video prompt", async ({ page }) => {
@@ -89,6 +93,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
     }));
   }, { createdAt });
   await page.goto("/#/dna");
+  await page.locator(".quick-compose-source > summary").click();
   const sourceGallery = page.getByRole("region", { name: "Use retained work" });
   await expect(sourceGallery.getByRole("button", { name: "Use Newest retained source upload" })).toBeVisible();
   await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toHaveCount(0);
@@ -96,9 +101,13 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toBeVisible();
   await sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" }).click();
   await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toHaveAttribute("aria-pressed", "true");
+  await page.locator(".quick-speed-panel > summary").click();
   const speed = page.getByRole("group", { name: "Image speed" });
   await expect(speed.getByRole("button", { name: /^Fast/ })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", { name: /Save & generate image · fast/ })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("cannot use Oldest retained source");
+  await page.getByRole("button", { name: "Continue without source" }).click();
+  await expect(page.getByRole("button", { name: /generate image · fast/i })).toBeVisible();
+  await page.locator(".quick-render-panel > summary").click();
   const renderSetup = page.getByRole("region", { name: "Canvas and render settings" });
   const canvasShape = page.getByRole("group", { name: "Canvas shape" });
   const renderDetail = page.getByRole("group", { name: "Render detail" });
@@ -119,6 +128,8 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("spinbutton", { name: "Seed" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
+  await page.locator(".quick-duration-panel > summary").click();
+  await page.locator(".quick-compose-model > summary").click();
   const videoDuration = page.getByRole("group", { name: "Video duration" });
   await expect(videoDuration.getByRole("button", { name: "5s", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(videoDuration.getByRole("button", { name: "10s", exact: true })).toBeVisible();
@@ -180,7 +191,9 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
 
   await page.goto("/#/dna");
   await page.getByRole("button", { name: "Song", exact: true }).click();
+  await page.locator(".quick-compose-source > summary").click();
   await page.getByRole("button", { name: "Use Embryo artwork upload" }).click();
+  await page.locator(".quick-prompt-ideas > summary").click();
   await expect(page.getByRole("region", { name: "Recommended song prompts" })).toContainText("Uploaded art + CreativeDNA");
   await page.getByRole("button", { name: "Use Art + DNA song prompt" }).click();
   const direction = page.getByRole("textbox", { name: "Describe the song" });
@@ -222,7 +235,7 @@ test("evolution results stay in one side-by-side study instead of repeating in a
   await expect(page.locator(".artifact-grid > .artifact-card")).toHaveCount(0);
 });
 
-test("artifact history keeps active work compact and archived work available on demand", async ({ page }) => {
+test("artifact history keeps active work compact and archived work available on demand", async ({ page }, testInfo) => {
   const createdAt = "2026-08-24T01:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     const project = { id: "project_artifacts", activeDnaArtifactId: null, name: "Artifact review", type: "Mixed media", status: "active", description: "", note: "", hue: "#d946ef", initials: "AR", createdAt: time, updatedAt: time };
@@ -241,7 +254,7 @@ test("artifact history keeps active work compact and archived work available on 
   await expect(activeFeed.locator(".artifact-card")).toHaveCount(2);
   await expect(activeFeed.getByRole("heading", { name: "Newest active frame" })).toBeVisible();
   await expect(activeFeed.getByRole("heading", { name: "Archived frame" })).toHaveCount(0);
-  await expect(page.getByText("1 archived", { exact: true })).toBeVisible();
+  await expect(page.locator(".archived-artifacts > summary")).toContainText("1 hidden item");
 
   await page.getByRole("button", { name: "accepted 1" }).click();
   await expect(activeFeed.getByRole("heading", { name: "Accepted frame" })).toBeVisible();
@@ -255,7 +268,7 @@ test("artifact history keeps active work compact and archived work available on 
   await expect(archive).not.toHaveAttribute("open", "");
   await archive.getByText("Archived history").click();
   await expect(page.getByRole("feed", { name: "Archived artifact history, newest first" }).getByRole("heading", { name: "Archived frame" })).toBeVisible();
-  await page.getByRole("button", { name: "Create new" }).click();
+  await page.locator(testInfo.project.name === "mobile" ? ".mtabbar" : ".sidebar").getByRole("button", { name: "Create", exact: true }).click();
   await expect(page).toHaveURL(/#\/dna$/);
 });
 
@@ -312,12 +325,11 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/#/dna");
   await page.getByRole("textbox", { name: "Project name" }).fill("E2E Project");
-  await page.getByRole("textbox", { name: "Project type" }).fill("Visual System");
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("group", { name: "What do you want to make?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Image", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("Add workflow JSON", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /No image model is ready/ })).toBeVisible();
+  await expect(page.locator(".quick-compose-model > summary")).toContainText("No image model ready");
   await page.locator(".quick-create-advanced > summary").click();
   await page.getByRole("button", { name: "Build detailed CreativeDNA" }).click();
 
@@ -334,16 +346,16 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
 
   await page.getByRole("button", { name: "Back to Create" }).click();
   await page.getByRole("button", { name: "Train", exact: true }).click();
-  await page.getByRole("button", { name: "Open training" }).click();
-  await page.locator(".dna-analysis-disclosure > summary").click();
-  await expect(page.getByRole("heading", { name: "Analyze CreativeDNA" })).toBeVisible();
-  await expect(page.getByText(/retains a long analysis and a short generation summary for every selected image, audio file, and video/)).toBeVisible();
+  await page.getByRole("button", { name: /Analyze media/ }).click();
+  await expect(page.getByRole("heading", { name: "Analyze media" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "CreativeDNA analysis progress" })).toBeVisible();
+  await expect(page.getByText(/Gemma describes each file, measures its signals, and creates a reviewable DNA version/)).toHaveCount(1);
   await page.getByRole("button", { name: "Back to Create" }).click();
   await expect(page.getByRole("region", { name: "Create with Creative Studio" })).toBeVisible();
   await page.getByRole("button", { name: "Create explicitly simulated development preview" }).click();
   await page.getByRole("button", { name: "View queue", exact: true }).click();
   await expect(page).toHaveURL(/#\/queue$/);
-  await expect(page.getByRole("heading", { name: "Production Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Work", exact: true })).toBeVisible();
   await expect(page.locator(".cockpit-run").first()).toBeVisible({ timeout: 5_000 });
 
   await page.goto("/#/gallery");
@@ -362,7 +374,9 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await artifact.getByText("Details & history").click();
   await expect(artifact.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
   await expect(artifact.getByText("Reviewed by Development user")).toBeVisible();
+  await artifact.locator(".artifact-compact-actions details > summary").click();
   await artifact.getByRole("button", { name: "Evolve this" }).click();
+  await page.locator(".quick-evolution-brief > summary").click();
   const evolution = page.getByRole("region", { name: "Evolution study" });
   await expect(evolution).toContainText("Refine");
   await expect(evolution).toContainText("Correct");
@@ -376,18 +390,16 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await persisted.getByText("Details & history").click();
   await expect(persisted.getByText("Keep the cyan reflections and spacious focal hierarchy.")).toBeVisible();
 
-  await page.goto("/#/cockpit");
-  await expect(page.getByRole("heading", { name: "Production Dashboard", exact: true })).toBeVisible();
-  await expect(page.getByText("All caught up.")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
-  await expect(page.getByText("Retained", { exact: true }).first()).toBeVisible();
+  await page.goto("/#/work");
+  await expect(page.getByRole("region", { name: "Work", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Results/ }).click();
+  await expect(page.getByRole("heading", { name: "E2E Luminous Study" })).toBeVisible();
 });
 
 test("cancelled generation explains the retained history and offers a durable retry", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Queue control coverage needs one browser shape");
   await page.goto("/#/dna");
   await page.getByRole("textbox", { name: "Project name" }).fill("Retry E2E");
-  await page.getByRole("textbox", { name: "Project type" }).fill("Image Study");
   await page.getByRole("button", { name: "Create project" }).click();
   await page.getByRole("textbox", { name: "Describe the image" }).fill("An original image with a clean silhouette and high contrast rim light.");
   await page.getByRole("button", { name: "Create explicitly simulated development preview" }).click();
@@ -395,55 +407,63 @@ test("cancelled generation explains the retained history and offers a durable re
   const firstRun = page.locator(".cockpit-run").first();
   await firstRun.getByText("Details", { exact: true }).click();
   await firstRun.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(firstRun.getByText("cancelled", { exact: true })).toBeVisible();
-  await firstRun.getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(page.locator(".cockpit-run")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: /Needs action/ })).toHaveAttribute("aria-pressed", "true");
+  const recovery = page.getByRole("region", { name: "Work needing action" });
+  await expect(recovery).toContainText("cancelled", { ignoreCase: true });
+  await recovery.getByRole("button", { name: /Retry/ }).click();
+  await expect(page.getByRole("button", { name: /Running/ })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /Results/ }).click();
+  await page.locator(".work-history > summary").click();
+  await expect(page.locator(".work-history .cockpit-run")).toHaveCount(2);
+  await expect(page.locator(".work-history")).toContainText("cancelled", { ignoreCase: true });
 });
 
 test("project onboarding starts empty and preserves explicit lifecycle changes", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Project lifecycle needs one browser shape");
   await page.goto("/#/projects");
-  await expect(page.getByRole("heading", { name: "Create your first project" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Name your first project" })).toBeVisible();
   await expect(page.locator(".project-card")).toHaveCount(0);
 
   await page.getByRole("textbox", { name: "Project name" }).fill("Launch System");
-  await page.getByRole("textbox", { name: "Project type" }).fill("Campaign");
   await page.getByRole("button", { name: "Create project" }).click();
   let card = page.locator(".project-card", { hasText: "Launch System" });
   await expect(card).toBeVisible();
   await expect(card.getByText("Direction needed")).toBeVisible();
-  await expect(card.getByRole("button", { name: "Create", exact: true })).toBeVisible();
-  await expect(card.getByRole("button", { name: "Artifacts", exact: true })).toBeVisible();
-  await expect(card.getByRole("button", { name: "Production", exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: /Build CreativeDNA/ })).toBeVisible();
+  await expect(card.locator(".project-compact-counts b")).toHaveCount(4);
+  await expect(card.locator(".project-compact-counts")).toHaveAttribute("aria-label", "0 DNA versions, 0 sources, 0 jobs, 0 results");
 
-  await card.getByRole("button", { name: "Create", exact: true }).click();
+  await card.getByRole("button", { name: /Build CreativeDNA/ }).click();
   await expect(page).toHaveURL(/#\/dna$/);
   await page.goto("/#/projects");
   card = page.locator(".project-card", { hasText: "Launch System" });
 
-  await card.getByRole("button", { name: "Edit Launch System" }).click();
+  await card.locator(".project-menu > summary").click();
+  await card.getByRole("button", { name: "Edit details" }).click();
   await page.getByRole("textbox", { name: "Project name" }).fill("Launch System Revised");
   await page.getByRole("combobox", { name: "Project status" }).selectOption("paused");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(card.getByText("Launch System Revised")).toBeVisible();
   await expect(card.getByText("paused", { exact: true })).toBeVisible();
 
-  await card.getByRole("button", { name: "Archive Launch System Revised" }).click();
-  await card.getByRole("button", { name: "Confirm archive Launch System Revised" }).click();
+  await card.locator(".project-menu > summary").click();
+  await card.getByRole("button", { name: "Archive" }).click();
+  await card.getByRole("button", { name: "Confirm archive" }).click();
   const archived = page.locator(".project-archived-row", { hasText: "Launch System Revised" });
+  await expect(archived).toBeHidden();
+  await page.locator(".archived-projects > summary").click();
   await expect(archived).toBeVisible();
   await expect(archived).toContainText("archived");
-  await expect(page.getByRole("heading", { name: "Create your first project" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Name your first project" })).toBeVisible();
 });
 
 test("media workspace never substitutes fake uploads in development mode", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Media workspace coverage needs one browser shape");
   await page.goto("/#/media");
   await page.getByRole("textbox", { name: "Project name" }).fill("Media E2E");
-  await page.getByRole("textbox", { name: "Project type" }).fill("Source Library");
   await page.getByRole("button", { name: "Create project" }).click();
   await page.goto("/#/media");
-  await expect(page.getByRole("heading", { name: "Bring real source material into the studio." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add a source" })).toBeVisible();
   await expect(page.getByText("The browser development adapter never creates fake media.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Upload and retain" })).toBeDisabled();
   await expect(page.getByText("No media uploaded yet.")).toBeVisible();

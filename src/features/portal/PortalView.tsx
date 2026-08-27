@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   CREATIVE_DNA_DIMENSION_KEYS,
   creativeDnaDescriptionSummaries,
@@ -10,7 +10,7 @@ import {
 import { useStudio } from "../../app/StudioProvider";
 import type { StudioView } from "../../app/views";
 import { Icon, type IconName } from "../../components/Icon";
-import { ArtifactThumb, SectionHead, StatusDot } from "../../components/Visuals";
+import { ArtifactThumb, StatusDot } from "../../components/Visuals";
 import type { CreateIntent } from "../generation/quickCreate";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
@@ -29,6 +29,9 @@ const CREATE_ACTIONS: Array<{ intent: Exclude<CreateIntent, "train">; label: str
   { intent: "video", label: "Animate", detail: "Start from this frame", icon: "video" },
   { intent: "music", label: "Make song", detail: "Translate art into sound", icon: "music" },
 ];
+
+const ACCEPTED_HOME_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
+const MAX_HOME_MEDIA_BYTES = 100 * 1024 * 1024;
 
 type DnaProfile = {
   kind: "source" | "active";
@@ -90,7 +93,9 @@ function sourceAnalysis(artifacts: NonNullable<ReturnType<typeof useStudio>["sna
 }
 
 function SourcePreview({ asset }: { asset: MediaAsset }) {
-  return <img src={asset.contentUrl} alt={asset.name} />;
+  if (asset.kind === "image") return <img src={asset.contentUrl} alt={asset.name} />;
+  if (asset.kind === "audio") return <div className="home-source-audio"><Icon name="music" size={40} /><strong>{asset.name}</strong><audio src={asset.contentUrl} controls preload="metadata" /></div>;
+  return <video src={asset.contentUrl} controls preload="metadata" aria-label={asset.name} />;
 }
 
 export function PortalView({
@@ -107,11 +112,14 @@ export function PortalView({
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [localError, setLocalError] = useState("");
   const development = snapshot?.adapter.id === "development-local-storage";
-  const imageSources = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId && asset.kind === "image") ?? [], [activeProjectId, snapshot?.mediaAssets]);
-  const selectedSource = imageSources.find((asset) => asset.id === selectedSourceId) ?? imageSources[0] ?? null;
+  const sourceAssets = useMemo(() => (snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [])
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)), [activeProjectId, snapshot?.mediaAssets]);
+  const selectedSource = sourceAssets.find((asset) => asset.id === selectedSourceId) ?? sourceAssets[0] ?? null;
   const analysisMatch = selectedSource && snapshot ? sourceAnalysis(snapshot.dnaArtifacts, selectedSource.id) : null;
   const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && (job.status === "queued" || job.status === "running")) ?? [];
-  const recentArtifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId).slice(0, 4) ?? [];
+  const recentArtifacts = (snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [])
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .slice(0, 4);
 
   const profile: DnaProfile | null = analysisMatch ? {
     kind: "source",
@@ -137,8 +145,12 @@ export function PortalView({
       setLocalError("Real uploads are unavailable in the explicitly labeled development adapter.");
       return;
     }
-    if (!file.type.startsWith("image/")) {
-      setLocalError("Choose an image file.");
+    if (file.size > MAX_HOME_MEDIA_BYTES) {
+      setLocalError("Choose media no larger than 100 MB.");
+      return;
+    }
+    if (!file.type.startsWith("image/") && !file.type.startsWith("audio/") && !file.type.startsWith("video/")) {
+      setLocalError("Choose an image, audio file, or video.");
       return;
     }
     try {
@@ -154,24 +166,24 @@ export function PortalView({
   return <div className="portal home-studio fade-up">
     <section className="home-canvas glass-strong" aria-label="CreativeDNA canvas">
       <div className="home-source-pane">
-        <header className="home-pane-head"><span><small>1 · SOURCE</small><strong>{selectedSource ? selectedSource.name : "Start with an image"}</strong></span><button className="btn btn-ghost" onClick={() => inputRef.current?.click()} disabled={busy || development}><Icon name="plus" size={16} /> {selectedSource ? "Upload another" : "Upload image"}</button></header>
-        <input ref={inputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => void upload(event.target.files?.[0] ?? null)} />
+        <header className="home-pane-head"><span><small>1 · SOURCE</small><strong>{selectedSource ? selectedSource.name : "Start with your work"}</strong></span><button className="btn btn-ghost" onClick={() => inputRef.current?.click()} disabled={busy || development}><Icon name="plus" size={16} /> {selectedSource ? "Add another" : "Upload"}</button></header>
+        <input ref={inputRef} className="visually-hidden" type="file" accept={ACCEPTED_HOME_MEDIA} onChange={(event) => void upload(event.target.files?.[0] ?? null)} />
         <div className={`home-source-preview${selectedSource ? " has-source" : ""}`}>
-          {selectedSource ? <SourcePreview asset={selectedSource} /> : <button onClick={() => inputRef.current?.click()} disabled={development}><span className="home-source-empty-icon"><Icon name="image" size={30} /></span><strong>Upload a work</strong><small>See it, analyze its DNA, then create from it.</small></button>}
+          {selectedSource ? <SourcePreview asset={selectedSource} /> : <button onClick={() => inputRef.current?.click()} disabled={development}><span className="home-source-empty-icon"><Icon name="plus" size={30} /></span><strong>Upload a work</strong><small>Image, video, or song. Analyze it, then create from it.</small></button>}
           {selectedSource ? <span className="home-source-badge"><Icon name="shield" size={13} /> Retained owner upload</span> : null}
         </div>
-        {imageSources.length > 1 ? <div className="home-source-strip" aria-label="Retained image sources">{imageSources.slice(0, 7).map((asset) => <button key={asset.id} className={selectedSource?.id === asset.id ? "selected" : ""} onClick={() => setSelectedSourceId(asset.id)} aria-label={`Use ${asset.name}`}><img src={asset.contentUrl} alt="" /></button>)}</div> : null}
+        {sourceAssets.length > 1 ? <div className="home-source-strip" aria-label="Retained sources">{sourceAssets.slice(0, 7).map((asset) => <button key={asset.id} className={selectedSource?.id === asset.id ? "selected" : ""} onClick={() => setSelectedSourceId(asset.id)} aria-label={`Use ${asset.name}`}>{asset.kind === "image" ? <img src={asset.contentUrl} alt="" loading="lazy" /> : <Icon name={asset.kind === "audio" ? "music" : "video"} size={18} />}</button>)}<button className="home-source-more" onClick={() => navigate("media")} aria-label="Browse all media"><Icon name="chevron" size={16} /></button></div> : null}
       </div>
 
       <div className="home-dna-pane">
         <header className="home-pane-head"><span><small>2 · CREATIVE DNA</small><strong>{profile?.label ?? (selectedSource ? "DNA analysis needed" : "No CreativeDNA yet")}</strong></span>{profile?.confidence !== null && profile?.confidence !== undefined ? <em>{Math.round(profile.confidence * 100)}% confidence</em> : null}</header>
         {profile ? <>
           <DnaMap profile={profile} />
-          <div className="home-dna-caption"><strong>{profile.name}</strong>{sourceSummary ? <p>{sourceSummary}</p> : <p>{profile.kind === "active" ? "Project profile shown because no uploaded image is selected." : "Measured from this retained upload."}</p>}</div>
+          <div className="home-dna-caption"><strong>{profile.name}</strong>{sourceSummary ? <p>{sourceSummary}</p> : <p>{profile.kind === "active" ? "Project profile shown because no retained work is selected." : "Measured from this retained upload."}</p>}</div>
         </> : <div className="home-dna-unmeasured">
           <span className="home-dna-pulse"><Icon name="dna" size={30} /></span>
-          <strong>{selectedSource ? "This image has not been analyzed yet." : "Upload an image to reveal its CreativeDNA."}</strong>
-          <p>{selectedSource ? "Run the local Gemma + CreativeDNA workflow to measure the image instead of guessing." : "The visual map will show energy, tension, contrast, warmth, space, rhythm, organicity, and polish."}</p>
+          <strong>{selectedSource ? "This work has not been analyzed yet." : "Upload a work to reveal its CreativeDNA."}</strong>
+          <p>{selectedSource ? "Run the local Gemma + CreativeDNA workflow to measure it instead of guessing." : "The visual map works with retained images, audio, and video."}</p>
           {selectedSource?.trainingEligible ? <button className="btn btn-primary" onClick={() => onTrain(selectedSource.id)}><Icon name="dna" size={16} /> Analyze DNA</button> : selectedSource ? <button className="btn btn-ghost" onClick={() => navigate("media")}>Review training consent</button> : null}
         </div>}
       </div>
@@ -179,24 +191,33 @@ export function PortalView({
       <div className="home-action-pane">
         <header className="home-pane-head"><span><small>3 · MAKE</small><strong>Create from here</strong></span></header>
         <div className="home-action-grid">
-          {CREATE_ACTIONS.map((action) => <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, selectedSource?.id, action.intent === "video" && Boolean(selectedSource))}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{selectedSource ? action.intent === "video" ? "Make 2 videos now" : action.detail : "Start without a source"}</small><Icon name="arrow" size={15} /></button>)}
+          {CREATE_ACTIONS.map((action) => {
+            const sourceCompatible = selectedSource && (action.intent === "image"
+              ? selectedSource.kind === "image"
+              : action.intent === "video"
+                ? selectedSource.kind === "image" || selectedSource.kind === "video"
+                : selectedSource.kind === "image" || selectedSource.kind === "audio");
+            const detail = !selectedSource || !sourceCompatible
+              ? "Start without this source"
+              : action.intent === "video"
+                ? selectedSource.kind === "image" ? "Make 2 videos now" : "Open video controls"
+                : action.intent === "music" && selectedSource.kind === "audio" ? "Use as an audio source" : action.detail;
+            return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, action.intent === "video" && selectedSource?.kind === "image")}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
+          })}
           <button className="home-action train" disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><span><Icon name="dna" size={20} /></span><strong>Train DNA</strong><small>{selectedSource ? analysisMatch ? "Build another version" : "Analyze this work" : "Select an upload first"}</small><Icon name="arrow" size={15} /></button>
         </div>
-        <button className="home-all-tools" onClick={() => navigate("dna")}>Open full Create controls <Icon name="chevron" size={14} /></button>
+        <button className="home-all-tools" onClick={() => navigate("dna")}>Open Create <Icon name="chevron" size={14} /></button>
       </div>
     </section>
 
     {(localError || error) ? <div className="inline-error" role="alert">{localError || error}</div> : null}
 
-    <section className="home-now" aria-label="Current production and recent work">
-      <div className="home-production glass">
-        <SectionHead label="Production now" action="Dashboard" onAction={() => navigate("cockpit")} />
-        <div className="home-production-count"><strong>{activeJobs.length}</strong><span>{activeJobs.length === 1 ? "active run" : "active runs"}</span></div>
-        <div className="home-production-list">{activeJobs.slice(0, 2).map((job) => <button key={job.id} onClick={() => navigate("cockpit")}><StatusDot status={job.status} /><span><strong>{job.modality === "music" ? "Song" : job.modality[0].toUpperCase() + job.modality.slice(1)}</strong><small>{job.status} · {job.progress}%</small></span><i style={{ "--home-progress": `${job.progress}%` } as CSSProperties} /></button>)}{!activeJobs.length ? <span className="home-queue-clear"><Icon name="check" size={16} /> Queue is clear</span> : null}</div>
-      </div>
-      <div className="home-recent glass">
-        <SectionHead label="Newest artifacts" action="View all" onAction={() => navigate("gallery")} />
-        <div className="home-recent-grid">{recentArtifacts.map((artifact) => <button key={artifact.id} onClick={() => navigate("gallery")}><ArtifactThumb artifact={artifact} /><span><strong>{artifact.name}</strong><small>{artifact.kind} · {artifact.status}</small></span></button>)}{!recentArtifacts.length ? <span className="home-queue-clear">Completed work will appear here.</span> : null}</div>
+    <section className="home-continue glass" aria-label="Continue working">
+      <header><span><small>CONTINUE</small><strong>{activeJobs.length ? `${activeJobs.length} ${activeJobs.length === 1 ? "run" : "runs"} active` : recentArtifacts.length ? "Newest work" : "Ready to make"}</strong></span><button className="link-btn" onClick={() => navigate("work")}>Open Work <Icon name="arrow" size={13} /></button></header>
+      <div className="home-continue-rail">
+        {activeJobs.slice(0, 3).map((job) => <button className="home-run-chip" key={job.id} onClick={() => navigate("queue")}><StatusDot status={job.status} /><span><strong>{job.prompt.trim() || (job.modality === "music" ? "Song" : job.modality)}</strong><small>{job.status} · {job.progress}%</small></span></button>)}
+        {recentArtifacts.map((artifact) => <button className="home-artifact-chip" key={artifact.id} onClick={() => navigate("gallery")}><ArtifactThumb artifact={artifact} compact /><span><strong>{artifact.name}</strong><small>{artifact.kind} · {artifact.status}</small></span></button>)}
+        {!activeJobs.length && !recentArtifacts.length ? <button className="home-empty-continue" onClick={() => navigate("dna")}><Icon name="wand" size={17} /><span><strong>Create the first result</strong><small>Choose a model and begin.</small></span><Icon name="arrow" size={14} /></button> : null}
       </div>
     </section>
   </div>;

@@ -42,6 +42,8 @@ describe("real artifact media review", () => {
     const music = artifact("music");
     const musicMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={music} /><ArtifactMediaReview artifact={music} onInspect={() => undefined} /></>);
     expect(musicMarkup).toContain("<audio");
+    expect(musicMarkup).toContain('preload="none"');
+    expect(musicMarkup).not.toContain('preload="metadata"');
     expect(musicMarkup).toContain("Download audio");
     expect(musicMarkup).toContain("download=");
     expect(musicMarkup).not.toContain("<img");

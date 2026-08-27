@@ -209,6 +209,18 @@ describe("production cockpit", () => {
     expect(cockpit.actions.some((action) => action.kind === "retry-generation")).toBe(false);
   });
 
+  it("keeps a cancelled generation actionable until a durable replacement exists", () => {
+    const cancelled = { ...job("job_cancelled", "cancelled"), error: "cancelled_by_user" };
+    const cockpit = deriveProductionCockpit(input([cancelled]));
+
+    expect(cockpit.runs).toContainEqual(expect.objectContaining({ id: cancelled.id, status: "cancelled" }));
+    expect(cockpit.actions).toContainEqual(expect.objectContaining({
+      kind: "retry-generation",
+      entityId: cancelled.id,
+      title: "image production cancelled",
+    }));
+  });
+
   it("raises a visible warning after a generation runs for twenty minutes without marking it failed", () => {
     const running = {
       ...job("job_long", "running"),

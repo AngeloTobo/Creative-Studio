@@ -1,0 +1,290 @@
+.training-hub {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.training-hub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.training-hub-head h2 {
+  margin-top: 2px;
+  font-family: var(--font-display);
+  font-size: clamp(25px,3vw,34px);
+  letter-spacing: -.035em;
+}
+
+.training-hub-local {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(52,211,153,.08);
+  color: #6ee7b7;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.training-hub-local i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.training-path-tabs {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 7px;
+  padding: 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 15px;
+  background: rgba(5,5,18,.38);
+}
+
+.training-path-tabs > button {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.training-path-tabs > button.on {
+  border-color: rgba(217,70,239,.26);
+  background: linear-gradient(135deg,rgba(217,70,239,.16),rgba(34,211,238,.07));
+  color: #fff;
+}
+
+.training-path-tabs > button:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.training-path-tabs > button > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  grid-row: 1 / 3;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(34,211,238,.07);
+  color: var(--cyan);
+}
+
+.training-path-tabs strong,
+.training-path-tabs small,
+.training-path-tabs em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-path-tabs strong {
+  align-self: end;
+  font-size: 10px;
+}
+
+.training-path-tabs small {
+  align-self: start;
+  grid-column: 2;
+  color: var(--text-faint);
+  font-size: 7px;
+}
+
+.training-path-tabs em {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(217,70,239,.08);
+  color: #e879f9;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.training-hub .ace-training,
+.training-hub .dna-training {
+  margin: 0;
+}
+
+.training-steps {
+  display: grid;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.training-steps li {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+}
+
+.training-steps li:not(:last-child)::after {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  right: 5px;
+  left: 30px;
+  height: 1px;
+  background: var(--border-soft);
+  content: "";
+}
+
+.training-steps li > span {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--border-mid);
+  border-radius: 50%;
+  background: #101027;
+  font: 8px var(--font-mono);
+}
+
+.training-steps strong {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  padding-right: 6px;
+  background: #101027;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-steps li.current {
+  color: var(--cyan);
+}
+
+.training-steps li.current > span {
+  border-color: rgba(34,211,238,.5);
+  background: rgba(34,211,238,.1);
+  box-shadow: 0 0 12px rgba(34,211,238,.18);
+}
+
+.training-steps li.complete {
+  color: #6ee7b7;
+}
+
+.training-steps li.complete > span {
+  border-color: rgba(52,211,153,.4);
+  background: rgba(52,211,153,.1);
+}
+
+.training-hub .dna-training-head p,
+.training-hub .ace-training-head p {
+  max-width: 610px;
+}
+
+.training-hub .training-runs,
+.training-hub .ace-jobs {
+  margin-top: 13px;
+  padding-top: 12px;
+}
+
+@media (max-width: 520px) {
+  .training-hub {
+    gap: 8px;
+  }
+
+  .training-hub-head .eyebrow {
+    display: none;
+  }
+
+  .training-hub-head h2 {
+    margin: 0;
+    font-size: 25px;
+  }
+
+  .training-path-tabs {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .training-path-tabs > button {
+    grid-template-columns: auto minmax(0,1fr);
+    gap: 3px 6px;
+    padding: 7px;
+  }
+
+  .training-path-tabs > button > span {
+    width: 30px;
+    height: 30px;
+    grid-row: 1 / 3;
+  }
+
+  .training-path-tabs em {
+    display: none;
+  }
+
+  .training-path-tabs strong {
+    font-size: 9px;
+  }
+
+  .training-path-tabs small {
+    grid-column: 2;
+    font-size: 6.5px;
+  }
+
+  .training-hub .ace-training-head,
+  .training-hub .dna-training-head {
+    gap: 8px;
+  }
+
+  .training-hub .ace-training-head p,
+  .training-hub .dna-training-head p {
+    display: none;
+  }
+
+  .training-steps {
+    margin-top: 9px;
+  }
+
+  .training-steps li {
+    gap: 4px;
+  }
+
+  .training-steps li > span {
+    width: 19px;
+    height: 19px;
+  }
+
+  .training-steps strong {
+    padding-right: 3px;
+    font-size: 6.5px;
+  }
+
+  .training-steps li:not(:last-child)::after {
+    left: 23px;
+  }
+
+  .training-hub .dna-training-layout {
+    margin-top: 12px;
+  }
+}

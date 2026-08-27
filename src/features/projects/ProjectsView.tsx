@@ -14,7 +14,12 @@ import { Icon } from "../../components/Icon";
 import { ProjectAvatar } from "../../components/Visuals";
 
 type ProjectFormValue = CreateProjectRequest & { status: "active" | "paused" };
-type ProjectDestination = "dna" | "gallery" | "cockpit" | "queue";
+export type ProjectDestination = "dna" | "gallery" | "cockpit" | "queue";
+
+export type ProjectsViewProps = {
+  onOpen: (destination: ProjectDestination, action?: ProductionCockpitAction) => void;
+  embedded?: boolean;
+};
 
 const STAGE_LABELS: Record<ProductionLoopStage, string> = {
   "needs-dna": "Direction needed",
@@ -49,34 +54,40 @@ function ProjectForm({ project, firstProject = false, busy, onSave, onCancel }: 
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || !type.trim()) return;
-    await onSave({ name, type, description, note, hue, status });
+    if (!name.trim()) return;
+    await onSave({ name: name.trim(), type: type.trim() || "Creative project", description, note, hue, status });
   };
 
   return (
-    <form className="project-form glass" onSubmit={(event) => void submit(event)}>
+    <form className="project-form project-form-progressive glass" onSubmit={(event) => void submit(event)}>
       <div className="project-form-head">
-        <div><span className="eyebrow">{project ? "Project details" : firstProject ? "Start with real work" : "New workspace"}</span><h2>{project ? `Edit ${project.name}` : firstProject ? "Create your first project" : "New project"}</h2></div>
+        <div>
+          <span className="eyebrow">{project ? "Project details" : firstProject ? "First workspace" : "New workspace"}</span>
+          <h2>{project ? `Edit ${project.name}` : firstProject ? "Name your first project" : "Create a project"}</h2>
+        </div>
         {onCancel ? <button type="button" className="btn-icon" aria-label="Close project form" onClick={onCancel}><Icon name="close" size={18} /></button> : null}
       </div>
-      {!project ? <p className="project-form-copy">A project keeps its direction, source media, workflows, jobs, results, and review history together.</p> : null}
-      <div className="project-fields">
-        <label className="field"><span>Name</span><input className="input" aria-label="Project name" value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} /></label>
-        <label className="field"><span>Type</span><input className="input" aria-label="Project type" value={type} maxLength={80} required onChange={(event) => setType(event.target.value)} /></label>
-        <label className="field project-field-wide"><span>Project / character canon</span><textarea className="textarea project-description" aria-label="Project or character canon" value={description} maxLength={500} onChange={(event) => setDescription(event.target.value)} placeholder="Identity, world rules, character appearance, and continuity that must remain true." /><small>Stable canon stays separate from your personal taste and from the direction of the current piece.</small></label>
-        <label className="field"><span>Current piece direction</span><input className="input" aria-label="Current piece direction" value={note} maxLength={250} onChange={(event) => setNote(event.target.value)} placeholder="What this piece is doing now" /></label>
-        <label className="field"><span>Status</span><select className="input" aria-label="Project status" value={status} onChange={(event) => setStatus(event.target.value as "active" | "paused")}><option value="active">Active</option><option value="paused">Paused</option></select></label>
-      </div>
-      <fieldset className="project-hues"><legend>Project color</legend>{PROJECT_HUES.map((color) => <button type="button" key={color} aria-label={`Use project color ${color}`} aria-pressed={hue === color} className={hue === color ? "on" : ""} style={{ "--project-hue": color } as React.CSSProperties} onClick={() => setHue(color)} />)}</fieldset>
+      {!project ? <p className="project-form-copy">Start with a name. Canon, direction, type, and color can be added when they become useful.</p> : null}
+      <label className="field project-name-first"><span>Project name</span><input className="input" autoFocus={firstProject} aria-label="Project name" value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} placeholder="New world, character, album…" /></label>
+      <details className="project-options" open={Boolean(project)}>
+        <summary><Icon name="settings" size={15} /><span>{project ? "Project details" : "Add details"}</span><small>Optional</small><Icon name="chevronDown" size={14} /></summary>
+        <div className="project-fields">
+          <label className="field"><span>Type</span><input className="input" aria-label="Project type" value={type} maxLength={80} onChange={(event) => setType(event.target.value)} placeholder="Creative project" /></label>
+          {project ? <label className="field"><span>Status</span><select className="input" aria-label="Project status" value={status} onChange={(event) => setStatus(event.target.value as "active" | "paused")}><option value="active">Active</option><option value="paused">Paused</option></select></label> : null}
+          <label className="field project-field-wide"><span>Project / character canon</span><textarea className="textarea project-description" aria-label="Project or character canon" value={description} maxLength={500} onChange={(event) => setDescription(event.target.value)} placeholder="Identity, world rules, appearance, and continuity that must remain true." /></label>
+          <label className="field project-field-wide"><span>Current piece direction</span><input className="input" aria-label="Current piece direction" value={note} maxLength={250} onChange={(event) => setNote(event.target.value)} placeholder="What this piece is doing now" /></label>
+        </div>
+        <fieldset className="project-hues"><legend>Project color</legend>{PROJECT_HUES.map((color) => <button type="button" key={color} aria-label={`Use project color ${color}`} aria-pressed={hue === color} className={hue === color ? "on" : ""} style={{ "--project-hue": color } as React.CSSProperties} onClick={() => setHue(color)} />)}</fieldset>
+      </details>
       <div className="project-form-actions">
         {onCancel ? <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button> : null}
-        <button className="btn btn-primary" disabled={busy || !name.trim() || !type.trim()}><Icon name={project ? "check" : "plus"} size={16} /> {busy ? "Saving…" : project ? "Save changes" : "Create project"}</button>
+        <button className="btn btn-primary" disabled={busy || !name.trim()}><Icon name={project ? "check" : "plus"} size={16} /> {busy ? "Saving…" : project ? "Save changes" : "Create project"}</button>
       </div>
     </form>
   );
 }
 
-export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestination, action?: ProductionCockpitAction) => void }) {
+export function ProjectsView({ onOpen, embedded = false }: ProjectsViewProps) {
   const { snapshot, activeProjectId, setActiveProjectId, createProject, updateProject, archiveProject, busy, error } = useStudio();
   const projects = snapshot?.projects ?? [];
   const availableProjects = projects.filter((project) => project.status !== "archived");
@@ -96,7 +107,7 @@ export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestinat
   const create = async (input: ProjectFormValue) => {
     const request: CreateProjectRequest = {
       name: input.name,
-      type: input.type,
+      type: input.type || "Creative project",
       description: input.description,
       note: input.note,
       hue: input.hue,
@@ -121,8 +132,8 @@ export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestinat
   };
 
   return (
-    <section className={`projects-view fade-up${availableProjects.length === 0 ? " project-onboarding" : ""}`}>
-      {availableProjects.length ? <div className="projects-toolbar"><div><span className="eyebrow">Workspace manager</span><h2>Choose your workspace</h2><p>{availableProjects.length} available · switch context or go directly to the work.</p></div><button className="btn btn-primary" onClick={() => { setEditingId(null); setCreating(true); }}><Icon name="plus" size={16} /> New project</button></div> : null}
+    <section className={`projects-view projects-view-compact fade-up${availableProjects.length === 0 ? " project-onboarding" : ""}${embedded ? " embedded" : ""}`}>
+      {availableProjects.length ? <div className="projects-toolbar"><div>{!embedded ? <span className="eyebrow">Projects</span> : null}<h2>{embedded ? "Your projects" : "Choose your workspace"}</h2><p>{availableProjects.length} available · newest activity stays with its project.</p></div><button className="btn btn-primary" onClick={() => { setEditingId(null); setCreating(true); }}><Icon name="plus" size={16} /> New</button></div> : null}
       {showCreateForm ? <ProjectForm firstProject={!availableProjects.length} busy={busy} onSave={create} onCancel={availableProjects.length ? () => setCreating(false) : undefined} /> : null}
       {editingProject ? <ProjectForm key={editingProject.updatedAt} project={editingProject} busy={busy} onSave={(input) => update(editingProject.id, input)} onCancel={() => setEditingId(null)} /> : null}
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
@@ -153,26 +164,33 @@ export function ProjectsView({ onOpen }: { onOpen: (destination: ProjectDestinat
             } satisfies ProductionCockpitAction : undefined)
             : undefined;
           const current = activeProjectId === project.id;
-          return <article key={project.id} className={`project-card project-workspace-card glass${current ? " on" : ""}`}>
-            <header className="project-card-head">
-              <ProjectAvatar project={project} size={52} />
-              <span className="project-card-main"><span><strong>{project.name}</strong><i className={`badge ${project.status === "active" ? "active" : "draft"}`}>{project.status}</i>{current ? <i className="project-current">current</i> : null}</span><small>{project.type} · updated {new Date(project.updatedAt).toLocaleDateString()}</small>{project.description ? <p>{project.description}</p> : null}</span>
-            </header>
-            {project.note ? <p className="project-note"><Icon name="star" size={14} /> {project.note}</p> : null}
-            <div className="project-progress">
+          return <article key={project.id} className={`project-card project-compact-card glass${current ? " on" : ""}`}>
+            <button type="button" className="project-compact-select" aria-pressed={current} onClick={() => setActiveProjectId(project.id)}>
+              <ProjectAvatar project={project} size={44} />
+              <span className="project-card-main">
+                <span><strong>{project.name}</strong><i className={`badge ${project.status === "active" ? "active" : "draft"}`}>{project.status}</i>{current ? <i className="project-current">current</i> : null}</span>
+                <small>{project.type || "Creative project"} · updated {new Date(project.updatedAt).toLocaleDateString()}</small>
+                {project.note ? <em>{project.note}</em> : null}
+              </span>
+              <span className="project-compact-counts" aria-label={`${dna} DNA versions, ${sources} sources, ${jobs} jobs, ${artifacts} results`}>
+                <b>{dna}<small>DNA</small></b><b>{sources}<small>media</small></b><b>{jobs}<small>jobs</small></b><b>{artifacts}<small>results</small></b>
+              </span>
+            </button>
+            <div className="project-compact-next">
               <span className={`production-loop-stage ${loop?.stage ?? "needs-dna"}`}>{loop ? STAGE_LABELS[loop.stage] : "Direction needed"}</span>
-              <span><small>Next</small><strong>{loop?.nextAction.label ?? "Build CreativeDNA"}</strong><p>{loop?.nextAction.detail ?? "Create the first reusable direction for this workspace."}</p></span>
-              <button className="btn btn-primary" onClick={() => open(project.id, loop ? destinationFor(loop.nextAction.surface) : "dna", contextualAction)}>{loop?.nextAction.label ?? "Open Create"} <Icon name="arrow" size={14} /></button>
+              <button className="project-next-action" onClick={() => open(project.id, loop ? destinationFor(loop.nextAction.surface) : "dna", contextualAction)}><span><small>Next</small><strong>{loop?.nextAction.label ?? "Build CreativeDNA"}</strong></span><Icon name="arrow" size={15} /></button>
+              <details className="project-menu">
+                <summary aria-label={`Project actions for ${project.name}`}><Icon name="more" size={18} /></summary>
+                <div>
+                  <button type="button" disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setCreating(false); setEditingId(project.id); setConfirmArchiveId(null); }}><Icon name="settings" size={14} /> Edit details</button>
+                  <button type="button" className="project-archive" disabled={busy} onClick={() => void archive(project.id)}><Icon name={confirmArchiveId === project.id ? "check" : "archive"} size={14} /> {confirmArchiveId === project.id ? "Confirm archive" : "Archive"}</button>
+                </div>
+              </details>
             </div>
-            <div className="project-metrics"><span><b>{dna}</b><small>DNA</small></span><span><b>{sources}</b><small>sources</small></span><span><b>{jobs}</b><small>jobs</small></span><span><b>{artifacts}</b><small>results</small></span></div>
-            <footer className="project-actions">
-              <div className="project-open-actions"><button className="btn btn-ghost" onClick={() => open(project.id, "dna")}><Icon name="wand" size={15} /> Create</button><button className="btn btn-ghost" onClick={() => open(project.id, "gallery")}><Icon name="gallery" size={15} /> Artifacts</button><button className="btn btn-ghost" onClick={() => open(project.id, "cockpit")}><Icon name="analytics" size={15} /> Production</button></div>
-              <div className="project-admin-actions"><button className="btn btn-ghost" aria-label={`Edit ${project.name}`} disabled={busy} onClick={() => { setCreating(false); setEditingId(project.id); setConfirmArchiveId(null); }}><Icon name="settings" size={14} /> Edit</button><button className="btn project-archive" aria-label={confirmArchiveId === project.id ? `Confirm archive ${project.name}` : `Archive ${project.name}`} disabled={busy} onClick={() => void archive(project.id)}><Icon name={confirmArchiveId === project.id ? "check" : "archive"} size={14} /> {confirmArchiveId === project.id ? "Confirm" : "Archive"}</button></div>
-            </footer>
           </article>;
         })}
       </div>
-      {archivedProjects.length ? <details className="archived-projects" open={!availableProjects.length}><summary>Archived projects · {archivedProjects.length}</summary><div>{archivedProjects.map((project) => <article className="project-archived-row glass" key={project.id}><ProjectAvatar project={project} size={38} /><span><strong>{project.name}</strong><small>{project.type} · archived</small></span></article>)}</div></details> : null}
+      {archivedProjects.length ? <details className="archived-projects"><summary>Archived · {archivedProjects.length}</summary><div>{archivedProjects.map((project) => <article className="project-archived-row glass" key={project.id}><ProjectAvatar project={project} size={38} /><span><strong>{project.name}</strong><small>{project.type} · archived</small></span></article>)}</div></details> : null}
     </section>
   );
 }

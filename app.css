@@ -123,6 +123,7 @@
    ============================================================ */
 .main { grid-row: 1; grid-column: 2; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .topbar { display: flex; align-items: center; gap: 20px; padding: 22px 30px 16px; flex: none; }
+.topbar.topbar-compact { min-height: 54px; padding-block: 10px 4px; }
 .greet { flex: none; }
 .greet h1 { font-family: var(--font-display); font-size: 27px; font-weight: 600; letter-spacing: -.01em; line-height: 1.05; white-space: nowrap; }
 .greet p { font-size: 14.5px; color: var(--text-muted); margin-top: 5px; }
