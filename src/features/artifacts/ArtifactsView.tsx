@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { compileCreativeTasteMemory, type Acceptance, type AcceptanceDecision, type Artifact, type CreativeTasteSignal, type EvolutionStudy } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
@@ -8,6 +8,7 @@ import { artifactsForHistoryEntry, orderArtifactHistory, partitionArtifactHistor
 type ReviewIntent = { artifact: Artifact; decision: AcceptanceDecision };
 type ActiveStatusFilter = "all" | Exclude<Artifact["status"], "archived">;
 type ArtifactKindFilter = "all" | Artifact["kind"];
+const ARTIFACT_PAGE_SIZE = 8;
 
 function actorName(actor: Acceptance["actor"]) {
   return actor === "angelo" ? "Angelo" : "Development user";
@@ -77,6 +78,17 @@ function ImageInspector({ artifact, onClose }: { artifact: Artifact; onClose: ()
   );
 }
 
+export function VideoInspector({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
+  if (!artifact.preview.url) return null;
+  return (
+    <ModalShell labelledBy="video-inspector-title" onClose={onClose} className="video-inspector">
+      <header><span><small>Video playback</small><h2 id="video-inspector-title">{artifact.name}</h2></span><button type="button" className="icon-button" aria-label="Close video player" onClick={onClose}><Icon name="close" size={20} /></button></header>
+      <div className="video-inspector-canvas"><video src={artifact.preview.url} poster={artifact.preview.posterUrl ?? undefined} controls autoPlay playsInline preload="metadata">Your browser does not support video playback.</video></div>
+      <footer><span>{artifact.provider} Â· {new Date(artifact.createdAt).toLocaleString()}</span><a className="btn btn-ghost" href={artifact.preview.url} download={downloadName(artifact)}><Icon name="arrow" size={15} /> Download video</a></footer>
+    </ModalShell>
+  );
+}
+
 function ReviewDialog({ intent, busy, onClose, onConfirm }: { intent: ReviewIntent; busy: boolean; onClose: () => void; onConfirm: (note: string) => Promise<void> }) {
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -120,7 +132,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean }) {
   const { snapshot, reuseJob, busy } = useStudio();
   const [promptExpanded, setPromptExpanded] = useState(false);
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -134,8 +146,9 @@ function ArtifactCard({ artifact, onQueued, onInspect, onReview, onContinueLoop,
   return (
     <article className={`artifact-card glass${focused ? " cockpit-focus" : ""}`} id={`artifact-card-${artifact.id}`}>
       <div className="artifact-hero">
-        <ArtifactThumb artifact={artifact} playable />
+        <ArtifactThumb artifact={artifact} />
         {artifact.kind === "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => onInspect(artifact)} /> : null}
+        {artifact.kind === "video" && artifact.preview.url ? <button type="button" className="artifact-play" onClick={() => onPlayVideo(artifact)} aria-label={`Play ${artifact.name}`}><Icon name="video" size={17} /><span>Play</span></button> : null}
       </div>
       <div className="artifact-body">
         <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
@@ -194,21 +207,39 @@ function LearnedNotice({ signals, onClose }: { signals: CreativeTasteSignal[]; o
 export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focusArtifactId }: { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focusArtifactId?: string }) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
+  const [playingVideo, setPlayingVideo] = useState<Artifact | null>(null);
   const [reviewIntent, setReviewIntent] = useState<ReviewIntent | null>(null);
   const [learnedSignals, setLearnedSignals] = useState<CreativeTasteSignal[]>([]);
   const [statusFilter, setStatusFilter] = useState<ActiveStatusFilter>("all");
   const [kindFilter, setKindFilter] = useState<ArtifactKindFilter>("all");
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const artifacts = snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
-  const studies = snapshot?.evolutionStudies?.filter((study) => study.projectId === activeProjectId) ?? [];
-  const history = orderArtifactHistory(artifacts, studies);
-  const partitionedHistory = partitionArtifactHistory(history, artifacts);
-  const activeHistory = partitionedHistory.active.filter((entry) => artifactsForHistoryEntry(entry, artifacts).some((artifact) => (statusFilter === "all" || artifact.status === statusFilter) && (kindFilter === "all" || artifact.kind === kindFilter)));
+  const [activeVisibleCount, setActiveVisibleCount] = useState(ARTIFACT_PAGE_SIZE);
+  const [archivedVisibleCount, setArchivedVisibleCount] = useState(ARTIFACT_PAGE_SIZE);
+  const activeLoadMore = useRef<HTMLButtonElement>(null);
+  const artifacts = useMemo(() => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.artifacts]);
+  const studies = useMemo(() => snapshot?.evolutionStudies?.filter((study) => study.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.evolutionStudies]);
+  const history = useMemo(() => orderArtifactHistory(artifacts, studies), [artifacts, studies]);
+  const partitionedHistory = useMemo(() => partitionArtifactHistory(history, artifacts), [artifacts, history]);
+  const activeHistory = useMemo(() => partitionedHistory.active.filter((entry) => artifactsForHistoryEntry(entry, artifacts).some((artifact) => (statusFilter === "all" || artifact.status === statusFilter) && (kindFilter === "all" || artifact.kind === kindFilter))), [artifacts, kindFilter, partitionedHistory.active, statusFilter]);
+  const focusedIndex = focusArtifactId ? activeHistory.findIndex((entry) => artifactsForHistoryEntry(entry, artifacts).some((artifact) => artifact.id === focusArtifactId)) : -1;
+  const focusVisibleCount = focusedIndex < 0 ? 0 : Math.ceil((focusedIndex + 1) / ARTIFACT_PAGE_SIZE) * ARTIFACT_PAGE_SIZE;
+  const effectiveActiveVisibleCount = Math.max(activeVisibleCount, focusVisibleCount);
+  const visibleActiveHistory = activeHistory.slice(0, effectiveActiveVisibleCount);
+  const visibleArchivedHistory = partitionedHistory.archived.slice(0, archivedVisibleCount);
   const projectTaste = snapshot?.tasteMemory?.projects[activeProjectId]?.taste;
   const focusArtifactArchived = Boolean(focusArtifactId && artifacts.some((artifact) => artifact.id === focusArtifactId && artifact.status === "archived"));
   const artifactCounts = (["retaining", "ready", "accepted", "rejected"] as const)
     .map((status) => ({ status, count: artifacts.filter((artifact) => artifact.status === status).length }))
     .filter(({ count }) => count > 0);
+  useEffect(() => {
+    const trigger = activeLoadMore.current;
+    if (!trigger || effectiveActiveVisibleCount >= activeHistory.length || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setActiveVisibleCount(Math.min(effectiveActiveVisibleCount + ARTIFACT_PAGE_SIZE, activeHistory.length));
+    }, { rootMargin: "600px 0px" });
+    observer.observe(trigger);
+    return () => observer.disconnect();
+  }, [activeHistory.length, effectiveActiveVisibleCount]);
   useEffect(() => {
     if (!focusArtifactId) return;
     let scrollFrame = 0;
@@ -220,11 +251,11 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
       window.cancelAnimationFrame(revealFrame);
       window.cancelAnimationFrame(scrollFrame);
     };
-  }, [focusArtifactId, focusArtifactArchived]);
+  }, [focusArtifactId, focusArtifactArchived, effectiveActiveVisibleCount]);
 
   const renderHistoryEntry = (entry: ArtifactHistoryEntry) => entry.kind === "study"
-    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate }} />
-    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} focused={focusArtifactId === entry.artifact.id} />;
+    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate }} />
+    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} focused={focusArtifactId === entry.artifact.id} />;
   return (
     <section className="artifacts-view fade-up">
       <div className="artifacts-toolbar glass">
@@ -232,23 +263,25 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
         <button type="button" className="btn btn-primary" onClick={onContinueLoop}><Icon name="star" size={16} /> Create new</button>
       </div>
       {artifacts.length ? <div className="artifact-filters" role="toolbar" aria-label="Filter active artifacts">
-        <button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>All <b>{artifacts.length - artifacts.filter((artifact) => artifact.status === "archived").length}</b></button>
-        {artifactCounts.map(({ status, count }) => <button type="button" className={statusFilter === status ? "active" : ""} aria-pressed={statusFilter === status} onClick={() => setStatusFilter(status)} key={status}>{status} <b>{count}</b></button>)}
-        <label><select aria-label="Media type" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as ArtifactKindFilter)}><option value="all">All media</option><option value="image">Images</option><option value="video">Videos</option><option value="music">Songs</option><option value="3d">3D</option></select></label>
+        <button type="button" className={statusFilter === "all" ? "active" : ""} aria-pressed={statusFilter === "all"} onClick={() => { setStatusFilter("all"); setActiveVisibleCount(ARTIFACT_PAGE_SIZE); }}>All <b>{artifacts.length - artifacts.filter((artifact) => artifact.status === "archived").length}</b></button>
+        {artifactCounts.map(({ status, count }) => <button type="button" className={statusFilter === status ? "active" : ""} aria-pressed={statusFilter === status} onClick={() => { setStatusFilter(status); setActiveVisibleCount(ARTIFACT_PAGE_SIZE); }} key={status}>{status} <b>{count}</b></button>)}
+        <label><select aria-label="Media type" value={kindFilter} onChange={(event) => { setKindFilter(event.target.value as ArtifactKindFilter); setActiveVisibleCount(ARTIFACT_PAGE_SIZE); }}><option value="all">All media</option><option value="image">Images</option><option value="video">Videos</option><option value="music">Songs</option><option value="3d">3D</option></select></label>
       </div> : null}
       {projectTaste?.signalCount ? <details className="taste-memory-summary glass"><summary><span><Icon name="dna" size={16} /><strong>What Creative Studio has learned</strong></span><small>{projectTaste.signalCount} project signals · {snapshot?.tasteMemory?.personal.signalCount ?? 0} personal signals</small></summary><div><span><b>Preserve</b>{projectTaste.preserve[0]?.text ?? "No preserve signal yet"}</span><span><b>Redirect</b>{projectTaste.redirect[0]?.text ?? "No redirect signal yet"}</span><span><b>Avoid</b>{projectTaste.avoid[0]?.text ?? "No avoid signal yet"}</span></div></details> : null}
       <LearnedNotice signals={learnedSignals} onClose={() => setLearnedSignals([])} />
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       <div className="artifact-grid" role="feed" aria-label="Artifact history, newest first">
-        {activeHistory.map(renderHistoryEntry)}
+        {visibleActiveHistory.map(renderHistoryEntry)}
         {!artifacts.length ? <div className="empty-state glass"><Icon name="gallery" size={34} /><h2>No artifacts yet</h2><p>Completed jobs become reviewable artifacts here.</p></div> : null}
         {artifacts.length && !activeHistory.length ? <div className="empty-state glass artifact-filter-empty"><Icon name="search" size={28} /><h2>No matching active work</h2><p>Choose another status or media type. Archived work remains available below.</p></div> : null}
       </div>
-      {partitionedHistory.archived.length ? <details className="archived-artifacts glass" open={archivedOpen} onToggle={(event) => setArchivedOpen(event.currentTarget.open)}>
+      {effectiveActiveVisibleCount < activeHistory.length ? <div className="artifact-load-more"><button ref={activeLoadMore} type="button" className="btn btn-ghost" onClick={() => setActiveVisibleCount(Math.min(effectiveActiveVisibleCount + ARTIFACT_PAGE_SIZE, activeHistory.length))}>Load more <small>{activeHistory.length - effectiveActiveVisibleCount} remaining</small></button></div> : null}
+      {partitionedHistory.archived.length ? <details className="archived-artifacts glass" open={archivedOpen} onToggle={(event) => { const open = event.currentTarget.open; setArchivedOpen(open); if (!open) setArchivedVisibleCount(ARTIFACT_PAGE_SIZE); }}>
         <summary><span><Icon name="archive" size={16} /><strong>Archived history</strong></span><small>{partitionedHistory.archived.length} hidden {partitionedHistory.archived.length === 1 ? "item" : "items"}</small></summary>
-        <div className="artifact-grid" role="feed" aria-label="Archived artifact history, newest first">{partitionedHistory.archived.map(renderHistoryEntry)}</div>
+        {archivedOpen ? <><div className="artifact-grid" role="feed" aria-label="Archived artifact history, newest first">{visibleArchivedHistory.map(renderHistoryEntry)}</div>{archivedVisibleCount < partitionedHistory.archived.length ? <div className="artifact-load-more"><button type="button" className="btn btn-ghost" onClick={() => setArchivedVisibleCount((count) => Math.min(count + ARTIFACT_PAGE_SIZE, partitionedHistory.archived.length))}>Load more archived <small>{partitionedHistory.archived.length - archivedVisibleCount} remaining</small></button></div> : null}</> : null}
       </details> : null}
       {inspected ? <ImageInspector artifact={inspected} onClose={() => setInspected(null)} /> : null}
+      {playingVideo ? <VideoInspector artifact={playingVideo} onClose={() => setPlayingVideo(null)} /> : null}
       {reviewIntent ? <ReviewDialog key={`${reviewIntent.artifact.id}-${reviewIntent.decision}`} intent={reviewIntent} busy={busy} onClose={() => setReviewIntent(null)} onConfirm={async (note) => {
         const result = await reviewArtifact(reviewIntent.artifact.id, reviewIntent.decision, note);
         if (snapshot) {

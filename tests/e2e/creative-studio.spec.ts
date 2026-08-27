@@ -259,6 +259,38 @@ test("artifact history keeps active work compact and archived work available on 
   await expect(page).toHaveURL(/#\/dna$/);
 });
 
+test("video artifact gallery stays thumbnail-only until one video is opened", async ({ page }) => {
+  const createdAt = "2026-08-24T04:00:00.000Z";
+  await page.addInitScript(({ createdAt: time }) => {
+    const project = { id: "project_video_gallery", activeDnaArtifactId: null, name: "Video gallery", type: "Motion", status: "active", description: "", note: "", hue: "#d946ef", initials: "VG", createdAt: time, updatedAt: time };
+    const poster = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const video = "data:video/mp4;base64,AAAA";
+    const artifacts = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(new Date(time).getTime() + index * 1_000).toISOString();
+      const prompt = `Motion study ${index + 1}`;
+      return {
+        id: `artifact_video_${index}`, projectId: project.id, jobId: `job_video_${index}`, dnaArtifactId: "dna_video_gallery", kind: "video", name: prompt, status: "ready", provider: "development-adapter", prompt,
+        preview: { kind: "remote-media", url: video, posterUrl: poster, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: [], parentArtifactId: null }, retention: { state: "development-only", size: null },
+        settingsStamp: { schemaVersion: 1, source: "development-adapter", createdAt: date, reusedFromJobId: null, prompt, provider: "development-adapter", modality: "video", workflow: null, parameters: { prompt }, models: [], inputAssetIds: [] }, createdAt: date, updatedAt: date,
+      };
+    });
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} }));
+  }, { createdAt });
+
+  await page.goto("/#/gallery");
+  const feed = page.getByRole("feed", { name: "Artifact history, newest first" });
+  await expect(feed.locator(".artifact-card")).toHaveCount(8);
+  await expect(feed.locator("video")).toHaveCount(0);
+  await expect(feed.locator("img[loading='lazy']")).toHaveCount(8);
+
+  await feed.getByRole("button", { name: "Play Motion study 12" }).click();
+  const player = page.getByRole("dialog", { name: "Motion study 12" });
+  await expect(player.locator("video")).toHaveCount(1);
+  await expect(page.locator("video")).toHaveCount(1);
+  await player.getByRole("button", { name: "Close video player" }).click();
+  await expect(page.locator("video")).toHaveCount(0);
+});
+
 test("Projects opens the exact pending trained-DNA review instead of the default Create panel", async ({ page }) => {
   const createdAt = "2026-08-23T22:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {

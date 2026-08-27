@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Artifact } from "../../shared/contracts";
 import { ArtifactThumb } from "../../src/components/Visuals";
-import { ArtifactMediaReview } from "../../src/features/artifacts/ArtifactsView";
+import { ArtifactMediaReview, VideoInspector } from "../../src/features/artifacts/ArtifactsView";
 import { jobIssuePresentation } from "../../src/features/generation/jobFailure";
 
 function artifact(kind: Artifact["kind"]): Artifact {
@@ -53,15 +53,20 @@ describe("real artifact media review", () => {
     expect(imageMarkup).not.toContain("<audio");
 
     const video = artifact("video");
-    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} playable /><ArtifactMediaReview artifact={video} onInspect={() => undefined} onExtend={() => undefined} /></>);
-    expect(videoMarkup).toContain("<video");
-    expect(videoMarkup.match(/<video/g)).toHaveLength(1);
-    expect(videoMarkup).toContain("controls=\"\"");
-    expect(videoMarkup).toContain("poster=\"/api/creative-studio/artifacts/artifact-video/thumbnail\"");
-    expect(videoMarkup).toContain("#t=0.001");
+    const videoMarkup = renderToStaticMarkup(<><ArtifactThumb artifact={video} /><ArtifactMediaReview artifact={video} onInspect={() => undefined} onExtend={() => undefined} /></>);
+    expect(videoMarkup).not.toContain("<video");
+    expect(videoMarkup).toContain("<img");
+    expect(videoMarkup).toContain("src=\"/api/creative-studio/artifacts/artifact-video/thumbnail\"");
+    expect(videoMarkup).toContain("loading=\"lazy\"");
     expect(videoMarkup).toContain("Download video");
     expect(videoMarkup).toContain("Extend video");
     expect(videoMarkup).not.toContain("Inspect full-size image");
+
+    const playerMarkup = renderToStaticMarkup(<VideoInspector artifact={video} onClose={() => undefined} />);
+    expect(playerMarkup).toContain("<video");
+    expect(playerMarkup.match(/<video/g)).toHaveLength(1);
+    expect(playerMarkup).toContain("controls=\"\"");
+    expect(playerMarkup).toContain("poster=\"/api/creative-studio/artifacts/artifact-video/thumbnail\"");
   });
 
   it("turns stored job error codes into actionable failure details without hiding the provider code", () => {
