@@ -51,6 +51,8 @@ import {
   type UpdateWorldRequest,
   type WorldEntityResponse,
   type WorldResponse,
+  type CreateVideoPromptEnhancementRequest,
+  type VideoPromptEnhancementResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -163,6 +165,17 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify(input),
       });
       return result.artifact;
+    },
+    async createVideoPromptEnhancement(input: CreateVideoPromptEnhancementRequest) {
+      const result = await request<VideoPromptEnhancementResponse>(CREATIVE_STUDIO_ROUTES.promptEnhancements, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.promptEnhancement;
+    },
+    async getVideoPromptEnhancement(promptEnhancementId: string) {
+      const result = await request<VideoPromptEnhancementResponse>(`${CREATIVE_STUDIO_ROUTES.promptEnhancements}/${encodeURIComponent(promptEnhancementId)}`);
+      return result.promptEnhancement;
     },
     async submitJob(input: SubmitJobRequest) {
       const result = await request<SubmitJobResponse>(CREATIVE_STUDIO_ROUTES.jobs, {

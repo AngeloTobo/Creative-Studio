@@ -8,6 +8,7 @@ export * from "./generationRecipes";
 export * from "./modelTraining";
 export * from "./productionLoop";
 export * from "./productionCockpit";
+export * from "./promptEnhancements";
 export * from "./songPrompts";
 export * from "./videoDuration";
 export * from "./worlds";

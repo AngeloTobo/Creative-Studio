@@ -37,6 +37,7 @@ import {
   videoWorkflowDurationProfile,
   workflowSupportsVideoDuration,
   workflowRuntimeHistory,
+  VIDEO_PROMPT_ENHANCED_MAX_LENGTH,
   type Artifact,
   type MediaAsset,
   type ImagePerformanceMode,
@@ -66,12 +67,15 @@ import {
 } from "./quickCreate";
 import {
   GENERATION_GOALS,
+  GENERATION_OUTPUT_COUNTS,
   generationBatchAttempt,
   generationBatchIdempotencyKey,
+  generationBatchSeed,
   generationGoalCanScout,
   generationGoalOutputCount,
   generationGoalRunLabel,
   type GenerationGoal,
+  type GenerationOutputCount,
 } from "./generationGoals";
 import "./GenerationView.css";
 
@@ -207,6 +211,8 @@ export function GenerationView({
     submitWorkflowJob,
     saveWorkflowRevision,
     createGenerationRecipe,
+    enhanceVideoPrompt,
+    getVideoPromptEnhancement,
     busy,
     error,
   } = useStudio();
@@ -258,12 +264,17 @@ export function GenerationView({
   const directionProjectId = useRef<string | null>(activeProjectId);
   const [intent, setIntent] = useState<CreateIntent>(initialIntent);
   const [direction, setDirection] = useState(initialDirection);
+  const [promptEnhancementId, setPromptEnhancementId] = useState("");
+  const [originalVideoDirection, setOriginalVideoDirection] = useState<string | null>(null);
+  const [appliedPromptEnhancementId, setAppliedPromptEnhancementId] = useState("");
+  const handledPromptEnhancementId = useRef("");
   const [lyrics, setLyrics] = useState("");
   const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? initialDirectSource?.id ?? "");
   const [evolutionEnabled, setEvolutionEnabled] = useState(Boolean(initialEvolutionSource));
   const [generationGoal, setGenerationGoal] = useState<GenerationGoal>(initialEvolutionSource?.kind === "image" ? "scout" : "explore");
   const [evolutionStudyId, setEvolutionStudyId] = useState(() => `evolve_${crypto.randomUUID()}`);
   const [videoPairId, setVideoPairId] = useState(() => `video_pair_${crypto.randomUUID()}`);
+  const [outputBatchId, setOutputBatchId] = useState(() => `output_batch_${crypto.randomUUID()}`);
   const [workflowId, setWorkflowId] = useState("");
   const [workflowRestoreBlocked, setWorkflowRestoreBlocked] = useState("");
   const [inputBindings, setInputBindings] = useState<Record<string, string>>({});
@@ -271,6 +282,7 @@ export function GenerationView({
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [videoDurationSeconds, setVideoDurationSeconds] = useState<VideoDurationSeconds>(5);
+  const [outputCount, setOutputCount] = useState<GenerationOutputCount>(initialIntent === "video" ? 2 : 1);
   const [canvasAspectRatio, setCanvasAspectRatio] = useState<GenerationAspectRatio | null>(null);
   const [canvasMegapixels, setCanvasMegapixels] = useState<number | null>(null);
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
@@ -305,6 +317,7 @@ export function GenerationView({
   const lastSubmittedSessionSignature = useRef("");
   const evolutionBatchAttemptRef = useRef({ id: evolutionStudyId, signature: "" });
   const videoBatchAttemptRef = useRef({ id: videoPairId, signature: "" });
+  const outputBatchAttemptRef = useRef({ id: outputBatchId, signature: "" });
 
   useEffect(() => {
     const previousProjectId = outgoingSessionProjectRef.current;
@@ -317,6 +330,10 @@ export function GenerationView({
       directionProjectId.current = activeProjectId;
       directionInitialized.current = false;
       setDirection("");
+      setPromptEnhancementId("");
+      setOriginalVideoDirection(null);
+      setAppliedPromptEnhancementId("");
+      handledPromptEnhancementId.current = "";
       setLyrics("");
       setIntent("image");
       setQuickSourceId("");
@@ -327,6 +344,7 @@ export function GenerationView({
       setValuesRevisionId("");
       setImagePerformanceMode("fast-default");
       setVideoDurationSeconds(5);
+      setOutputCount(1);
       setCanvasAspectRatio(null);
       setCanvasMegapixels(null);
       setSourceGalleryExpanded(false);
@@ -334,8 +352,15 @@ export function GenerationView({
       setVideoOperation(null);
       setEvolutionEnabled(false);
       setGenerationGoal("explore");
-      setEvolutionStudyId(`evolve_${crypto.randomUUID()}`);
-      setVideoPairId(`video_pair_${crypto.randomUUID()}`);
+      const nextEvolutionStudyId = `evolve_${crypto.randomUUID()}`;
+      const nextVideoPairId = `video_pair_${crypto.randomUUID()}`;
+      const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
+      evolutionBatchAttemptRef.current = { id: nextEvolutionStudyId, signature: "" };
+      videoBatchAttemptRef.current = { id: nextVideoPairId, signature: "" };
+      outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
+      setEvolutionStudyId(nextEvolutionStudyId);
+      setVideoPairId(nextVideoPairId);
+      setOutputBatchId(nextOutputBatchId);
       setProjectContextEnabled(false);
       setWorldContinuityEnabled(false);
       setSelectedWorldId("");
@@ -377,6 +402,9 @@ export function GenerationView({
         lastSavedSessionSignature.current = "restored-session";
         setIntent(latestSession.mediaKind);
         setDirection(latestSession.direction);
+        setPromptEnhancementId(typeof settings.promptEnhancementId === "string" ? settings.promptEnhancementId : "");
+        setOriginalVideoDirection(typeof settings.originalVideoDirection === "string" ? settings.originalVideoDirection : null);
+        setAppliedPromptEnhancementId(typeof settings.appliedPromptEnhancementId === "string" ? settings.appliedPromptEnhancementId : "");
         setQuickSourceId(latestSession.retainedArtifactId ?? latestSession.sourceAssetIds[0] ?? "");
         setWorkflowId(latestSession.workflowId ?? "");
         setWorkflowRestoreBlocked(latestSession.workflowId && !restoredWorkflow ? latestSession.workflowId : "");
@@ -396,6 +424,10 @@ export function GenerationView({
         setVideoDurationSeconds(VIDEO_DURATION_OPTIONS.includes(Number(settings.videoDurationSeconds) as VideoDurationSeconds)
           ? Number(settings.videoDurationSeconds) as VideoDurationSeconds
           : 5);
+        const restoredOutputCount = Number(settings.outputCount);
+        setOutputCount(latestSession.mediaKind === "music" ? 1 : GENERATION_OUTPUT_COUNTS.includes(restoredOutputCount as GenerationOutputCount)
+          ? restoredOutputCount as GenerationOutputCount
+          : latestSession.mediaKind === "video" ? 2 : 1);
         setCanvasAspectRatio(restoredAspect);
         setCanvasMegapixels(typeof settings.canvasMegapixels === "number" && Number.isFinite(settings.canvasMegapixels) ? settings.canvasMegapixels : null);
         const restoredTransition = settings.videoOperationTransitionSeconds;
@@ -617,7 +649,13 @@ export function GenerationView({
     ...(workflowLyricsParameter ? [workflowLyricsParameter.id] : []),
   ]);
   const advancedScalarParameters = scalarParameters.filter((parameter) => !graphicalParameterIds.has(parameter.id));
-  const workflowSeedParameter = generationControls.seed[0] ?? null;
+  const workflowSeedParameters = generationControls.seed;
+  const workflowSeedParameter = workflowSeedParameters[0] ?? null;
+  const outputCountNeedsSeed = !evolutionEnabled && (
+    (generationIntent === "image" && outputCount > 1)
+    || (generationIntent === "video" && outputCount === 4)
+  );
+  const outputCountSeedBlocked = outputCountNeedsSeed && !workflowSeedParameter;
   const canvasOverrides = generationCanvasOverrides(baseScalarParameters, canvasAspectRatio, canvasMegapixels);
   const rawParameterValue = (parameter: WorkflowParameter) => Object.prototype.hasOwnProperty.call(canvasOverrides, parameter.id)
     ? canvasOverrides[parameter.id]
@@ -637,7 +675,83 @@ export function GenerationView({
   const missingMediaParameters = mediaParameters.filter((parameter) => !effectiveInputBindings[parameter.id]);
   const workflowReady = Boolean(workflow) && missingMediaParameters.length === 0;
   const directionReady = direction.trim().length >= 4;
+  const promptEnhancementCapability = snapshot?.capabilities.find((capability) => capability.key === "prompt-enhancement") ?? null;
+  const activePromptEnhancement = snapshot?.promptEnhancements.find((request) => request.id === promptEnhancementId) ?? null;
+  const appliedPromptEnhancement = snapshot?.promptEnhancements.find((request) => request.id === appliedPromptEnhancementId) ?? null;
+  const promptEnhancementPending = Boolean(promptEnhancementId && (!activePromptEnhancement
+    || activePromptEnhancement.status === "waiting-for-runner"
+    || activePromptEnhancement.status === "running"));
+  const promptEnhancementAvailable = promptEnhancementCapability?.state === "available";
+  const promptEnhancementInputMode = videoOperation ? "video-extension" : quickSource?.kind === "image" ? "image-to-video" : "text-to-video";
+  const promptEnhancementSourceId = promptEnhancementInputMode === "text-to-video" ? null : quickSource?.id ?? null;
+  const promptEnhancementMatchesWorkflow = Boolean(workflow && activePromptEnhancement
+    && activePromptEnhancement.workflowId === workflow.id
+    && activePromptEnhancement.workflowRevisionId === workflow.currentRevision.id
+    && activePromptEnhancement.videoDurationSeconds === videoDurationSeconds
+    && activePromptEnhancement.inputMode === promptEnhancementInputMode
+    && (activePromptEnhancement.sourceId ?? null) === promptEnhancementSourceId);
+  const appliedPromptEnhancementMatchesContext = Boolean(workflow && appliedPromptEnhancement
+    && appliedPromptEnhancement.status === "completed"
+    && appliedPromptEnhancement.workflowId === workflow.id
+    && appliedPromptEnhancement.videoDurationSeconds === videoDurationSeconds
+    && appliedPromptEnhancement.inputMode === promptEnhancementInputMode
+    && (appliedPromptEnhancement.sourceId ?? null) === promptEnhancementSourceId);
+  const promptEnhancementApplication = (appliedPrompt: string) => generationIntent === "video"
+    && appliedPromptEnhancementMatchesContext
+    && appliedPromptEnhancement
+    ? { requestId: appliedPromptEnhancement.id, basePrompt: direction.trim(), appliedPrompt }
+    : undefined;
   const trainingSource = quickSource?.source === "upload" && quickSource.trainingEligible ? quickSource : null;
+
+  useEffect(() => {
+    if (!promptEnhancementId || !promptEnhancementPending) return;
+    let cancelled = false;
+    let timer = 0;
+    let failures = 0;
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void poll(), delay);
+    };
+    const poll = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") {
+        schedule(4_000);
+        return;
+      }
+      try {
+        const result = await getVideoPromptEnhancement(promptEnhancementId);
+        failures = 0;
+        if (result.status === "waiting-for-runner" || result.status === "running") schedule(4_000);
+      } catch {
+        failures += 1;
+        if (failures < 4) schedule(Math.min(30_000, 4_000 * (2 ** failures)));
+      }
+    };
+    const visibility = () => {
+      if (document.visibilityState === "visible") schedule(0);
+    };
+    document.addEventListener("visibilitychange", visibility);
+    schedule(2_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [getVideoPromptEnhancement, promptEnhancementId, promptEnhancementPending]);
+
+  useEffect(() => {
+    if (!activePromptEnhancement || activePromptEnhancement.status !== "completed" || !activePromptEnhancement.enhancedPrompt) return;
+    if (handledPromptEnhancementId.current === activePromptEnhancement.id) return;
+    handledPromptEnhancementId.current = activePromptEnhancement.id;
+    if (!promptEnhancementMatchesWorkflow || direction.trim() !== activePromptEnhancement.sourcePrompt.trim()) return;
+    const timer = window.setTimeout(() => {
+      setOriginalVideoDirection((current) => current ?? activePromptEnhancement.sourcePrompt);
+      setDirection(activePromptEnhancement.enhancedPrompt!);
+      setAppliedPromptEnhancementId(activePromptEnhancement.id);
+      setNotice("Gemma 4 enhanced the motion direction locally. You can edit it, restore your original, or enhance it again.");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activePromptEnhancement, direction, promptEnhancementMatchesWorkflow]);
   const performanceParameters = Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameterValue(parameter)]));
   const imagePerformance = generationIntent === "image" && workflow ? assessImagePerformance(performanceParameters) : null;
   const fastImageBlocked = imagePerformanceMode === "fast-default" && Boolean(imagePerformance?.requiresExplicitCustom);
@@ -663,7 +777,7 @@ export function GenerationView({
     : workflowWideHistory?.count && workflowWideHistory.medianMs
       ? { count: workflowWideHistory.count, medianMs: workflowWideHistory.medianMs, exactRevision: false }
       : null;
-  const estimatedOutputCount = generationGoalOutputCount(generationGoal, generationIntent, evolutionEnabled);
+  const estimatedOutputCount = generationGoalOutputCount(generationGoal, generationIntent, evolutionEnabled, outputCount);
   const runtimeEstimate = estimateGenerationRuntime(runtimeEvidence?.medianMs ?? null, workflowWorkload, baselineWorkload, estimatedOutputCount);
   const displayedScalarParameters = scalarParameters.map((parameter) => ({ ...parameter, value: parameterValue(parameter) }));
   const displayedAspectRatio = inferGenerationAspectRatio(displayedScalarParameters);
@@ -702,6 +816,7 @@ export function GenerationView({
     lyrics,
     imagePerformanceMode,
     videoDurationSeconds,
+    outputCount,
     canvasAspectRatio,
     canvasMegapixels,
     projectContextEnabled,
@@ -712,6 +827,9 @@ export function GenerationView({
     inputBindings,
     workflowValues,
     videoOperation,
+    promptEnhancementId,
+    appliedPromptEnhancementId,
+    originalVideoDirection,
   });
   const generationRequestSignature = JSON.stringify({
     projectId: activeProjectId,
@@ -726,6 +844,7 @@ export function GenerationView({
     lyrics,
     imagePerformanceMode,
     videoDurationSeconds,
+    outputCount,
     canvasAspectRatio,
     canvasMegapixels,
     projectContextEnabled,
@@ -735,6 +854,7 @@ export function GenerationView({
     inputBindings,
     workflowValues,
     videoOperation,
+    appliedPromptEnhancementId,
   });
 
   useEffect(() => {
@@ -747,6 +867,7 @@ export function GenerationView({
         lyrics,
         imagePerformanceMode,
         videoDurationSeconds,
+        outputCount,
         canvasAspectRatio,
         canvasMegapixels,
         projectContextEnabled,
@@ -759,6 +880,9 @@ export function GenerationView({
         videoOperationOutputMode: videoOperation?.outputMode ?? null,
         videoOperationTransitionSeconds: videoOperation?.transitionSeconds ?? null,
         videoOperationAudioMode: videoOperation?.audioMode ?? null,
+        promptEnhancementId: promptEnhancementId || null,
+        appliedPromptEnhancementId: appliedPromptEnhancementId || null,
+        originalVideoDirection,
         ...Object.fromEntries(Object.entries(inputBindings).map(([id, value]) => [`binding:${id}`, value])),
         ...Object.fromEntries(Object.entries(workflowValues).map(([id, value]) => [`value:${id}`, value])),
       };
@@ -777,7 +901,7 @@ export function GenerationView({
         if (saved.id !== sessionId) setSessionId(saved.id);
       }
     };
-  }, [activeProjectId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, projectContextEnabled, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, workflowId, workflowValues, worldContinuityEnabled]);
+  }, [activeProjectId, appliedPromptEnhancementId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, workflowId, workflowValues, worldContinuityEnabled]);
 
   useEffect(() => {
     if (sessionCompletionVersion !== sessionCompletionBaselineRef.current) {
@@ -836,6 +960,13 @@ export function GenerationView({
     sessionPersistRef.current();
   };
 
+  const clearVideoPromptEnhancement = () => {
+    setPromptEnhancementId("");
+    setOriginalVideoDirection(null);
+    setAppliedPromptEnhancementId("");
+    handledPromptEnhancementId.current = "";
+  };
+
   const resetWorkflowOverrides = () => {
     setWorkflowId("");
     setWorkflowRestoreBlocked("");
@@ -872,8 +1003,13 @@ export function GenerationView({
 
   const chooseIntent = (nextIntent: CreateIntent) => {
     if (nextIntent !== intent) {
+      clearVideoPromptEnhancement();
       setDirection("");
       setEvolutionEnabled(false);
+      setOutputCount(nextIntent === "video" ? 2 : 1);
+      const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
+      outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
+      setOutputBatchId(nextOutputBatchId);
     }
     setIntent(nextIntent);
     if (nextIntent !== "image" && generationGoal === "scout") {
@@ -905,6 +1041,7 @@ export function GenerationView({
   };
 
   const chooseWorkflow = (id: string) => {
+    if (id !== workflow?.id) clearVideoPromptEnhancement();
     setWorkflowId(id);
     setWorkflowRestoreBlocked("");
     setInputBindings({});
@@ -917,6 +1054,49 @@ export function GenerationView({
     setNotice("");
   };
 
+  const requestVideoPromptEnhancement = async () => {
+    if (!workflow || generationIntent !== "video" || !directionReady || !promptEnhancementAvailable || promptEnhancementPending) return;
+    setLocalError("");
+    const sourcePrompt = direction.trim();
+    setOriginalVideoDirection((current) => current ?? sourcePrompt);
+    try {
+      const request = await enhanceVideoPrompt({
+        workflowId: workflow.id,
+        workflowRevisionId: workflow.currentRevision.id,
+        sourcePrompt,
+        videoDurationSeconds,
+        inputMode: promptEnhancementInputMode,
+        sourceId: promptEnhancementSourceId,
+      });
+      handledPromptEnhancementId.current = "";
+      setPromptEnhancementId(request.id);
+      setNotice("");
+    } catch {
+      // StudioProvider keeps the normalized error visible; the authored prompt is untouched.
+    }
+  };
+
+  const keepCurrentVideoPrompt = () => {
+    setPromptEnhancementId("");
+    setNotice("Keeping your current prompt. The local enhancement result will not replace it.");
+  };
+
+  const useCompletedVideoPromptEnhancement = () => {
+    if (!activePromptEnhancement?.enhancedPrompt || activePromptEnhancement.status !== "completed") return;
+    setOriginalVideoDirection((current) => current ?? activePromptEnhancement.sourcePrompt);
+    setDirection(activePromptEnhancement.enhancedPrompt);
+    setAppliedPromptEnhancementId(activePromptEnhancement.id);
+    setNotice("Gemma 4 enhancement applied. You can still edit it before generating.");
+  };
+
+  const restoreOriginalVideoPrompt = () => {
+    if (originalVideoDirection === null) return;
+    setDirection(originalVideoDirection);
+    setAppliedPromptEnhancementId("");
+    setPromptEnhancementId("");
+    setNotice("Original prompt restored.");
+  };
+
   const applyGenerationRecipe = (recipe: GenerationRecipe) => {
     if (recipe.worldId) {
       setLocalError(`${recipe.name} uses legacy World text without an exact versioned continuity selection. Build it again from the current World before generating.`);
@@ -927,6 +1107,7 @@ export function GenerationView({
       setLocalError(`${recipe.name} uses a model that is no longer ready on this machine.`);
       return;
     }
+    clearVideoPromptEnhancement();
     const promptParameter = primaryWorkflowPromptParameter(recipeWorkflow.currentRevision.parameters, recipeWorkflow.modality);
     const lyricsParameter = musicWorkflowLyricsParameter(recipeWorkflow.currentRevision.parameters, recipeWorkflow.modality);
     const recipeDuration = videoWorkflowDurationParameters(recipeWorkflow.currentRevision.parameters)
@@ -1098,7 +1279,11 @@ export function GenerationView({
       return;
     }
     if (generationIntent === "video" && !workflowPromptParameter) {
-      setLocalError("This video model does not expose a prompt, so Creative Studio cannot make two distinct versions. Map its prompt input in Models first.");
+      setLocalError("This video model does not expose a prompt, so Creative Studio cannot direct distinct outputs. Map its prompt input in Models first.");
+      return;
+    }
+    if (outputCountSeedBlocked) {
+      setLocalError(`This model does not expose its renderer seed, so Creative Studio cannot guarantee ${outputCount} distinct ${generationIntent} outputs. Choose 1${generationIntent === "video" ? " or 2" : ""}, or map the sampler seed in Models.`);
       return;
     }
     if (evolutionEnabled && (!quickSource || !workflowPromptParameter || !projectTasteMemory || !personalTaste)) {
@@ -1126,7 +1311,7 @@ export function GenerationView({
         if (attempt.id !== evolutionStudyId) setEvolutionStudyId(attempt.id);
       }
       let attemptVideoPairId = videoPairId;
-      if (generationIntent === "video") {
+      if (generationIntent === "video" && evolutionEnabled) {
         if (videoBatchAttemptRef.current.id !== videoPairId) {
           videoBatchAttemptRef.current = { id: videoPairId, signature: "" };
         }
@@ -1139,21 +1324,26 @@ export function GenerationView({
         attemptVideoPairId = attempt.id;
         if (attempt.id !== videoPairId) setVideoPairId(attempt.id);
       }
+      let attemptOutputBatchId = outputBatchId;
+      if (!evolutionEnabled && (generationIntent === "image" || generationIntent === "video")) {
+        if (outputBatchAttemptRef.current.id !== outputBatchId) {
+          outputBatchAttemptRef.current = { id: outputBatchId, signature: "" };
+        }
+        const attempt = generationBatchAttempt(
+          outputBatchAttemptRef.current,
+          generationRequestSignature,
+          () => `output_batch_${crypto.randomUUID()}`,
+        );
+        outputBatchAttemptRef.current = attempt;
+        attemptOutputBatchId = attempt.id;
+        if (attempt.id !== outputBatchId) setOutputBatchId(attempt.id);
+      }
       const dna = await ensureDna();
       if (!dna) {
         resumeCreativeSessionAutosave();
         return;
       }
       selectDna(dna);
-      const videoVersions = generationIntent === "video"
-        ? createVideoGenerationVersions({
-          direction: authoredProjectDirection,
-          dimensions: dna.shared,
-          pairId: attemptVideoPairId,
-          discoverySeed: randomUint32(),
-          hasSource: Boolean(quickSource),
-        })
-        : null;
       const modified = Object.fromEntries(scalarParameters
         .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
         .map((parameter) => [parameter.id, parameterValue(parameter)]));
@@ -1168,7 +1358,7 @@ export function GenerationView({
             direction: authoredProjectDirection,
             dimensions: dna.shared,
             pairId: attemptVideoPairId,
-            discoverySeed: randomUint32(),
+            discoverySeed: generationBatchSeed(attemptEvolutionStudyId, 1),
             hasSource: Boolean(quickSource),
           })
           : null;
@@ -1209,6 +1399,7 @@ export function GenerationView({
             videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
             idempotencyKey: generationBatchIdempotencyKey(attemptEvolutionStudyId, role),
             continuity: continuitySelection,
+            promptEnhancement: promptEnhancementApplication(prompt),
           });
         }
         setValuesRevisionId(branchWorkflow.currentRevision.id);
@@ -1224,62 +1415,94 @@ export function GenerationView({
         if (openQueueAfter) onQueued();
         return;
       }
-      if (videoVersions && workflowPromptParameter) {
-        const [aligned, discovery] = videoVersions;
-        const alignedPrompt = appendContinuity(aligned.prompt);
-        const discoveryPrompt = appendContinuity(discovery.prompt);
-        const discoveryValues: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, discoveryPrompt]));
-        if (workflowSeedParameter && discovery.variant.seed !== null) discoveryValues[workflowSeedParameter.id] = discovery.variant.seed;
-        const discoveryWorkflow = await saveWorkflowRevision(
-          runWorkflow.id,
-          runWorkflow.currentRevision.id,
-          discoveryValues,
-        );
-        setValuesRevisionId(discoveryWorkflow.currentRevision.id);
-        setWorkflowValues(Object.fromEntries(discoveryWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
-        await submitWorkflowJob({
-          workflow: runWorkflow,
-          inputBindings: effectiveInputBindings,
-          expectedPrompt: alignedPrompt,
-          dnaArtifactId: dna.artifactId,
-          videoOperation: effectiveVideoOperation ?? undefined,
-          videoVariant: aligned.variant,
-          videoDurationSeconds,
-          idempotencyKey: generationBatchIdempotencyKey(attemptVideoPairId, "aligned"),
-          continuity: continuitySelection,
-        });
-        await submitWorkflowJob({
-          workflow: discoveryWorkflow,
-          inputBindings: effectiveInputBindings,
-          expectedPrompt: discoveryPrompt,
-          dnaArtifactId: dna.artifactId,
-          videoOperation: effectiveVideoOperation ?? undefined,
-          videoVariant: discovery.variant,
-          videoDurationSeconds,
-          idempotencyKey: generationBatchIdempotencyKey(attemptVideoPairId, "discovery"),
-          continuity: continuitySelection,
-        });
-        setNotice("Aligned and Discovery queued as 2 durable video jobs. They will render one after the other on the Local Runner.");
-        const nextVideoPairId = `video_pair_${crypto.randomUUID()}`;
-        videoBatchAttemptRef.current = { id: nextVideoPairId, signature: "" };
-        setVideoPairId(nextVideoPairId);
+      if (generationIntent === "video" && workflowPromptParameter) {
+        const videoOutputs = Array.from({ length: Math.ceil(outputCount / 2) }, (_, pairIndex) => createVideoGenerationVersions({
+          direction: authoredProjectDirection,
+          dimensions: dna.shared,
+          pairId: `video_pair_${attemptOutputBatchId.replace(/^output_batch_/, "")}_${pairIndex + 1}`,
+          discoverySeed: generationBatchSeed(attemptOutputBatchId, pairIndex * 2 + 1),
+          hasSource: Boolean(quickSource),
+        })).flat().slice(0, outputCount);
+        let outputWorkflow = runWorkflow;
+        for (let index = 0; index < videoOutputs.length; index += 1) {
+          const output = videoOutputs[index];
+          const prompt = appendContinuity(output.prompt);
+          const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
+          if (workflowSeedParameters.length && (outputCount === 4 || output.variant.seed !== null)) {
+            workflowSeedParameters.forEach((parameter, seedIndex) => {
+              values[parameter.id] = seedIndex === 0 && outputCount !== 4 && output.variant.seed !== null
+                ? output.variant.seed
+                : generationBatchSeed(attemptOutputBatchId, 100 + index * workflowSeedParameters.length + seedIndex);
+            });
+          }
+          const mustSaveOutputRevision = Object.entries(values).some(([id, value]) => {
+            const parameter = outputWorkflow.currentRevision.parameters.find((item) => item.id === id);
+            return !parameter || !sameWorkflowValue(parameter.value, value);
+          });
+          if (mustSaveOutputRevision) {
+            outputWorkflow = await saveWorkflowRevision(outputWorkflow.id, outputWorkflow.currentRevision.id, values);
+          }
+          await submitWorkflowJob({
+            workflow: outputWorkflow,
+            inputBindings: effectiveInputBindings,
+            expectedPrompt: prompt,
+            dnaArtifactId: dna.artifactId,
+            videoOperation: effectiveVideoOperation ?? undefined,
+            videoVariant: output.variant,
+            videoDurationSeconds,
+            idempotencyKey: generationBatchIdempotencyKey(attemptOutputBatchId, `output_${index + 1}`),
+            outputBatch: {
+              schemaVersion: "creative-studio-output-batch/1.0",
+              batchId: attemptOutputBatchId,
+              index: index + 1,
+              count: outputCount,
+            },
+            continuity: continuitySelection,
+            promptEnhancement: promptEnhancementApplication(prompt),
+          });
+        }
+        setValuesRevisionId(outputWorkflow.currentRevision.id);
+        setWorkflowValues(Object.fromEntries(outputWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+        setNotice(`${outputCount} durable video ${outputCount === 1 ? "job" : "jobs"} queued${outputCount > 1 ? " with distinct direction and seed evidence" : ""}. They will render one after another on the Local Runner.`);
+        const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
+        outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
+        setOutputBatchId(nextOutputBatchId);
         completeCreativeSession();
         if (openQueueAfter) onQueued();
         return;
       }
-      setValuesRevisionId(runWorkflow.currentRevision.id);
-      setWorkflowValues(Object.fromEntries(runWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
-      await submitWorkflowJob({
-        workflow: runWorkflow,
-        inputBindings: effectiveInputBindings,
-        expectedPrompt: providerDirection,
-        dnaArtifactId: dna.artifactId,
-        videoOperation: effectiveVideoOperation ?? undefined,
-        performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
-        videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
-        continuity: continuitySelection,
-      });
-      setNotice(`${effectiveVideoOperation ? "Video extension" : runWorkflow.name} queued. You can keep creating while it runs.`);
+      let outputWorkflow = runWorkflow;
+      for (let index = 0; index < outputCount; index += 1) {
+        if (generationIntent === "image" && outputCount > 1 && workflowSeedParameters.length) {
+          outputWorkflow = await saveWorkflowRevision(outputWorkflow.id, outputWorkflow.currentRevision.id, Object.fromEntries(
+            workflowSeedParameters.map((parameter, seedIndex) => [
+              parameter.id,
+              generationBatchSeed(attemptOutputBatchId, index * workflowSeedParameters.length + seedIndex),
+            ]),
+          ));
+        }
+        await submitWorkflowJob({
+          workflow: outputWorkflow,
+          inputBindings: effectiveInputBindings,
+          expectedPrompt: providerDirection,
+          dnaArtifactId: dna.artifactId,
+          performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
+          idempotencyKey: generationBatchIdempotencyKey(attemptOutputBatchId, `output_${index + 1}`),
+          outputBatch: generationIntent === "image" ? {
+            schemaVersion: "creative-studio-output-batch/1.0",
+            batchId: attemptOutputBatchId,
+            index: index + 1,
+            count: outputCount,
+          } : undefined,
+          continuity: continuitySelection,
+        });
+      }
+      setValuesRevisionId(outputWorkflow.currentRevision.id);
+      setWorkflowValues(Object.fromEntries(outputWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+      setNotice(`${outputCount} durable ${generationIntent === "music" ? "song" : generationIntent} ${outputCount === 1 ? "job" : "jobs"} queued${outputCount > 1 ? " with distinct retained seeds" : ""}. You can keep creating while they run.`);
+      const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
+      outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
+      setOutputBatchId(nextOutputBatchId);
       completeCreativeSession();
       if (openQueueAfter) onQueued();
     } catch {
@@ -1362,6 +1585,7 @@ export function GenerationView({
 
   const sourceRequirement = missingMediaParameters[0]?.mediaKind;
   const generationLabel = generationIntent === "music" ? "song" : generationIntent;
+  const countedGenerationLabel = outputCount === 1 ? generationLabel : `${outputCount} ${generationLabel}s`;
   const scoutReady = generationGoal !== "scout" || generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
   const evolutionReady = !evolutionEnabled || Boolean(quickSource && workflowPromptParameter && projectTasteMemory && personalTaste);
   const basePrimaryLabel = !workflow
@@ -1373,10 +1597,10 @@ export function GenerationView({
       : evolutionEnabled
         ? generationGoal === "scout" ? generationGoalRunLabel(generationGoal, generationIntent) : `Generate 3 ${generationLabel} branches`
       : settingsChanged
-        ? effectiveVideoOperation ? "Save & extend 2 versions" : generationIntent === "video" ? "Save & generate 2 videos" : `Save & generate ${generationLabel}`
+        ? effectiveVideoOperation ? `Save & extend ${outputCount} ${outputCount === 1 ? "version" : "versions"}` : `Save & generate ${countedGenerationLabel}`
         : effectiveVideoOperation
-          ? "Extend into 2 versions"
-          : generationIntent === "video" ? "Generate 2 videos" : `Generate ${generationLabel}`;
+          ? `Extend into ${outputCount} ${outputCount === 1 ? "version" : "versions"}`
+          : `Generate ${countedGenerationLabel}`;
   const primaryLabel = generationIntent === "image" && workflow
     ? `${basePrimaryLabel}${imagePerformanceMode === "fast-default" ? " · fast" : imagePerformance?.requiresExplicitCustom ? " · can be slow" : " · custom"}`
     : generationIntent === "music" && workflow
@@ -1396,6 +1620,18 @@ export function GenerationView({
     generationIntent === "image" ? imagePerformanceMode === "fast-default" ? "Fast" : "Custom" : null,
   ].filter(Boolean) as string[];
   const consentedAudioCount = projectMedia.filter((asset) => asset.kind === "audio" && asset.trainingEligible).length;
+  const promptEnhancementApplied = Boolean(appliedPromptEnhancement && appliedPromptEnhancementId === appliedPromptEnhancement.id);
+  const promptEnhancementContextChanged = promptEnhancementApplied && !appliedPromptEnhancementMatchesContext;
+  const promptEnhancementButtonLabel = !promptEnhancementAvailable
+    ? "Local Gemma offline"
+    : promptEnhancementPending
+      ? activePromptEnhancement?.status === "running" ? "Enhancing…" : "Waiting for Gemma…"
+      : activePromptEnhancement?.status === "failed"
+        ? "Try again"
+        : promptEnhancementApplied ? "Enhance again" : "Enhance prompt";
+  const promptEnhancementButtonTitle = !promptEnhancementAvailable
+    ? promptEnhancementCapability?.detail ?? "Start the Local Runner and ComfyUI to enhance with Gemma 4."
+    : !directionReady ? "Write a motion direction first." : undefined;
 
   return (
     <section className={`generation-section create-surface quick-create${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-label="Create with Creative Studio">
@@ -1612,9 +1848,41 @@ export function GenerationView({
           <button type="button" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [], "analyze")}><span><Icon name="image" size={19} /></span><strong>Analyze media</strong><small>Describe files and evolve a reviewable CreativeDNA version.</small><em>{trainingSource ? `Use ${trainingSource.name}` : "Images, audio, or video"}</em></button>
           <button type="button" disabled={busy} onClick={() => onTrain([], "model")}><span><Icon name="music" size={19} /></span><strong>Train music LoRA</strong><small>Train real ACE-Step weights from consented recordings.</small><em>{consentedAudioCount >= 3 ? `${consentedAudioCount} tracks ready` : `${3 - consentedAudioCount} more tracks needed`}</em></button>
         </div> : <>
-          <label className="quick-direction"><span>{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</span><textarea value={direction} maxLength={1200} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} /></label>
+          <div className="quick-direction">
+            <div className="quick-direction-head">
+              <label htmlFor="creative-studio-direction">{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</label>
+              {generationIntent === "video" ? <button type="button" className="quick-enhance-action" disabled={busy || promptEnhancementPending || !promptEnhancementAvailable || !workflow || !workflowPromptParameter || !directionReady} title={promptEnhancementButtonTitle} onClick={() => void requestVideoPromptEnhancement()}><Icon name="wand" size={14} />{promptEnhancementButtonLabel}</button> : null}
+            </div>
+            <textarea id="creative-studio-direction" value={direction} maxLength={VIDEO_PROMPT_ENHANCED_MAX_LENGTH} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} />
+            {generationIntent === "video" && (promptEnhancementPending || activePromptEnhancement || promptEnhancementApplied) ? <div className={`quick-prompt-enhancement-state${activePromptEnhancement?.status === "failed" ? " failed" : promptEnhancementApplied ? " applied" : ""}`} role="status">
+              <span><Icon name={activePromptEnhancement?.status === "failed" ? "close" : promptEnhancementPending ? "history" : "wand"} size={13} /><small>{promptEnhancementPending
+                ? activePromptEnhancement?.status === "running" ? "Gemma 4 is adding motion, camera, timing, and atmosphere on your machine." : "Waiting for local Gemma 4. Your prompt is safe and unchanged."
+                : activePromptEnhancement?.status === "failed"
+                  ? "Gemma couldn’t enhance this prompt. Your current prompt is unchanged."
+                  : activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id
+                    ? promptEnhancementMatchesWorkflow ? "Enhancement ready. Use it, or keep your current prompt." : "Length, source, or model changed. Enhance again for this setup."
+                    : promptEnhancementContextChanged
+                      ? "Length, source, or model changed. Enhance again for this setup."
+                      : direction.trim() === appliedPromptEnhancement?.enhancedPrompt?.trim() ? "Enhanced locally · Gemma 4" : "Edited after enhancement · Gemma 4"}</small></span>
+              <span className="quick-prompt-enhancement-actions">
+                {promptEnhancementPending ? <button type="button" onClick={keepCurrentVideoPrompt}>Keep current</button> : null}
+                {activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={useCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
+                {originalVideoDirection !== null && direction.trim() !== originalVideoDirection.trim() ? <button type="button" onClick={restoreOriginalVideoPrompt}>Restore original</button> : null}
+              </span>
+            </div> : null}
+          </div>
           {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
-          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || selectedSourceCompatibilityError || fastImageBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
+          {!evolutionEnabled && (generationIntent === "image" || generationIntent === "video") ? <div className="quick-output-count">
+            <span><strong>Outputs</strong><small>{outputCountSeedBlocked ? "This model must expose a sampler seed for that many distinct results." : "Every result is a separate durable job with its own retained settings."}</small></span>
+            <div role="group" aria-label={`Number of ${generationIntent} outputs`}>
+              {GENERATION_OUTPUT_COUNTS.map((count) => {
+                const requiresSeed = (generationIntent === "image" && count > 1) || (generationIntent === "video" && count === 4);
+                const unavailable = requiresSeed && !workflowSeedParameter;
+                return <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy || unavailable} title={unavailable ? "Map this model's sampler seed in Models to guarantee distinct outputs." : `${count} retained ${generationIntent} ${count === 1 ? "output" : "outputs"}`} onClick={() => { setOutputCount(count); setLocalError(""); }}>{count}</button>;
+              })}
+            </div>
+          </div> : null}
+          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>

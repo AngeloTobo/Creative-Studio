@@ -1343,6 +1343,12 @@ describe("Creative Studio Worker API", () => {
         modality: "image",
         performanceMode: "explicit-custom",
         idempotencyKey: "shared_owner_model_001",
+        outputBatch: {
+          schemaVersion: "creative-studio-output-batch/1.0",
+          batchId: "output_batch_123e4567-e89b-12d3-a456-426614174000",
+          index: 2,
+          count: 4,
+        },
         workflow: {
           workflowId: importedPayload.workflow.id,
           revisionId: revisedPayload.workflow.currentRevision.id,
@@ -1356,7 +1362,16 @@ describe("Creative Studio Worker API", () => {
       job: {
         projectId: secondProject.id,
         provider: "local-comfyui",
-        settingsStamp: { performanceMode: "explicit-custom", workflow: { workflowId: importedPayload.workflow.id, revisionId: revisedPayload.workflow.currentRevision.id } },
+        settingsStamp: {
+          performanceMode: "explicit-custom",
+          outputBatch: {
+            schemaVersion: "creative-studio-output-batch/1.0",
+            batchId: "output_batch_123e4567-e89b-12d3-a456-426614174000",
+            index: 2,
+            count: 4,
+          },
+          workflow: { workflowId: importedPayload.workflow.id, revisionId: revisedPayload.workflow.currentRevision.id },
+        },
       },
     });
   });

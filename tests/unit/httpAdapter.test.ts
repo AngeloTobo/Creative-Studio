@@ -15,6 +15,7 @@ const emptySnapshot: StudioSnapshot = {
   projects: [],
   dnaArtifacts: [],
   jobs: [],
+  promptEnhancements: [],
   artifacts: [],
   mediaAssets: [],
   workflows: [],
@@ -80,6 +81,68 @@ describe("HTTP adapter request budget", () => {
 
     await expect(createHttpAdapter().load()).rejects.toThrow("cloudflare_free_tier_temporarily_limited");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates and checks one explicit durable video-prompt enhancement", async () => {
+    const promptEnhancement = {
+      id: "prompt_enhancement_1",
+      projectId: "project_1",
+      workflowId: "workflow_h3",
+      workflowRevisionId: "revision_h3_1",
+      workflowName: "MiniMax H3",
+      status: "waiting-for-runner",
+      progress: 0,
+      sourcePrompt: "The figure turns toward a distant light.",
+      enhancedPrompt: null,
+      provider: "local-comfyui",
+      promptProfileId: "minimax-h3-i2v-motion/1.0",
+      targetModel: "MiniMax H3",
+      outputFormat: "minimax-h3-timeline",
+      inputMode: "image-to-video",
+      sourceId: "media_1",
+      videoDurationSeconds: 10,
+      model: null,
+      comfyPromptId: null,
+      runnerId: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      completedAt: null,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json({ ok: true, promptEnhancement });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = createHttpAdapter();
+
+    await adapter.createVideoPromptEnhancement({
+      projectId: "project_1",
+      workflowId: "workflow_h3",
+      workflowRevisionId: "revision_h3_1",
+      sourcePrompt: promptEnhancement.sourcePrompt,
+      inputMode: "image-to-video",
+      sourceId: "media_1",
+      videoDurationSeconds: 10,
+      idempotencyKey: "enhance_once_1",
+    });
+    await adapter.getVideoPromptEnhancement(promptEnhancement.id);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/creative-studio/prompt-enhancements",
+      "/api/creative-studio/prompt-enhancements/prompt_enhancement_1",
+    ]);
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      workflowId: "workflow_h3",
+      inputMode: "image-to-video",
+      sourceId: "media_1",
+      videoDurationSeconds: 10,
+    });
+    expect(fetchMock.mock.calls[1][1]?.method).toBeUndefined();
   });
 
   it("encodes stable artifact-history cursors and filters without extra requests", async () => {

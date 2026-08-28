@@ -23,8 +23,8 @@ Legacy deep links still resolve into the correct Work or Studio section, but the
 
 ### Create across media
 
-- **Images:** generate through an imported ComfyUI workflow, choose 1:1, 9:16, 16:9, 3:4, or 4:3, and use graphical quality, steps, and seed controls when the model exposes them. Image jobs default to a bounded fast mode; larger or slower settings require an explicit Custom choice.
-- **Video:** generate from text or a retained first frame, animate an image in one action, extend a retained clip, and create 5, 10, 15, 30, or 60 second outputs when the selected workflow supports the workload. A normal video request creates two sequential, independent results: **Aligned** follows the authored direction and **Discovery** uses a random-DNA-led interpretation. Evolution can instead create Refine, Correct, and Discovery branches.
+- **Images:** generate through an imported ComfyUI workflow, choose 1, 2, or 4 separately retained outputs, choose 1:1, 9:16, 16:9, 3:4, or 4:3, and use graphical quality, steps, and seed controls when the model exposes them. Image jobs default to a bounded fast mode; larger or slower settings require an explicit Custom choice.
+- **Video:** generate from text or a retained first frame, animate an image in one action, extend a retained clip, and create 5, 10, 15, 30, or 60 second outputs when the selected workflow supports the workload. Choose 1, 2, or 4 separately retained results; two remains the default **Aligned** and random-DNA-led **Discovery** pair, while four creates two independently seeded pairs. `Enhance prompt` runs local Gemma 4 through ComfyUI, optionally inspects the selected frame, and returns an editable model-specific MiniMax H3, LTX 2.5, or generic motion direction without replacing the authored prompt automatically. Evolution can instead create Refine, Correct, and Discovery branches.
 - **Music:** derive editable song ideas from retained art and CreativeDNA, keep lyrics optional and separate, and compile the final prompt for the selected model. MiniMax Music 3 receives its required structured caption; Stable Audio receives a concise natural-language prompt. The exact authored brief, compiled prompt, model profile, and Gemma provenance remain stamped on the job.
 - **Workflows as models:** import a ComfyUI JSON once in **Studio -> Models**, inspect detected inputs and models, edit allowlisted scalar controls graphically, and save immutable revisions. Create selects compatible owner-library workflows directly; it never asks for a JSON during ordinary generation.
 
@@ -108,7 +108,7 @@ npm ci
 npm run local
 ```
 
-Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.9.1, and starts Vite.
+Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.10.0, and starts Vite.
 
 Then:
 

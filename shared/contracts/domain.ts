@@ -113,9 +113,17 @@ export type GenerationSettingsStamp = {
   videoVariant?: import("./creativeDna").VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
   evolution?: GenerationEvolutionStamp;
-  promptEnhancement?: SongPromptEnhancementStamp;
+  outputBatch?: GenerationOutputBatch;
+  promptEnhancement?: SongPromptEnhancementStamp | import("./promptEnhancements").VideoPromptEnhancementStamp;
   modelAdapters?: import("./modelTraining").GenerationModelAdapterBinding[];
   continuity?: import("./worlds").GenerationContinuityStamp;
+};
+
+export type GenerationOutputBatch = {
+  schemaVersion: "creative-studio-output-batch/1.0";
+  batchId: string;
+  index: number;
+  count: 1 | 2 | 4;
 };
 
 export type SongPromptProfileId =
@@ -350,6 +358,7 @@ export type CapabilityKey =
   | "music-generation"
   | "image-generation"
   | "video-generation"
+  | "prompt-enhancement"
   | "afdfw-music-generation"
   | "afdfw-image-generation"
   | "local-runner"

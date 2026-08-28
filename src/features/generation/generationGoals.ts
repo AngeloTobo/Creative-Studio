@@ -1,6 +1,9 @@
 import type { GenerationModality } from "../../../shared/contracts";
 
 export type GenerationGoal = "scout" | "explore" | "master";
+export type GenerationOutputCount = 1 | 2 | 4;
+
+export const GENERATION_OUTPUT_COUNTS: readonly GenerationOutputCount[] = [1, 2, 4] as const;
 
 export const GENERATION_GOALS: ReadonlyArray<{
   id: GenerationGoal;
@@ -32,10 +35,11 @@ export function generationGoalOutputCount(
   goal: GenerationGoal,
   modality: GenerationModality,
   evolutionEnabled = false,
+  requestedCount: GenerationOutputCount = modality === "video" ? 2 : 1,
 ) {
   if (evolutionEnabled || (goal === "scout" && modality === "image")) return 3;
-  if (modality === "video") return 2;
-  return 1;
+  if (modality === "music") return 1;
+  return requestedCount;
 }
 
 export function generationGoalCanScout(
@@ -53,9 +57,20 @@ export function generationGoalRunLabel(goal: GenerationGoal, modality: Generatio
 
 export function generationBatchIdempotencyKey(
   batchId: string,
-  role: "refine" | "correct" | "discovery" | "aligned",
+  role: string,
 ) {
   return `batch_${batchId}_${role}`.replace(/[^a-z0-9_-]/gi, "_").slice(0, 100);
+}
+
+/** A new batch gets fresh variation while retries of that exact batch remain reproducible. */
+export function generationBatchSeed(batchId: string, outputIndex: number) {
+  let hash = 0x811c9dc5;
+  const source = `${batchId}:${Math.max(0, Math.floor(outputIndex))}`;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
 }
 
 export type GenerationBatchAttempt = {

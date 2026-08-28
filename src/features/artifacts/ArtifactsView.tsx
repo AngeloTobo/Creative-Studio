@@ -296,6 +296,11 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
   const recipeEvidenceCurrent = recordedEvidence?.acceptance === currentAcceptance;
   const prompt = artifact.prompt.replace(/\s+/g, " ").trim();
   const hasLongPrompt = prompt.length > 180;
+  const promptEnhancement = artifact.settingsStamp.promptEnhancement;
+  const videoPromptEnhancement = promptEnhancement?.schemaVersion === "creative-studio-video-prompt-enhancement/1.0"
+    ? promptEnhancement
+    : null;
+  const exactEnhancedPrompt = videoPromptEnhancement?.appliedPrompt ?? promptEnhancement?.enhancedPrompt ?? "";
   const reuse = async () => {
     await reuseJob(artifact.jobId);
     onQueued();
@@ -391,7 +396,24 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
             <p>{continuity.directive.text}</p>
             <div>{continuity.records.entities.map((entity) => <span key={entity.id}>{entity.name} · v{entity.version}</span>)}<span>{continuity.records.rules.length} rules</span><span>{continuity.records.references.length} canon refs</span></div>
           </section> : null}
-          <div className="lineage-panel"><span>DNA <code>{artifact.dnaArtifactId}</code></span>{artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}{artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}{artifact.settingsStamp.promptEnhancement ? <><span>Song prompt <b>{artifact.settingsStamp.promptEnhancement.targetModel ?? artifact.settingsStamp.workflow?.name ?? "selected model"}</b> · Gemma 4 · {artifact.settingsStamp.promptEnhancement.sourceWordCount} → {artifact.settingsStamp.promptEnhancement.enhancedWordCount} words</span><details className="lineage-prompt" open><summary>Exact caption sent to the music model</summary><pre>{artifact.settingsStamp.promptEnhancement.enhancedPrompt}</pre></details><details className="lineage-prompt"><summary>Authored brief before Gemma formatting · lineage only</summary><p>{artifact.settingsStamp.promptEnhancement.sourcePrompt}</p></details></> : null}<span>Job <code>{artifact.jobId}</code></span><span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span><span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span><span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span><span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span><span>Decisions <b>{decisions.length}</b></span>{artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}</div>
+          <div className="lineage-panel">
+            <span>DNA <code>{artifact.dnaArtifactId}</code></span>
+            {artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}
+            {artifact.settingsStamp.outputBatch ? <span>Output <b>{artifact.settingsStamp.outputBatch.index} of {artifact.settingsStamp.outputBatch.count}</b> · batch <code>{artifact.settingsStamp.outputBatch.batchId}</code></span> : null}
+            {artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}
+            {promptEnhancement ? <>
+              <span>{videoPromptEnhancement ? "Video prompt" : "Song prompt"} <b>{promptEnhancement.targetModel ?? artifact.settingsStamp.workflow?.name ?? "selected model"}</b> · Gemma 4 · {promptEnhancement.sourceWordCount} → {promptEnhancement.enhancedWordCount} words{videoPromptEnhancement?.editedAfterEnhancement ? " · edited after enhancement" : ""}</span>
+              <details className="lineage-prompt" open><summary>{videoPromptEnhancement ? "Exact motion prompt sent to the video model" : "Exact caption sent to the music model"}</summary><pre>{exactEnhancedPrompt}</pre></details>
+              <details className="lineage-prompt"><summary>{videoPromptEnhancement ? "Original motion brief before Gemma enhancement · lineage only" : "Authored brief before Gemma formatting · lineage only"}</summary><p>{promptEnhancement.sourcePrompt}</p></details>
+            </> : null}
+            <span>Job <code>{artifact.jobId}</code></span>
+            <span>Retention <b>{artifact.retention.state}</b>{artifact.retention.size ? ` · ${Math.ceil(artifact.retention.size / 1024)} KB` : ""}</span>
+            <span>Settings <b>{artifact.settingsStamp.source}</b>{artifact.settingsStamp.workflow ? ` · ${artifact.settingsStamp.workflow.name} v${artifact.settingsStamp.workflow.version}` : ""}</span>
+            <span>Stamp <code>{artifact.settingsStamp.workflow?.contentHash ?? artifact.settingsStamp.createdAt}</code></span>
+            <span>CreativeDNA training <b>{training?.status ?? "candidate"}</b></span>
+            <span>Decisions <b>{decisions.length}</b></span>
+            {artifact.settingsStamp.models.map((model) => <small key={model}>model · {model}</small>)}
+          </div>
         </details>
         {training?.status === "training-ready" ? <button className="btn btn-primary artifact-continue-loop" onClick={onContinueLoop}><Icon name="dna" size={16} /> Continue production loop</button> : null}
       </div>

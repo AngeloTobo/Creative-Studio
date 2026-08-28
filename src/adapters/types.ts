@@ -45,6 +45,8 @@ import type {
   UpdateWorldRequest,
   World,
   WorldEntity,
+  CreateVideoPromptEnhancementRequest,
+  VideoPromptEnhancement,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -56,6 +58,8 @@ export interface StudioAdapter {
   updateProject(projectId: string, input: UpdateProjectRequest): Promise<Project>;
   archiveProject(projectId: string): Promise<Project>;
   saveCreativeDna(input: CreateCreativeDnaRequest): Promise<CreativeDnaArtifact>;
+  createVideoPromptEnhancement(input: CreateVideoPromptEnhancementRequest): Promise<VideoPromptEnhancement>;
+  getVideoPromptEnhancement(promptEnhancementId: string): Promise<VideoPromptEnhancement>;
   submitJob(input: SubmitJobRequest): Promise<Job>;
   retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
   reuseJob(jobId: string, idempotencyKey: string): Promise<Job>;

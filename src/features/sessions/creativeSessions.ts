@@ -6,6 +6,7 @@ const MAX_SOURCE_ASSETS = 32;
 const MAX_SETTING_ENTRIES = 64;
 const MAX_STORAGE_BYTES = 512_000;
 const MAX_SETTING_STRING_CHARACTERS = 2_000;
+const MAX_VIDEO_PROMPT_SETTING_CHARACTERS = 4_000;
 const MAX_LYRICS_SETTING_CHARACTERS = 8_000;
 
 export type CreativeSessionMediaKind = "image" | "video" | "music";
@@ -102,7 +103,12 @@ function graphicalSettings(value: unknown): CreativeSessionGraphicalSettings {
       continue;
     }
     if (typeof rawValue === "string") {
-      normalized[key] = rawValue.slice(0, key === "lyrics" ? MAX_LYRICS_SETTING_CHARACTERS : MAX_SETTING_STRING_CHARACTERS);
+      const maximum = key === "lyrics"
+        ? MAX_LYRICS_SETTING_CHARACTERS
+        : key === "originalVideoDirection"
+          ? MAX_VIDEO_PROMPT_SETTING_CHARACTERS
+          : MAX_SETTING_STRING_CHARACTERS;
+      normalized[key] = rawValue.slice(0, maximum);
     }
   }
   return normalized;

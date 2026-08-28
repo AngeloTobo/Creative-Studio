@@ -98,12 +98,13 @@ describe("Creative Sessions browser persistence", () => {
     }]);
   });
 
-  it("preserves long lyrics while retaining the tighter bound for other setting strings", () => {
+  it("preserves long lyrics and restorable video prompts while retaining the tighter bound for other setting strings", () => {
     const storage = memoryStorage();
     const saved = saveCreativeSession({
       ...base,
       graphicalSettings: {
         lyrics: "L".repeat(9_000),
+        originalVideoDirection: "V".repeat(5_000),
         modelNote: "N".repeat(3_000),
       },
     }, {
@@ -113,6 +114,7 @@ describe("Creative Sessions browser persistence", () => {
     });
 
     expect(saved?.graphicalSettings.lyrics).toBe("L".repeat(8_000));
+    expect(saved?.graphicalSettings.originalVideoDirection).toBe("V".repeat(4_000));
     expect(saved?.graphicalSettings.modelNote).toBe("N".repeat(2_000));
     expect(loadCreativeSession("session_long_lyrics", { storage })?.graphicalSettings).toEqual(saved?.graphicalSettings);
   });

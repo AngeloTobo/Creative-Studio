@@ -49,7 +49,12 @@ import {
   type RunnerCompleteModelTrainingDatasetRequest,
   type RunnerCompleteModelTrainingRequest,
   type RunnerFailModelTrainingRequest,
+  type CreateVideoPromptEnhancementRequest,
+  type RunnerPromptEnhancementHeartbeatRequest,
+  type RunnerCompletePromptEnhancementRequest,
+  type RunnerFailPromptEnhancementRequest,
   videoWorkflowDurationParameters,
+  videoWorkflowPromptProfile,
   workflowSupportsVideoDuration,
 } from "../../shared/contracts";
 import { afdfwMedia, afdfwSession } from "../adapters/afdfw";
@@ -151,6 +156,17 @@ import {
   reviewModelTrainingDataset,
   activeMusicAdapterBindings,
 } from "../modelTraining";
+import {
+  claimVideoPromptEnhancement,
+  completeVideoPromptEnhancement,
+  createVideoPromptEnhancement,
+  failVideoPromptEnhancement,
+  heartbeatVideoPromptEnhancement,
+  listVideoPromptEnhancements,
+  supportsVideoPromptEnhancement,
+  videoPromptEnhancementById,
+  videoPromptEnhancementStampForJob,
+} from "../promptEnhancements";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -184,6 +200,9 @@ function statusFor(error: string) {
     || error === "model_adapter_already_reviewed" || error === "recipe_evidence_settings_immutable"
     || error === "generation_recipe_archived") return 409;
   if (error === "runner_job_not_completable" || error === "image_custom_mode_required") return 409;
+  if (error === "prompt_enhancement_not_completable" || error === "prompt_enhancement_not_ready"
+    || error === "prompt_enhancement_idempotency_conflict" || error === "prompt_enhancement_context_mismatch"
+    || error === "prompt_enhancement_applied_prompt_mismatch") return 409;
   if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
     || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
     || error === "artifact_already_canonical") return 409;
@@ -194,6 +213,15 @@ function idempotencyKey(value: unknown) {
   const key = String(value ?? "").trim();
   if (!/^[a-z0-9_-]{16,100}$/i.test(key)) throw new Error("invalid_idempotency_key");
   return key;
+}
+
+function boundedPrompt(value: unknown, limit = 4_000) {
+  return String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\t ]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, limit);
 }
 
 function artifactHistoryQuery(url: URL): ArtifactHistoryQuery {
@@ -284,6 +312,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
     const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
     const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
+    const promptEnhancementAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoPromptEnhancement(runner.version));
     const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
       && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
     if (localHardwareMode(env)) return [
@@ -298,6 +327,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "music-generation", label: "Music generation", state: musicRunnerAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: musicRunnerAvailable ? "Gemma 4 compiles each direction with the selected music model's prompt profile before rendering." : "Start Local Runner 1.7 or newer so song prompts are compiled for the selected model.", checkedAt },
       { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable image workflow is required; no development media is generated.", checkedAt },
       { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable video workflow is required and runs on this machine.", checkedAt },
+      { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: promptEnhancementAvailable ? "Gemma 4 can inspect the selected first frame and compile an editable, model-specific video direction." : "Start Local Runner 1.10 or newer with Gemma 4 available.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends music generation to AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends image generation to AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Local Creative Studio D1", detail: "Review decisions are explicit, append-only, and local.", checkedAt },
@@ -316,6 +346,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "music-generation", label: "Music generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "video-generation", label: "Video generation", state: "unavailable", provider: "local runner required", detail: "Video workflow execution requires a paired Local Runner.", checkedAt },
+      { key: "prompt-enhancement", label: "Video prompt enhancement", state: "unavailable", provider: "local runner required", detail: "Real prompt enhancement is never simulated by the development adapter.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -328,6 +359,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
   const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
   const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
   const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
+  const promptEnhancementAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoPromptEnhancement(runner.version));
   const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
     && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
   const generationState = session.status === "approved" ? "available" : "unavailable";
@@ -343,6 +375,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     { key: "music-generation", label: "Music generation", state: musicRunnerAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: musicRunnerAvailable ? "Gemma 4 compiles the authored music brief with the selected model's prompt profile before ComfyUI runs, including MiniMax Music 3's structured caption." : "Music jobs remain durable until a paired Local Runner 1.7 or newer can compile and render them.", checkedAt },
     { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ComfyUI", detail: runnerAvailable ? "Imported API-format image workflows execute on the paired machine." : "Image jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local Runner + ComfyUI", detail: runnerAvailable ? "Versioned API-format video workflows can execute on the paired machine." : "Video jobs remain durable and wait for the paired machine to come online.", checkedAt },
+    { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: promptEnhancementAvailable ? "Gemma 4 can inspect a selected image or extension frame and return an editable prompt compiled for the selected video model." : "Prompt requests stay durable until Local Runner 1.10 or newer is online.", checkedAt },
     { key: "afdfw-music-generation", label: "AFDFW music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "Optional remote route through the exact allowlisted AFDFW music capability; it is never selected automatically.", checkedAt },
     { key: "afdfw-image-generation", label: "AFDFW image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "Optional remote route through the exact allowlisted AFDFW image capability; it is never selected automatically.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -359,7 +392,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, runners, worldRecords] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, runners, worldRecords] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -375,6 +408,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listModelTrainingJobs(env, session.userId),
     listModelAdapters(env, session.userId),
     listModelAdapterReviews(env, session.userId),
+    listVideoPromptEnhancements(env, session.userId),
     listLocalRunners(env, session.userId),
     listWorldRecords(env, session.userId),
   ]);
@@ -397,6 +431,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     projects,
     dnaArtifacts,
     jobs,
+    promptEnhancements,
     artifacts,
     mediaAssets,
     workflows,
@@ -429,6 +464,8 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (!input) throw new Error("invalid_runner_request");
     const heartbeat = await heartbeatLocalRunner(env, runner, input);
     const currentRunner = { ...runner, version: heartbeat.version };
+    const promptEnhancement = await claimVideoPromptEnhancement(env, currentRunner);
+    if (promptEnhancement) return json({ ok: true, kind: "prompt-enhancement", bundle: promptEnhancement });
     const generation = await claimLocalRunnerJob(env, currentRunner);
     if (generation) return json({ ok: true, kind: "generation", bundle: generation });
     const training = await claimLocalRunnerTrainingJob(env, currentRunner);
@@ -441,6 +478,24 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const input = await body<RunnerHeartbeatRequest>(request);
     if (!input) throw new Error("invalid_runner_request");
     return json({ ok: true, runner: await heartbeatLocalRunner(env, runner, input) });
+  }
+  if (route === "runner-prompt-enhancement-heartbeat") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/prompt-enhancements\/([a-z0-9_]+)\/heartbeat$/i);
+    const input = await body<RunnerPromptEnhancementHeartbeatRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, promptEnhancement: await heartbeatVideoPromptEnhancement(env, runner, match[1], input.progress) });
+  }
+  if (route === "runner-prompt-enhancement-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/prompt-enhancements\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<RunnerCompletePromptEnhancementRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, promptEnhancement: await completeVideoPromptEnhancement(env, runner, match[1], input) });
+  }
+  if (route === "runner-prompt-enhancement-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/prompt-enhancements\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<RunnerFailPromptEnhancementRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, promptEnhancement: await failVideoPromptEnhancement(env, runner, match[1], input.error) });
   }
   if (route === "runner-job-claim") {
     return json({ ok: true, bundle: await claimLocalRunnerJob(env, runner) });
@@ -659,6 +714,16 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await syncJobs(env, session.userId);
       return json({ ok: true, jobs: await listJobs(env, session.userId) });
     }
+    if (route === "prompt-enhancement-create") {
+      const input = await body<CreateVideoPromptEnhancementRequest>(request);
+      if (!input) throw new Error("invalid_prompt_enhancement_request");
+      return json({ ok: true, promptEnhancement: await createVideoPromptEnhancement(env, session.userId, input) }, { status: 202 });
+    }
+    if (route === "prompt-enhancement-get") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/prompt-enhancements\/([a-z0-9_]+)$/i);
+      if (!match) throw new Error("invalid_prompt_enhancement_request");
+      return json({ ok: true, promptEnhancement: await videoPromptEnhancementById(env, session.userId, match[1]) });
+    }
     if (route === "jobs-create") {
       const input = await body<SubmitJobRequest>(request);
       if (!input || !["music", "image", "video"].includes(input.modality)) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
@@ -691,6 +756,21 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         evolutionTaste = compileCreativeTasteMemory({ projects: allProjects, artifacts: reviewArtifacts, acceptances: reviews, trainingReviews: dnaReviews, dnaArtifacts });
       }
       const modality = input.modality as GenerationModality;
+      const outputBatch = input.outputBatch === undefined ? undefined : {
+        schemaVersion: input.outputBatch.schemaVersion,
+        batchId: boundedText(input.outputBatch.batchId, 120),
+        index: Number(input.outputBatch.index),
+        count: Number(input.outputBatch.count),
+      };
+      if (outputBatch && (
+        outputBatch.schemaVersion !== "creative-studio-output-batch/1.0"
+        || !/^[a-z0-9_-]{8,120}$/i.test(outputBatch.batchId)
+        || !Number.isInteger(outputBatch.index)
+        || ![1, 2, 4].includes(outputBatch.count)
+        || outputBatch.index < 1
+        || outputBatch.index > outputBatch.count
+      )) throw new Error("invalid_output_batch");
+      if (outputBatch && modality === "music") throw new Error("output_batch_modality_not_supported");
       const normalizedVideoDuration = input.videoDurationSeconds === undefined ? undefined : normalizeVideoDurationSeconds(input.videoDurationSeconds);
       if (input.videoDurationSeconds !== undefined && normalizedVideoDuration === null) throw new Error("invalid_video_duration");
       const videoDurationSeconds = normalizedVideoDuration ?? undefined;
@@ -698,6 +778,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const videoOperation = requestedVideoOperation(input.videoOperation, modality);
       const videoVariant = input.videoVariant === undefined ? undefined : normalizeVideoGenerationVariant(input.videoVariant);
       if (videoVariant && modality !== "video") throw new Error("invalid_video_generation_variant");
+      if (input.promptEnhancement && modality !== "video") throw new Error("prompt_enhancement_video_workflow_required");
       if (input.performanceMode !== undefined && input.performanceMode !== "fast-default" && input.performanceMode !== "explicit-custom") {
         throw new Error("invalid_image_performance_mode");
       }
@@ -764,19 +845,35 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         }
         const promptParameters = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
         const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);
-        const expectedPrompt = boundedText(input.workflow.expectedPrompt, 4_000);
-        const workflowPrompt = boundedText(workflowPromptParameter?.value, 4_000);
+        const expectedPrompt = boundedPrompt(input.workflow.expectedPrompt);
+        const workflowPrompt = boundedPrompt(workflowPromptParameter?.value);
         const negativePromptParameters = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
         if (!expectedPrompt) throw new Error("workflow_prompt_confirmation_required");
         if (!workflowPromptParameter || !workflowPrompt || workflowPromptParameter.promptRole === "negative") throw new Error("workflow_positive_prompt_missing");
         if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
-        if (!promptParameters.length || promptParameters.some((parameter) => boundedText(parameter.value, 4_000) !== workflowPrompt)) {
+        if (!promptParameters.length || promptParameters.some((parameter) => boundedPrompt(parameter.value) !== workflowPrompt)) {
           throw new Error("workflow_positive_prompt_ambiguous");
         }
-        if (negativePromptParameters.some((parameter) => boundedText(parameter.value, 4_000) === workflowPrompt)) {
+        if (negativePromptParameters.some((parameter) => boundedPrompt(parameter.value) === workflowPrompt)) {
           throw new Error("workflow_prompt_bound_to_negative");
         }
         const prompt = workflowPrompt;
+        if (input.promptEnhancement && boundedPrompt(input.promptEnhancement.appliedPrompt) !== prompt) {
+          throw new Error("prompt_enhancement_applied_prompt_mismatch");
+        }
+        const promptEnhancementInputMode = input.videoOperation ? "video-extension" as const
+          : input.workflow.inputBindings && Object.entries(input.workflow.inputBindings)
+            .some(([parameterId]) => mediaParameters.some((parameter) => parameter.id === parameterId && parameter.mediaKind === "image"))
+            ? "image-to-video" as const : "text-to-video" as const;
+        const promptEnhancementProfile = videoWorkflowPromptProfile(plan.workflow, promptEnhancementInputMode);
+        const promptEnhancement = input.promptEnhancement ? await videoPromptEnhancementStampForJob(env, session.userId, {
+          ...input.promptEnhancement,
+          projectId: input.projectId,
+          workflowId: plan.workflow.id,
+          workflowRevisionId: plan.workflow.currentRevision.id,
+          promptProfileId: promptEnhancementProfile.id,
+          promptOutputFormat: promptEnhancementProfile.outputFormat,
+        }) : undefined;
         const continuity = input.continuity
           ? await generationContinuityStamp(env, session.userId, input.projectId, modality, input.continuity, prompt)
           : undefined;
@@ -854,12 +951,20 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             videoVariant,
             videoOperation,
             evolution,
+            outputBatch: outputBatch ? {
+              schemaVersion: "creative-studio-output-batch/1.0",
+              batchId: outputBatch.batchId,
+              index: outputBatch.index,
+              count: outputBatch.count as 1 | 2 | 4,
+            } : undefined,
             continuity,
+            promptEnhancement,
           },
         });
         return json({ ok: true, job: created.job }, { status: 202 });
       }
       if (input.continuity) throw new Error("continuity_workflow_required");
+      if (outputBatch) throw new Error("output_batch_workflow_required");
       if (videoOperation) throw new Error("video_workflow_required");
       if (modality === "video") throw new Error("video_workflow_required");
       if (localHardwareMode(env)) throw new Error("local_comfyui_workflow_required");

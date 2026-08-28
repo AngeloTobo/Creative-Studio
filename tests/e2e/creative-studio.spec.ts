@@ -89,6 +89,11 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.getByRole("button", { name: "Use Rebecca embryo upload" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
   await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
+  await expect(page.getByRole("button", { name: "Local Gemma offline" })).toBeDisabled();
+  const outputCount = page.getByRole("group", { name: "Number of video outputs" });
+  await expect(outputCount.getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(outputCount.getByRole("button", { name: "1", exact: true })).toBeEnabled();
+  await expect(outputCount.getByRole("button", { name: "4", exact: true })).toBeDisabled();
   await expect(page.getByRole("alert")).toContainText("development adapter cannot submit simulated video");
 
   await page.goto("/#/portal");
@@ -353,7 +358,17 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
       return {
         id: `artifact_video_${index}`, projectId: project.id, jobId: `job_video_${index}`, dnaArtifactId: "dna_video_gallery", kind: "video", name: prompt, status: "ready", provider: "development-adapter", prompt,
         preview: { kind: "remote-media", url: video, posterUrl: poster, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: [], parentArtifactId: null }, retention: { state: "development-only", size: null },
-        settingsStamp: { schemaVersion: 1, source: "development-adapter", createdAt: date, reusedFromJobId: null, prompt, provider: "development-adapter", modality: "video", workflow: null, parameters: { prompt }, models: [], inputAssetIds: [] }, createdAt: date, updatedAt: date,
+        settingsStamp: {
+          schemaVersion: 1, source: "development-adapter", createdAt: date, reusedFromJobId: null, prompt, provider: "development-adapter", modality: "video", workflow: null, parameters: { prompt }, models: [], inputAssetIds: [],
+          ...(index === 11 ? {
+            outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId: "output_batch_video_gallery", index: 2, count: 4 },
+            promptEnhancement: {
+              schemaVersion: "creative-studio-video-prompt-enhancement/1.0", requestId: "promptenh_gallery", generationWorkflowId: "workflow_h3", generationWorkflowRevisionId: "workflowrev_h3_job", enhancementWorkflowRevisionId: "workflowrev_h3_source",
+              sourcePrompt: "The figure turns toward the city.", enhancedPrompt: "Enhanced Gemma timeline that is not the final downstream variant.", basePrompt: "Enhanced Gemma timeline that is not the final downstream variant.", appliedPrompt: "Exact applied motion prompt with the final Discovery camera turn.", editedAfterEnhancement: false,
+              provider: "local-comfyui", workflowId: "gemma4-video-prompt-enhancer", workflowVersion: 1, model: "gemma4_e4b_it_fp8_scaled.safetensors", comfyPromptId: "comfy_gallery", sourceWordCount: 7, enhancedWordCount: 10, createdAt: date, promptProfileId: "minimax-h3-i2v-motion/1.0", targetModel: "MiniMax H3", outputFormat: "minimax-h3-timeline",
+            },
+          } : {}),
+        }, createdAt: date, updatedAt: date,
       };
     });
     localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} }));
@@ -371,6 +386,14 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
   await expect(page.locator("video")).toHaveCount(1);
   await player.getByRole("button", { name: "Close video player" }).click();
   await expect(page.locator("video")).toHaveCount(0);
+  const newestVideoCard = page.locator("#artifact-card-artifact_video_11");
+  await newestVideoCard.getByText("Details & history").click();
+  await expect(newestVideoCard.getByText("Video prompt", { exact: false })).toBeVisible();
+  await expect(newestVideoCard.getByText("Exact motion prompt sent to the video model")).toBeVisible();
+  await expect(newestVideoCard.locator(".lineage-prompt pre")).toContainText("Exact applied motion prompt with the final Discovery camera turn.");
+  await expect(newestVideoCard.locator(".lineage-prompt pre")).not.toContainText("Enhanced Gemma timeline that is not the final downstream variant.");
+  await expect(newestVideoCard.getByText("Output 2 of 4", { exact: false })).toBeVisible();
+  await expect(newestVideoCard.getByText("Song prompt", { exact: false })).toHaveCount(0);
 });
 
 test("Projects opens the exact pending trained-DNA review instead of the default Create panel", async ({ page }) => {

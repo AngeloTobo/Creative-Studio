@@ -122,6 +122,10 @@ export async function revokeLocalRunner(env: Env, ownerId: string, runnerId: str
       runner_id = null, runner_lease_until = null, error = null, updated_at = ?
       where owner_id = ? and runner_id = ? and status = 'running'`)
       .bind(now, ownerId, runnerId),
+    env.DB.prepare(`update creative_prompt_enhancements set status = 'waiting-for-runner', progress = 0,
+      runner_id = null, runner_lease_until = null, error = null, updated_at = ?, started_at = null
+      where owner_id = ? and runner_id = ? and status = 'running'`)
+      .bind(now, ownerId, runnerId),
   ]);
   const row = await env.DB.prepare(`select ${RUNNER_COLUMNS} from creative_runners where id = ? and owner_id = ?`)
     .bind(runnerId, ownerId).first<RunnerRow>();
@@ -339,7 +343,9 @@ export function isLocalRunnerRoute(route: string) {
     || route === "runner-training-claim" || route === "runner-training-heartbeat"
     || route === "runner-training-complete" || route === "runner-training-fail"
     || route === "runner-model-training-dataset" || route === "runner-model-training-heartbeat"
-    || route === "runner-model-training-complete" || route === "runner-model-training-fail";
+    || route === "runner-model-training-complete" || route === "runner-model-training-fail"
+    || route === "runner-prompt-enhancement-heartbeat" || route === "runner-prompt-enhancement-complete"
+    || route === "runner-prompt-enhancement-fail";
 }
 
 export function localRunnerJobLabel(job: Job) {

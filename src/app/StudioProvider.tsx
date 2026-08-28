@@ -25,6 +25,7 @@ import type {
   VideoGenerationVariant,
   VideoDurationSeconds,
   EvolutionJobContext,
+  GenerationOutputBatch,
   ReviewArtifactResponse,
   CreateModelTrainingJobRequest,
   ModelTrainingJob,
@@ -54,6 +55,8 @@ import type {
   UpdateWorldRequest,
   World,
   WorldEntity,
+  CreateVideoPromptEnhancementRequest,
+  VideoPromptEnhancement,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -70,6 +73,8 @@ type StudioContextValue = {
   updateProject: (projectId: string, input: UpdateProjectRequest) => Promise<Project>;
   archiveProject: (projectId: string) => Promise<Project>;
   saveDna: (input: Omit<CreateCreativeDnaRequest, "projectId">) => Promise<CreativeDnaArtifact>;
+  enhanceVideoPrompt: (input: Omit<CreateVideoPromptEnhancementRequest, "projectId" | "idempotencyKey">) => Promise<VideoPromptEnhancement>;
+  getVideoPromptEnhancement: (promptEnhancementId: string) => Promise<VideoPromptEnhancement>;
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitWorkflowJob: (input: SubmitWorkflowJobInput) => Promise<Job>;
@@ -117,9 +122,11 @@ export type SubmitWorkflowJobInput = {
   performanceMode?: ImagePerformanceMode;
   videoVariant?: VideoGenerationVariant;
   evolution?: EvolutionJobContext;
+  outputBatch?: GenerationOutputBatch;
   videoDurationSeconds?: VideoDurationSeconds;
   idempotencyKey?: string;
   continuity?: GenerationContinuitySelection;
+  promptEnhancement?: { requestId: string; basePrompt: string; appliedPrompt: string };
 };
 
 const StudioContext = createContext<StudioContextValue | null>(null);
@@ -132,6 +139,8 @@ function message(error: unknown) {
   if (error.message === "video_duration_not_supported_by_model") return "That model cannot create the selected length. Choose a shorter length or an available LTX model.";
   if (error.message === "video_duration_control_missing") return "This workflow does not expose a duration control. Update its model workflow before generating.";
   if (error.message === "video_duration_revision_mismatch") return "The saved workflow duration does not match your selected length. Choose the length again and retry.";
+  if (error.message === "prompt_enhancement_requires_local_runner" || error.message === "prompt_enhancement_runner_unavailable") return "Start the Local Runner and ComfyUI to enhance this prompt with Gemma 4. Your prompt is unchanged.";
+  if (error.message === "prompt_enhancement_source_too_short") return "Add a little more motion direction before asking Gemma to enhance it.";
   if (error.message === "model_training_provider_unavailable") return "ACE-Step 1.5 training is not ready on the paired machine yet. Install its runtime and Base checkpoints, then restart the Local Runner.";
   if (error.message === "ace_step_requires_3_audio_files") return "Select at least three consented audio uploads before preparing the LoRA dataset.";
   if (error.message === "model_training_audio_consent_required") return "Every selected song must have CreativeDNA training consent enabled.";
@@ -197,7 +206,9 @@ function mergeSnapshotHistory(current: StudioSnapshot | null, next: StudioSnapsh
   const artifacts = mergeById(current.artifacts, next.artifacts).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
   const acceptances = mergeById(current.acceptances, next.acceptances).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
   const trainingExamples = mergeById(current.trainingExamples, next.trainingExamples).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
-  return { ...next, jobs, artifacts, acceptances, trainingExamples, evolutionStudies: deriveEvolutionStudies(jobs, artifacts) };
+  const promptEnhancements = mergeById(current.promptEnhancements, next.promptEnhancements)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  return { ...next, jobs, artifacts, acceptances, trainingExamples, promptEnhancements, evolutionStudies: deriveEvolutionStudies(jobs, artifacts) };
 }
 
 export function StudioProvider({ children }: { children: ReactNode }) {
@@ -319,8 +330,33 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitProviderJob("development-preview", modality, dnaArtifactId)
   ), [submitProviderJob]);
 
+  const enhanceVideoPrompt = useCallback((input: Omit<CreateVideoPromptEnhancementRequest, "projectId" | "idempotencyKey">) => {
+    if (!activeProjectId) throw new Error("project_required");
+    return transact(() => adapter.createVideoPromptEnhancement({
+      ...input,
+      projectId: activeProjectId,
+      idempotencyKey: operationKey("video_prompt_enhance"),
+    }));
+  }, [activeProjectId, adapter, transact]);
+
+  const getVideoPromptEnhancement = useCallback(async (promptEnhancementId: string) => {
+    try {
+      const promptEnhancement = await adapter.getVideoPromptEnhancement(promptEnhancementId);
+      setSnapshot((current) => current ? {
+        ...current,
+        promptEnhancements: mergeById(current.promptEnhancements, [promptEnhancement])
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)),
+      } : current);
+      setError("");
+      return promptEnhancement;
+    } catch (nextError) {
+      setError(message(nextError));
+      throw nextError;
+    }
+  }, [adapter]);
+
   const submitWorkflowJob = useCallback(async (input: SubmitWorkflowJobInput) => {
-    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, evolution, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity } = input;
+    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, evolution, outputBatch, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement } = input;
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -342,7 +378,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       videoVariant,
       videoOperation,
       evolution,
+      outputBatch,
       continuity,
+      promptEnhancement,
     }));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
 
@@ -549,6 +587,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     updateProject,
     archiveProject,
     saveDna,
+    enhanceVideoPrompt,
+    getVideoPromptEnhancement,
     submitAfdfwJob,
     submitDevelopmentPreviewJob,
     submitWorkflowJob,
@@ -585,7 +625,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     enrollLocalRunner,
     revokeLocalRunner,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

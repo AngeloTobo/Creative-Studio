@@ -8,6 +8,29 @@ class MemoryStorage implements StorageLike {
 }
 
 describe("development adapter", () => {
+  it("labels local Gemma enhancement unavailable and never fabricates a result", async () => {
+    const storage = new MemoryStorage();
+    const adapter = createDevelopmentAdapter({ storage });
+    const snapshot = await adapter.load();
+
+    expect(snapshot.promptEnhancements).toEqual([]);
+    expect(snapshot.capabilities.find((capability) => capability.key === "prompt-enhancement")).toMatchObject({
+      state: "unavailable",
+      provider: "local runner required",
+    });
+    await expect(adapter.createVideoPromptEnhancement({
+      projectId: "project_1",
+      workflowId: "workflow_1",
+      workflowRevisionId: "revision_1",
+      sourcePrompt: "The subject turns toward the moving light.",
+      inputMode: "text-to-video",
+      sourceId: null,
+      videoDurationSeconds: 5,
+      idempotencyKey: "enhance_dev_1",
+    })).rejects.toThrow("prompt_enhancement_requires_local_runner");
+    await expect(adapter.getVideoPromptEnhancement("prompt_enhancement_1")).rejects.toThrow("prompt_enhancement_requires_local_runner");
+  });
+
   it("persists DNA, durable job progression, artifacts, and decisions across adapter instances", async () => {
     const storage = new MemoryStorage();
     let clock = new Date("2026-08-16T04:00:00.000Z");

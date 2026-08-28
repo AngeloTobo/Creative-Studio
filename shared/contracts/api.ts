@@ -21,8 +21,17 @@ import type {
   CreativeTasteMemory,
   EvolutionStudy,
   SongPromptEnhancementStamp,
+  GenerationOutputBatch,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis, VideoGenerationVariant } from "./creativeDna";
+import type {
+  CreateVideoPromptEnhancementRequest,
+  RunnerCompletePromptEnhancementRequest,
+  RunnerFailPromptEnhancementRequest,
+  RunnerPromptEnhancementBundle,
+  RunnerPromptEnhancementHeartbeatRequest,
+  VideoPromptEnhancement,
+} from "./promptEnhancements";
 import type {
   CompleteModelTrainingJobRequest,
   CreateModelTrainingJobRequest,
@@ -76,6 +85,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   worlds: `${CREATIVE_STUDIO_API_PREFIX}/worlds`,
   dna: `${CREATIVE_STUDIO_API_PREFIX}/dna`,
   jobs: `${CREATIVE_STUDIO_API_PREFIX}/jobs`,
+  promptEnhancements: `${CREATIVE_STUDIO_API_PREFIX}/prompt-enhancements`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
@@ -96,7 +106,7 @@ export type CreativeStudioRoute =
   | "world-entity-create" | "world-entity-update" | "world-entity-retire"
   | "world-rule-create" | "world-rule-update" | "world-rule-retire"
   | "world-reference-create" | "world-reference-update" | "world-reference-retire" | "world-reference-promote" | "world-artifact-promote"
-  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel"
+  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel" | "prompt-enhancement-create" | "prompt-enhancement-get"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
@@ -105,6 +115,7 @@ export type CreativeStudioRoute =
   | "model-training-jobs-list" | "model-training-job-create" | "model-training-job-cancel" | "model-training-dataset-review" | "model-adapter-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
+  | "runner-prompt-enhancement-heartbeat" | "runner-prompt-enhancement-complete" | "runner-prompt-enhancement-fail"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail"
   | "runner-model-training-dataset" | "runner-model-training-heartbeat" | "runner-model-training-complete" | "runner-model-training-fail";
 
@@ -138,6 +149,8 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/retry$/i.test(pathname)) return "job-retry";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "job-cancel";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/reuse$/i.test(pathname)) return "job-reuse";
+  if (method === "POST" && pathname === "/api/creative-studio/prompt-enhancements") return "prompt-enhancement-create";
+  if (method === "GET" && /^\/api\/creative-studio\/prompt-enhancements\/[a-z0-9_]+$/i.test(pathname)) return "prompt-enhancement-get";
   if (method === "GET" && pathname === "/api/creative-studio/artifacts") return "artifacts-list";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/media$/i.test(pathname)) return "artifact-media";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/thumbnail$/i.test(pathname)) return "artifact-thumbnail";
@@ -177,6 +190,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/thumbnail$/i.test(pathname)) return "runner-job-thumbnail";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/jobs\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-job-fail";
   if (method === "GET" && /^\/api\/creative-studio\/runner\/media\/[a-z0-9_]+$/i.test(pathname)) return "runner-media-content";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/prompt-enhancements\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-prompt-enhancement-heartbeat";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/prompt-enhancements\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-prompt-enhancement-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/prompt-enhancements\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-prompt-enhancement-fail";
   if (method === "POST" && pathname === "/api/creative-studio/runner/training/claim") return "runner-training-claim";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-training-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-training-complete";
@@ -200,6 +216,7 @@ export type StudioSnapshot = {
   canonPromotions?: CanonPromotion[];
   dnaArtifacts: CreativeDnaArtifact[];
   jobs: Job[];
+  promptEnhancements: VideoPromptEnhancement[];
   artifacts: Artifact[];
   mediaAssets: MediaAsset[];
   workflows: WorkflowDefinition[];
@@ -262,12 +279,17 @@ export type SubmitJobRequest = {
   videoVariant?: VideoGenerationVariant;
   videoOperation?: VideoGenerationOperation;
   evolution?: EvolutionJobContext;
+  outputBatch?: GenerationOutputBatch;
   continuity?: GenerationContinuitySelection;
+  promptEnhancement?: { requestId: string; basePrompt: string; appliedPrompt: string };
 };
 
 export type SubmitJobResponse = {
   job: Job;
 };
+
+export type CreatePromptEnhancementRequest = CreateVideoPromptEnhancementRequest;
+export type CreatePromptEnhancementResponse = { promptEnhancement: VideoPromptEnhancement };
 
 export type RetryJobRequest = { idempotencyKey: string };
 export type RetryJobResponse = { job: Job };
@@ -388,6 +410,7 @@ export type RunnerJobBundle = {
 
 export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
 export type RunnerWorkClaimResponse =
+  | { kind: "prompt-enhancement"; bundle: RunnerPromptEnhancementBundle }
   | { kind: "generation"; bundle: RunnerJobBundle }
   | { kind: "training"; bundle: CreativeDnaTrainingBundleResponse }
   | { kind: "model-training"; bundle: ModelTrainingBundleResponse }
@@ -399,6 +422,7 @@ export type RunnerJobHeartbeatRequest = {
   promptEnhancement?: SongPromptEnhancementStamp & { parameterId: string };
 };
 export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
+export type { RunnerPromptEnhancementHeartbeatRequest, RunnerCompletePromptEnhancementRequest, RunnerFailPromptEnhancementRequest };
 export type RunnerFailJobRequest = { error: string };
 export type RunnerTrainingClaimResponse = { bundle: CreativeDnaTrainingBundleResponse | null };
 export type RunnerTrainingHeartbeatRequest = { progress: number };
