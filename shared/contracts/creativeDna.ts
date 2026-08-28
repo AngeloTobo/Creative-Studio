@@ -358,6 +358,18 @@ function aweVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, hasSour
 }
 
 /**
+ * Reconstructs the two four-way prompts that intentionally replace the reviewed
+ * direction. This lets the Worker prove a left-field or awe job used the exact
+ * deterministic variant described by its normalized settings stamp.
+ */
+export function deterministicReplacementVideoPrompt(value: unknown, hasSource: boolean) {
+  const variant = normalizeVideoGenerationVariant(value);
+  if (variant.role === "left-field") return leftFieldVideoPrompt(variant.effectiveDimensions, variant.seed!, hasSource);
+  if (variant.role === "awe") return aweVideoPrompt(variant.effectiveDimensions, variant.seed!, hasSource);
+  return null;
+}
+
+/**
  * Creates one truthful four-way motion board. Exact is the authored prompt,
  * Enhanced is the supplied model-enhanced prompt, and the two exploratory
  * prompts are deterministic from the board seed. A caller must not substitute

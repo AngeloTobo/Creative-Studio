@@ -149,7 +149,22 @@ describe("HTTP adapter request budget", () => {
   it("creates and checks one explicit durable video-script draft without polling the snapshot", async () => {
     const videoScriptDraft = {
       id: "video_script_1",
+      scriptFormat: "full-script-v2" as const,
       projectId: "project_1",
+      workflowId: "workflow_h3",
+      workflowRevisionId: "workflowrev_h3",
+      workflowName: "MiniMax H3",
+      workflowVersion: 1,
+      promptProfile: {
+        id: "minimax-h3-i2v-motion/1.0" as const,
+        label: "MiniMax H3 I2VA motion direction",
+        targetModel: "MiniMax H3",
+        outputFormat: "minimax-h3-timeline" as const,
+        minimumWords: 60,
+        maximumWords: 180,
+      },
+      inputMode: "image-to-video" as const,
+      source: { id: "media_1", source: "upload" as const, kind: "image" as const, name: "Reference image" },
       status: "waiting-for-runner",
       progress: 0,
       mode: "build",
@@ -159,6 +174,8 @@ describe("HTTP adapter request budget", () => {
       videoDurationSeconds: 10,
       generatedScript: null,
       currentScript: null,
+      generatedSpokenText: null,
+      currentSpokenText: null,
       editRevision: 0,
       provider: "local-comfyui",
       model: null,
@@ -179,7 +196,12 @@ describe("HTTP adapter request budget", () => {
     const adapter = createHttpAdapter();
 
     await adapter.createVideoScriptDraft({
+      scriptFormat: "full-script-v2",
       projectId: "project_1",
+      workflowId: "workflow_h3",
+      workflowRevisionId: "workflowrev_h3",
+      inputMode: "image-to-video",
+      sourceId: "media_1",
       mode: "build",
       seedPhrases: videoScriptDraft.seedPhrases,
       sceneDirection: videoScriptDraft.sceneDirection,
@@ -187,7 +209,8 @@ describe("HTTP adapter request budget", () => {
       idempotencyKey: "video_script_once_1",
     });
     await adapter.getVideoScriptDraft(videoScriptDraft.id);
-    await adapter.updateVideoScriptDraft(videoScriptDraft.id, { currentScript: "I thought the stars were silent until you opened.", expectedRevision: 0 });
+    const editedScript = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\nSHOT 1 (0.00s–10.00s): The astronaut moves through the moonlit station as the camera tracks close, then settles on the flower opening into blue light. The room and distant windows remain visible in soft shadow.\nAudio: A low electrical hum, measured footsteps, and a delicate crystalline bloom tone.";
+    await adapter.updateVideoScriptDraft(videoScriptDraft.id, { scriptFormat: "full-script-v2", currentScript: editedScript, currentSpokenText: null, expectedRevision: 0 });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
@@ -197,6 +220,11 @@ describe("HTTP adapter request budget", () => {
     ]);
     expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      scriptFormat: "full-script-v2",
+      workflowId: "workflow_h3",
+      workflowRevisionId: "workflowrev_h3",
+      inputMode: "image-to-video",
+      sourceId: "media_1",
       mode: "build",
       seedPhrases: videoScriptDraft.seedPhrases,
       sceneDirection: videoScriptDraft.sceneDirection,
@@ -205,7 +233,9 @@ describe("HTTP adapter request budget", () => {
     expect(fetchMock.mock.calls[1][1]?.method).toBeUndefined();
     expect(fetchMock.mock.calls[2][1]?.method).toBe("PATCH");
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
-      currentScript: "I thought the stars were silent until you opened.",
+      scriptFormat: "full-script-v2",
+      currentScript: editedScript,
+      currentSpokenText: null,
       expectedRevision: 0,
     });
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/snapshot"))).toBe(false);

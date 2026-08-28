@@ -35,7 +35,12 @@ describe("development adapter", () => {
       provider: "local runner required",
     });
     await expect(adapter.createVideoScriptDraft({
+      scriptFormat: "full-script-v2",
       projectId: "project_1",
+      workflowId: "workflow_1",
+      workflowRevisionId: "revision_1",
+      inputMode: "text-to-video",
+      sourceId: null,
       mode: "build",
       seedPhrases: ["tired astronaut", "living blue flower"],
       sceneDirection: "The astronaut kneels while the flower opens.",
@@ -44,7 +49,9 @@ describe("development adapter", () => {
     })).rejects.toThrow("video_script_builder_requires_local_runner");
     await expect(adapter.getVideoScriptDraft("video_script_1")).rejects.toThrow("video_script_builder_requires_local_runner");
     await expect(adapter.updateVideoScriptDraft("video_script_1", {
-      currentScript: "I thought the stars were silent until you opened.",
+      scriptFormat: "full-script-v2",
+      currentScript: "The camera tracks the astronaut through the moonlit station while a low electrical hum grows, then settles on the opening flower as its blue glow fills the quiet room.",
+      currentSpokenText: null,
       expectedRevision: 0,
     })).rejects.toThrow("video_script_builder_requires_local_runner");
   });

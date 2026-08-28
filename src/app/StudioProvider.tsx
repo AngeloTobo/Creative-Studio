@@ -156,9 +156,11 @@ function message(error: unknown) {
   if (error.message === "video_speech_prompt_mismatch" || error.message === "invalid_video_speech_stamp") return "The saved speech control no longer matches the exact video prompt. Choose the speech setting again and retry.";
   if (error.message === "prompt_enhancement_requires_local_runner" || error.message === "prompt_enhancement_runner_unavailable") return "Start the Local Runner and ComfyUI to enhance this prompt with Gemma 4. Your prompt is unchanged.";
   if (error.message === "prompt_enhancement_source_too_short") return "Add a little more motion direction before asking Gemma to enhance it.";
-  if (error.message === "video_script_builder_requires_local_runner" || error.message === "video_script_runner_unavailable") return "Start the Local Runner and ComfyUI to build this script with Gemma 4. Your words are unchanged.";
-  if (error.message === "video_script_context_mismatch") return "This assisted script was made for a different project or video length. Build it again for the current setup.";
+  if (error.message === "video_script_builder_requires_local_runner" || error.message === "video_script_runner_unavailable") return "Start Local Runner 1.12 and ComfyUI to write a full scene with Gemma 4. Your direction is unchanged.";
+  if (error.message === "video_script_context_mismatch") return "This full script was made for a different model, source, project, or video length. Write it again for the current setup.";
   if (error.message === "video_script_word_budget_exceeded" || error.message === "video_speech_too_long_for_duration") return "The spoken words are too long for this video length. Shorten them or choose a longer video.";
+  if (error.message === "video_full_script_incomplete" || error.message === "video_full_script_word_budget_invalid") return "Gemma returned a partial scene instead of a complete duration-matched script. Try again; your direction is unchanged.";
+  if (error.message === "video_script_unrequested_dialogue") return "Gemma added dialogue you did not request, so the draft was rejected. Try again or supply the exact line you want.";
   if (error.message === "video_script_combined_prompt_too_long") return "The motion direction and spoken script are too long together. Shorten one before generating.";
   if (error.message === "video_script_stage_direction_invalid") return "Use spoken words only. Remove speaker labels, brackets, and stage directions.";
   if (error.message === "video_script_version_conflict") return "This script changed in another view. Review the latest draft and try again.";

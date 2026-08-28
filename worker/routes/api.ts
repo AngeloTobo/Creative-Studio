@@ -352,7 +352,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable image workflow is required; no development media is generated.", checkedAt },
       { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable video workflow is required and runs on this machine.", checkedAt },
       { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: promptEnhancementAvailable ? "Gemma 4 can inspect the selected first frame and compile an editable, model-specific video direction." : "Start Local Runner 1.10 or newer with Gemma 4 available.", checkedAt },
-      { key: "script-builder", label: "Video Script Builder", state: videoScriptAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: videoScriptAvailable ? "Build or tighten editable spoken dialogue on this machine." : "Start Local Runner 1.11 or newer with Gemma 4 available.", checkedAt },
+      { key: "script-builder", label: "Full Video Script", state: videoScriptAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: videoScriptAvailable ? "Turn one idea into an editable model-specific scene with action, camera, sound, and optional dialogue." : "Start Local Runner 1.12 or newer with Gemma 4 available.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends music generation to AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends image generation to AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Local Creative Studio D1", detail: "Review decisions are explicit, append-only, and local.", checkedAt },
@@ -372,7 +372,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "video-generation", label: "Video generation", state: "unavailable", provider: "local runner required", detail: "Video workflow execution requires a paired Local Runner.", checkedAt },
       { key: "prompt-enhancement", label: "Video prompt enhancement", state: "unavailable", provider: "local runner required", detail: "Real prompt enhancement is never simulated by the development adapter.", checkedAt },
-      { key: "script-builder", label: "Video Script Builder", state: "unavailable", provider: "local runner required", detail: "Real script writing is never simulated by the development adapter.", checkedAt },
+      { key: "script-builder", label: "Full Video Script", state: "unavailable", provider: "local runner required", detail: "Real full-scene writing is never simulated by the development adapter.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -403,7 +403,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ComfyUI", detail: runnerAvailable ? "Imported API-format image workflows execute on the paired machine." : "Image jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local Runner + ComfyUI", detail: runnerAvailable ? "Versioned API-format video workflows can execute on the paired machine." : "Video jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: promptEnhancementAvailable ? "Gemma 4 can inspect a selected image or extension frame and return an editable prompt compiled for the selected video model." : "Prompt requests stay durable until Local Runner 1.10 or newer is online.", checkedAt },
-    { key: "script-builder", label: "Video Script Builder", state: videoScriptAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: videoScriptAvailable ? "Gemma 4 can turn seed phrases into dialogue or tighten an existing script without replacing it automatically." : "Script drafts stay durable until Local Runner 1.11 or newer is online.", checkedAt },
+    { key: "script-builder", label: "Full Video Script", state: videoScriptAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: videoScriptAvailable ? "Gemma 4 expands even one seed into an owner-reviewed, model-specific full scene with optional exact dialogue." : "Full-script drafts stay durable until Local Runner 1.12 or newer is online.", checkedAt },
     { key: "afdfw-music-generation", label: "AFDFW music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "Optional remote route through the exact allowlisted AFDFW music capability; it is never selected automatically.", checkedAt },
     { key: "afdfw-image-generation", label: "AFDFW image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "Optional remote route through the exact allowlisted AFDFW image capability; it is never selected automatically.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -948,6 +948,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             .some(([parameterId]) => mediaParameters.some((parameter) => parameter.id === parameterId && parameter.mediaKind === "image"))
             ? "image-to-video" as const : "text-to-video" as const;
         const promptEnhancementProfile = videoWorkflowPromptProfile(plan.workflow, promptEnhancementInputMode);
+        const promptEnhancementSourceId = promptEnhancementInputMode === "text-to-video"
+          ? null
+          : videoOperation?.sourceId ?? resolvedInputs.find(({ parameter }) => parameter.mediaKind === "image")?.input?.id ?? null;
         const promptEnhancement = input.promptEnhancement ? await videoPromptEnhancementStampForJob(env, session.userId, {
           ...input.promptEnhancement,
           projectId: input.projectId,
@@ -956,12 +959,34 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           promptProfileId: promptEnhancementProfile.id,
           promptOutputFormat: promptEnhancementProfile.outputFormat,
         }) : undefined;
-        const videoScript = input.videoScript ? await videoScriptStampForJob(env, session.userId, {
-          ...input.videoScript,
-          projectId: input.projectId,
-          videoDurationSeconds: videoDurationSeconds!,
-          videoSpeech: videoSpeech!,
-        }) : undefined;
+        const videoScript = input.videoScript
+          ? input.videoScript.scriptFormat === "full-script-v2"
+            ? await videoScriptStampForJob(env, session.userId, {
+              ...input.videoScript,
+              projectId: input.projectId,
+              videoDurationSeconds: videoDurationSeconds!,
+              videoSpeech: videoSpeech!,
+              workflowId: plan.workflow.id,
+              workflowRevisionId: plan.workflow.currentRevision.id,
+              promptProfileId: promptEnhancementProfile.id,
+              promptOutputFormat: promptEnhancementProfile.outputFormat,
+              inputMode: promptEnhancementInputMode,
+              sourceId: promptEnhancementSourceId,
+              jobPrompt: prompt,
+              videoVariant: videoVariant ?? null,
+              promptEnhancementRequestId: promptEnhancement?.requestId ?? null,
+              evolution: input.evolution ? {
+                studyId: boundedText(input.evolution.studyId, 120),
+                role: input.evolution.role,
+              } : null,
+            })
+            : await videoScriptStampForJob(env, session.userId, {
+              ...input.videoScript,
+              projectId: input.projectId,
+              videoDurationSeconds: videoDurationSeconds!,
+              videoSpeech: videoSpeech!,
+            })
+          : undefined;
         const continuity = input.continuity
           ? await generationContinuityStamp(env, session.userId, input.projectId, modality, input.continuity, prompt)
           : undefined;

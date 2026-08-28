@@ -37,17 +37,18 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, versioned Worlds/entities/rules/references, append-only canon promotions, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only review decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
-- Local Runner 1.11 owns browser-independent execution of API-format ComfyUI workflows, CreativeDNA evidence synthesis, prompt enhancement, and video-script drafting. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
+- Local Runner 1.12 owns browser-independent execution of API-format ComfyUI workflows, CreativeDNA evidence synthesis, prompt enhancement, and full-video-script writing. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
 - In local-first mode the runner and browser call only the localhost BFF; two-second UI refresh and five-second runner claims therefore consume no Cloudflare allowance. The remote build fails closed to the one-minute polling floor.
 
-## Video Script Builder
+## Full Video Script
 
 1. Exact dialogue remains directly editable in Create and does not require Gemma or a runner.
-2. **Help me write** can submit either owner-authored seed phrases or an existing script plus the current scene direction and video length. The request is project/owner scoped, idempotent, and durable in D1.
-3. Local Runner 1.11 claims that request under the same renewable lease boundary as other local work and runs a text-only Gemma 4 ComfyUI graph. The output must be one strict JSON object containing spoken words only and must fit the selected 5, 10, 15, 30, or 60 second word budget.
-4. Completion produces an editable proposal; it never replaces the owner's current words. **Use this script** is the explicit approval action, and every later edit creates a compare-and-swap revision.
-5. Generation reloads the completed owner-scoped draft, requires the exact current text and revision to match Exact script speech, and stamps the seed/source text, generated proposal, applied text, edit revision, model, and ComfyUI prompt ID on each output. A multi-output or evolution request reuses the same reviewed script lineage across all branches.
-6. The development adapter reports Script Builder unavailable and never creates a simulated Gemma draft. The feature adds no AFDFW route, generic proxy, cron, or Queue producer.
+2. **Write full script** submits one or more owner seed phrases—or the current direction for polishing—together with the exact video model revision, prompt profile, source/input mode, and duration. Migration `0019_full_video_scripts.sql` preserves every v1 dialogue draft and adds the v2 context, separate generated/current dialogue, and source provenance fields.
+3. Local Runner 1.12 claims `full-script-v2` under the existing renewable lease and runs Gemma 4 through the existing multimodal ComfyUI graph. Text-to-video removes media inputs; image-to-video materializes the exact owned source image, and video extension extracts its owned source's final frame before Gemma writes. One phrase must expand into a strict three-field JSON result: a complete model-specific visual/action/camera/environment/light/ending/nonverbal-sound direction plus separate optional `spokenText`. A one-line paraphrase is invalid.
+4. MiniMax H3 receives a duration-bounded SHOT/Audio timeline and exact first-frame rule when a source exists. LTX 2.5 and generic video models receive chronological natural-language direction. Generated dialogue is forbidden unless the owner's evidence asks for speech, and dialogue is never embedded in the visual script because deterministic speech compilation inserts it later.
+5. Completion produces one editable full-script field and one optional exact-dialogue field. Neither changes Create until **Use full script** is chosen; each later owner edit uses a compare-and-swap revision. Blank dialogue selects No dialogue while retaining sound and ambience.
+6. Generation reloads the owner-scoped draft and verifies its current prompt, optional dialogue, revision, workflow/profile/input/source context, and compiled speech policy. Every output stamps the generated and applied scene, separate dialogue, builder and generation workflow revisions, source provenance and materialization, exact derived job prompt, derivation proof, model, and ComfyUI prompt ID. Multi-output variants keep both the common reviewed script and their distinct final prompts; arbitrary unrelated prompts cannot claim the reviewed script lineage.
+7. Legacy `dialogue-v1` rows remain runnable on Local Runner 1.11; only Runner 1.12 can claim v2. The development adapter reports the feature unavailable and never fabricates a Gemma scene. No AFDFW route, generic proxy, cron, or Queue producer was added.
 
 ## CreativeDNA vertical slice
 

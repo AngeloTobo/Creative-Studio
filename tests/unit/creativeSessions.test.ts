@@ -105,6 +105,8 @@ describe("Creative Sessions browser persistence", () => {
       graphicalSettings: {
         lyrics: "L".repeat(9_000),
         originalVideoDirection: "V".repeat(5_000),
+        videoScriptProposal: "S".repeat(5_000),
+        videoScriptProposalDirty: true,
         modelNote: "N".repeat(3_000),
       },
     }, {
@@ -115,6 +117,8 @@ describe("Creative Sessions browser persistence", () => {
 
     expect(saved?.graphicalSettings.lyrics).toBe("L".repeat(8_000));
     expect(saved?.graphicalSettings.originalVideoDirection).toBe("V".repeat(4_000));
+    expect(saved?.graphicalSettings.videoScriptProposal).toBe("S".repeat(4_000));
+    expect(saved?.graphicalSettings.videoScriptProposalDirty).toBe(true);
     expect(saved?.graphicalSettings.modelNote).toBe("N".repeat(2_000));
     expect(loadCreativeSession("session_long_lyrics", { storage })?.graphicalSettings).toEqual(saved?.graphicalSettings);
   });

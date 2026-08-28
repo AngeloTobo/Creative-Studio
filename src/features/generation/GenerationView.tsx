@@ -87,6 +87,8 @@ import {
 } from "./generationGoals";
 import type { VideoCreateEntryMode } from "./createEntry";
 import { VideoScriptBuilderSheet } from "./VideoScriptBuilderSheet";
+import { resolveCompletedVideoScriptEditor, restoredVideoScriptEditorIsDirty } from "./videoScriptEditorState";
+import { videoScriptErrorMessage } from "./videoScriptErrorMessage";
 import "./GenerationView.css";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
@@ -186,15 +188,6 @@ function videoScriptSeedPhrases(value: string) {
     .filter(Boolean)
     .filter((phrase, index, phrases) => phrases.indexOf(phrase) === index)
     .slice(0, 20);
-}
-
-function videoScriptErrorMessage(error: unknown) {
-  const code = error instanceof Error ? error.message : "video_script_request_failed";
-  if (code === "video_script_word_budget_exceeded") return "This is too long for the selected video length. Shorten it or choose a longer video.";
-  if (code === "video_script_stage_direction_invalid") return "Keep only words the subject should say; remove speaker labels and stage directions.";
-  if (code === "video_script_version_conflict") return "This script changed in another view. Review the newest draft and try again.";
-  if (code === "continuity_commercial_identity_in_prompt") return "Remove named commercial references; describe only the traits you want to preserve.";
-  return code.replaceAll("_", " ");
 }
 
 function durationRange(lowMs: number, highMs: number) {
@@ -312,6 +305,8 @@ export function GenerationView({
   const [videoScriptBuilderOpen, setVideoScriptBuilderOpen] = useState(false);
   const [videoScriptSeedIdeas, setVideoScriptSeedIdeas] = useState("");
   const [videoScriptProposal, setVideoScriptProposal] = useState("");
+  const [videoScriptProposalSpokenText, setVideoScriptProposalSpokenText] = useState("");
+  const [videoScriptProposalDirty, setVideoScriptProposalDirty] = useState(false);
   const [videoScriptDraftId, setVideoScriptDraftId] = useState("");
   const [appliedVideoScriptDraftId, setAppliedVideoScriptDraftId] = useState("");
   const [appliedVideoScriptRevision, setAppliedVideoScriptRevision] = useState<number | null>(null);
@@ -389,6 +384,8 @@ export function GenerationView({
       setVideoScriptBuilderOpen(false);
       setVideoScriptSeedIdeas("");
       setVideoScriptProposal("");
+      setVideoScriptProposalSpokenText("");
+      setVideoScriptProposalDirty(false);
       setVideoScriptDraftId("");
       setAppliedVideoScriptDraftId("");
       setAppliedVideoScriptRevision(null);
@@ -475,9 +472,17 @@ export function GenerationView({
           ? settings.videoSpeechMode
           : "no-speech");
         setVideoSpeechText(typeof settings.videoSpeechText === "string" ? settings.videoSpeechText : "");
+        const restoredVideoScriptDraftId = typeof settings.videoScriptDraftId === "string" ? settings.videoScriptDraftId : "";
+        const restoredVideoScriptProposal = typeof settings.videoScriptProposal === "string" ? settings.videoScriptProposal : "";
         setVideoScriptSeedIdeas(typeof settings.videoScriptSeedIdeas === "string" ? settings.videoScriptSeedIdeas : "");
-        setVideoScriptProposal(typeof settings.videoScriptProposal === "string" ? settings.videoScriptProposal : "");
-        setVideoScriptDraftId(typeof settings.videoScriptDraftId === "string" ? settings.videoScriptDraftId : "");
+        setVideoScriptProposal(restoredVideoScriptProposal);
+        setVideoScriptProposalSpokenText(typeof settings.videoScriptProposalSpokenText === "string" ? settings.videoScriptProposalSpokenText : "");
+        setVideoScriptProposalDirty(restoredVideoScriptEditorIsDirty(
+          settings.videoScriptProposalDirty,
+          restoredVideoScriptDraftId,
+          restoredVideoScriptProposal,
+        ));
+        setVideoScriptDraftId(restoredVideoScriptDraftId);
         setAppliedVideoScriptDraftId(typeof settings.appliedVideoScriptDraftId === "string" ? settings.appliedVideoScriptDraftId : "");
         setAppliedVideoScriptRevision(typeof settings.appliedVideoScriptRevision === "number" && Number.isInteger(settings.appliedVideoScriptRevision)
           ? settings.appliedVideoScriptRevision : null);
@@ -758,6 +763,7 @@ export function GenerationView({
   const promptEnhancementAvailable = promptEnhancementCapability?.state === "available";
   const videoScriptCapability = snapshot?.capabilities.find((capability) => capability.key === "script-builder") ?? null;
   const activeVideoScriptDraft = snapshot?.videoScriptDrafts?.find((draft) => draft.id === videoScriptDraftId) ?? null;
+  const activeFullVideoScriptDraft = activeVideoScriptDraft?.scriptFormat === "full-script-v2" ? activeVideoScriptDraft : null;
   const appliedVideoScriptDraft = snapshot?.videoScriptDrafts?.find((draft) => draft.id === appliedVideoScriptDraftId) ?? null;
   const videoScriptPending = Boolean(videoScriptDraftId && (!activeVideoScriptDraft
     || activeVideoScriptDraft.status === "waiting-for-runner"
@@ -809,7 +815,14 @@ export function GenerationView({
   const appliedVideoScriptMatchesContext = Boolean(appliedVideoScriptDraft
     && appliedVideoScriptDraft.status === "completed"
     && appliedVideoScriptDraft.projectId === activeProjectId
-    && appliedVideoScriptDraft.videoDurationSeconds === videoDurationSeconds);
+    && appliedVideoScriptDraft.videoDurationSeconds === videoDurationSeconds
+    && (appliedVideoScriptDraft.scriptFormat === "dialogue-v1" || (workflow
+      && videoPromptProfile
+      && appliedVideoScriptDraft.workflowId === workflow.id
+      && appliedVideoScriptDraft.promptProfile.id === videoPromptProfile.id
+      && appliedVideoScriptDraft.promptProfile.outputFormat === videoPromptProfile.outputFormat
+      && appliedVideoScriptDraft.inputMode === promptEnhancementInputMode
+      && (appliedVideoScriptDraft.source?.id ?? null) === promptEnhancementSourceId)));
   const fourWayBoardRequested = generationIntent === "video" && !evolutionEnabled && outputCount === 4;
   const fourWayEnhancementReady = Boolean(fourWayBoardRequested
     && appliedPromptEnhancementMatchesContext
@@ -901,10 +914,22 @@ export function GenerationView({
     if (handledVideoScriptDraftId.current === activeVideoScriptDraft.id) return;
     handledVideoScriptDraftId.current = activeVideoScriptDraft.id;
     const timer = window.setTimeout(() => {
-      setVideoScriptProposal(activeVideoScriptDraft.currentScript ?? "");
+      if (activeVideoScriptDraft.scriptFormat === "full-script-v2") {
+        const editor = resolveCompletedVideoScriptEditor({
+          proposal: videoScriptProposal,
+          spokenText: videoScriptProposalSpokenText,
+        }, activeVideoScriptDraft, videoScriptProposalDirty);
+        setVideoScriptProposal(editor.proposal);
+        setVideoScriptProposalSpokenText(editor.spokenText);
+      } else {
+        setVideoScriptProposal("");
+        setVideoScriptProposalSpokenText("");
+        setVideoScriptProposalDirty(false);
+        setVideoScriptError("This saved draft used the older dialogue-only builder. Write a new full video script from your idea.");
+      }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeVideoScriptDraft]);
+  }, [activeVideoScriptDraft, videoScriptProposal, videoScriptProposalDirty, videoScriptProposalSpokenText]);
 
   useEffect(() => {
     if (!activePromptEnhancement || activePromptEnhancement.status !== "completed" || !activePromptEnhancement.enhancedPrompt) return;
@@ -985,6 +1010,8 @@ export function GenerationView({
     videoSpeechText,
     videoScriptSeedIdeas,
     videoScriptProposal,
+    videoScriptProposalSpokenText,
+    videoScriptProposalDirty,
     videoScriptDraftId,
     appliedVideoScriptDraftId,
     appliedVideoScriptRevision,
@@ -1048,6 +1075,8 @@ export function GenerationView({
         videoSpeechText,
         videoScriptSeedIdeas,
         videoScriptProposal,
+        videoScriptProposalSpokenText,
+        videoScriptProposalDirty,
         videoScriptDraftId: videoScriptDraftId || null,
         appliedVideoScriptDraftId: appliedVideoScriptDraftId || null,
         appliedVideoScriptRevision,
@@ -1087,7 +1116,7 @@ export function GenerationView({
         if (saved.id !== sessionId) setSessionId(saved.id);
       }
     };
-  }, [activeProjectId, appliedPromptEnhancementId, appliedVideoScriptDraftId, appliedVideoScriptRevision, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, videoScriptDraftId, videoScriptProposal, videoScriptSeedIdeas, videoSpeechMode, videoSpeechText, workflowId, workflowValues, worldContinuityEnabled]);
+  }, [activeProjectId, appliedPromptEnhancementId, appliedVideoScriptDraftId, appliedVideoScriptRevision, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, videoScriptDraftId, videoScriptProposal, videoScriptProposalDirty, videoScriptProposalSpokenText, videoScriptSeedIdeas, videoSpeechMode, videoSpeechText, workflowId, workflowValues, worldContinuityEnabled]);
 
   useEffect(() => {
     if (sessionCompletionVersion !== sessionCompletionBaselineRef.current) {
@@ -1197,6 +1226,8 @@ export function GenerationView({
       setVideoScriptBuilderOpen(false);
       setVideoScriptSeedIdeas("");
       setVideoScriptProposal("");
+      setVideoScriptProposalSpokenText("");
+      setVideoScriptProposalDirty(false);
       setVideoScriptDraftId("");
       setAppliedVideoScriptDraftId("");
       setAppliedVideoScriptRevision(null);
@@ -1237,7 +1268,10 @@ export function GenerationView({
   };
 
   const chooseWorkflow = (id: string) => {
-    if (id !== workflow?.id) clearVideoPromptEnhancement();
+    if (id !== workflow?.id) {
+      clearVideoPromptEnhancement();
+      detachAssistedVideoScript();
+    }
     setWorkflowId(id);
     setWorkflowRestoreBlocked("");
     setInputBindings({});
@@ -1301,6 +1335,10 @@ export function GenerationView({
     if (videoScriptPending || !videoScriptAvailable) return;
     setVideoScriptError("");
     setLocalError("");
+    if (!workflow || !videoPromptProfile) {
+      setVideoScriptError("Choose a video model first so Gemma can write the script in the format that model understands.");
+      return;
+    }
     if (direction.trim().length > 4_000) {
       setVideoScriptError("Shorten the scene direction before using Script Builder. Your current prompt is unchanged.");
       return;
@@ -1313,18 +1351,28 @@ export function GenerationView({
             throw new Error("Add shorter seed phrases, separated by commas or new lines.");
           }
           return createVideoScriptDraft({
+            scriptFormat: "full-script-v2",
             mode: "build",
             seedPhrases,
+            workflowId: workflow.id,
+            workflowRevisionId: workflow.currentRevision.id,
+            inputMode: promptEnhancementInputMode,
+            sourceId: promptEnhancementSourceId,
             sceneDirection: direction.trim(),
             videoDurationSeconds,
           });
         })()
         : await (() => {
-          const sourceScript = videoSpeechText.trim();
-          if (sourceScript.length < 2) throw new Error("Write a script first, then ask Gemma to tighten it.");
+          const sourceScript = direction.trim();
+          if (sourceScript.length < 2) throw new Error("Write a video direction first, then ask Gemma to polish it.");
           return createVideoScriptDraft({
+            scriptFormat: "full-script-v2",
             mode: "tighten",
             sourceScript,
+            workflowId: workflow.id,
+            workflowRevisionId: workflow.currentRevision.id,
+            inputMode: promptEnhancementInputMode,
+            sourceId: promptEnhancementSourceId,
             sceneDirection: direction.trim(),
             videoDurationSeconds,
           });
@@ -1332,6 +1380,8 @@ export function GenerationView({
       handledVideoScriptDraftId.current = "";
       setVideoScriptDraftId(request.id);
       setVideoScriptProposal("");
+      setVideoScriptProposalSpokenText("");
+      setVideoScriptProposalDirty(false);
       setVideoScriptBuilderOpen(true);
       setNotice("");
     } catch (requestError) {
@@ -1340,62 +1390,116 @@ export function GenerationView({
   };
 
   const applyVideoScriptProposal = async () => {
-    if (!activeVideoScriptDraft || activeVideoScriptDraft.status !== "completed") return;
-    const proposal = videoScriptProposal.replace(/\s+/g, " ").trim();
-    const wordCount = proposal ? proposal.split(/\s+/).length : 0;
-    if (!proposal || wordCount > videoSpeechWordBudget.maximum) {
-      setVideoScriptError(`${wordCount || "This script"} ${wordCount === 1 ? "word is" : "words are"} too long for ${videoDurationSeconds} seconds. Keep it under ${videoSpeechWordBudget.maximum} words.`);
+    if (!activeFullVideoScriptDraft || activeFullVideoScriptDraft.status !== "completed") return;
+    const proposal = videoScriptProposal.replace(/\r\n?/g, "\n").trim();
+    const spokenText = videoScriptProposalSpokenText.replace(/\s+/g, " ").trim();
+    const spokenWordCount = spokenText ? spokenText.split(/\s+/).length : 0;
+    if (proposal.length < 20 || proposal.length > 4_000) {
+      setVideoScriptError("Keep the full video script between 20 and 4,000 characters.");
+      return;
+    }
+    if (spokenWordCount > videoSpeechWordBudget.maximum) {
+      setVideoScriptError(`Dialogue is too long for ${videoDurationSeconds} seconds. Keep it under ${videoSpeechWordBudget.maximum} spoken words.`);
       return;
     }
     setVideoScriptError("");
     try {
-      const saved = proposal === activeVideoScriptDraft.currentScript
-        ? activeVideoScriptDraft
-        : await updateVideoScriptDraft(activeVideoScriptDraft.id, {
+      const currentSpokenText = spokenText || null;
+      const saved = proposal === activeFullVideoScriptDraft.currentScript
+        && currentSpokenText === activeFullVideoScriptDraft.currentSpokenText
+        ? activeFullVideoScriptDraft
+        : await updateVideoScriptDraft(activeFullVideoScriptDraft.id, {
+          scriptFormat: "full-script-v2",
           currentScript: proposal,
-          expectedRevision: activeVideoScriptDraft.editRevision,
+          currentSpokenText,
+          expectedRevision: activeFullVideoScriptDraft.editRevision,
         });
+      if (saved.scriptFormat !== "full-script-v2") throw new Error("video_script_context_mismatch");
       setVideoScriptProposal(saved.currentScript ?? proposal);
-      setVideoSpeechMode("exact-script");
-      setVideoSpeechText(saved.currentScript ?? proposal);
+      const savedSpokenText = saved.currentSpokenText;
+      setVideoScriptProposalSpokenText(savedSpokenText ?? "");
+      setVideoScriptProposalDirty(false);
+      clearVideoPromptEnhancement();
+      setDirection(saved.currentScript ?? proposal);
+      setVideoSpeechMode(savedSpokenText ? "exact-script" : "no-speech");
+      setVideoSpeechText(savedSpokenText ?? "");
       setAppliedVideoScriptDraftId(saved.id);
       setAppliedVideoScriptRevision(saved.editRevision);
       setVideoScriptBuilderOpen(false);
-      setNotice(saved.currentScript === saved.generatedScript
-        ? "Local Gemma script applied exactly. You can still edit it before generating."
-        : "Your edited Gemma draft is applied and its revision will be retained with every result.");
+      setNotice(saved.currentScript === saved.generatedScript && savedSpokenText === saved.generatedSpokenText
+        ? `Full video script applied${savedSpokenText ? ` · ${spokenWordCount} spoken words` : " · no dialogue"}. You can still edit it before generating.`
+        : "Your edited full script is applied. Its scene, sound, dialogue choice, and revision will be retained with every result.");
     } catch (updateError) {
       setVideoScriptError(videoScriptErrorMessage(updateError));
     }
   };
 
   const prepareVideoScriptUse = async (): Promise<VideoScriptUse | undefined> => {
-    if (!appliedVideoScriptDraftId || videoSpeechMode !== "exact-script") return undefined;
+    if (!appliedVideoScriptDraftId) return undefined;
     let draft = appliedVideoScriptDraft ?? await getVideoScriptDraft(appliedVideoScriptDraftId);
     if (draft.status !== "completed" || draft.projectId !== activeProjectId
       || draft.videoDurationSeconds !== videoDurationSeconds || !draft.currentScript) {
       throw new Error("video_script_context_mismatch");
     }
-    const appliedScript = videoSpeechText.replace(/\s+/g, " ").trim();
-    if (draft.currentScript !== appliedScript) {
+    if (draft.scriptFormat === "dialogue-v1") {
+      if (videoSpeechMode !== "exact-script") return undefined;
+      const appliedScript = videoSpeechText.replace(/\s+/g, " ").trim();
+      if (draft.currentScript !== appliedScript) {
+        draft = await updateVideoScriptDraft(draft.id, {
+          scriptFormat: "dialogue-v1",
+          currentScript: appliedScript,
+          expectedRevision: draft.editRevision,
+        });
+        setVideoScriptProposal(draft.currentScript ?? appliedScript);
+        setVideoScriptProposalDirty(false);
+        setAppliedVideoScriptRevision(draft.editRevision);
+      }
+      return { scriptFormat: "dialogue-v1", requestId: draft.id, appliedScript, editRevision: draft.editRevision };
+    }
+    if (!workflow || !videoPromptProfile || draft.workflowId !== workflow.id
+      || draft.promptProfile.id !== videoPromptProfile.id || draft.promptProfile.outputFormat !== videoPromptProfile.outputFormat
+      || draft.inputMode !== promptEnhancementInputMode || (draft.source?.id ?? null) !== promptEnhancementSourceId
+      || videoSpeechMode === "short-natural-line") {
+      throw new Error("video_script_context_mismatch");
+    }
+    const appliedPrompt = direction.replace(/\r\n?/g, "\n").trim();
+    const appliedSpokenText = videoSpeechMode === "exact-script" ? videoSpeechText.replace(/\s+/g, " ").trim() || null : null;
+    if (draft.currentScript !== appliedPrompt || draft.currentSpokenText !== appliedSpokenText) {
       draft = await updateVideoScriptDraft(draft.id, {
-        currentScript: appliedScript,
+        scriptFormat: "full-script-v2",
+        currentScript: appliedPrompt,
+        currentSpokenText: appliedSpokenText,
         expectedRevision: draft.editRevision,
       });
-      setVideoScriptProposal(draft.currentScript ?? appliedScript);
+      setVideoScriptProposal(draft.currentScript ?? appliedPrompt);
+      setVideoScriptProposalSpokenText(draft.scriptFormat === "full-script-v2" ? draft.currentSpokenText ?? "" : "");
+      setVideoScriptProposalDirty(false);
       setAppliedVideoScriptRevision(draft.editRevision);
     }
-    return { requestId: draft.id, appliedScript, editRevision: draft.editRevision };
+    return {
+      scriptFormat: "full-script-v2",
+      requestId: draft.id,
+      appliedPrompt,
+      appliedSpokenText,
+      editRevision: draft.editRevision,
+    };
   };
 
-  const detachAssistedScriptForDuration = (seconds: VideoDurationSeconds) => {
-    if (seconds === videoDurationSeconds || (!videoScriptDraftId && !appliedVideoScriptDraftId)) return false;
+  const detachAssistedVideoScript = () => {
+    if (!videoScriptDraftId && !appliedVideoScriptDraftId) return false;
     setVideoScriptDraftId("");
+    setVideoScriptProposal("");
+    setVideoScriptProposalSpokenText("");
+    setVideoScriptProposalDirty(false);
     setAppliedVideoScriptDraftId("");
     setAppliedVideoScriptRevision(null);
     handledVideoScriptDraftId.current = "";
     return true;
   };
+
+  const detachAssistedScriptForDuration = (seconds: VideoDurationSeconds) => (
+    seconds !== videoDurationSeconds && detachAssistedVideoScript()
+  );
 
   const applyGenerationRecipe = (recipe: GenerationRecipe) => {
     if (recipe.worldId) {
@@ -1407,6 +1511,7 @@ export function GenerationView({
       setLocalError(`${recipe.name} uses a model that is no longer ready on this machine.`);
       return;
     }
+    const detachedAssistedScript = detachAssistedVideoScript();
     clearVideoPromptEnhancement();
     const promptParameter = primaryWorkflowPromptParameter(recipeWorkflow.currentRevision.parameters, recipeWorkflow.modality);
     const lyricsParameter = musicWorkflowLyricsParameter(recipeWorkflow.currentRevision.parameters, recipeWorkflow.modality);
@@ -1425,15 +1530,12 @@ export function GenerationView({
     setImagePerformanceMode(recipe.intentTier === "master" ? "explicit-custom" : "fast-default");
     if (promptParameter && recipe.parameters[promptParameter.id] !== undefined) setDirection(String(recipe.parameters[promptParameter.id]));
     if (lyricsParameter && recipe.parameters[lyricsParameter.id] !== undefined) setLyrics(String(recipe.parameters[lyricsParameter.id]));
-    const detachedAssistedScript = recipeDuration
-      ? detachAssistedScriptForDuration(recipeDuration as VideoDurationSeconds)
-      : false;
     if (recipeDuration) setVideoDurationSeconds(recipeDuration as VideoDurationSeconds);
     setLocalError("");
     const revisionNotice = recipe.workflowRevisionId === recipeWorkflow.currentRevision.id
       ? ""
       : " Its original immutable model revision is retained, but Create is applying the saved values to the model's current revision; review them before generating.";
-    setNotice(`${recipe.name} loaded · ${recipe.evidenceSummary.runs ? `${recipe.evidenceSummary.runs} proven runs` : "ready for its first evidence run"}.${revisionNotice}${detachedAssistedScript ? " Your current words are kept as a manual script; ask Script Builder again for this length." : ""}`);
+    setNotice(`${recipe.name} loaded · ${recipe.evidenceSummary.runs ? `${recipe.evidenceSummary.runs} proven runs` : "ready for its first evidence run"}.${revisionNotice}${detachedAssistedScript ? " The recipe direction is preserved, and the previous assisted-script lineage was detached; write a new full script for this setup if needed." : ""}`);
   };
 
   const saveCurrentRecipe = async () => {
@@ -1491,7 +1593,7 @@ export function GenerationView({
     setLocalError("");
     if (!workflow || workflowSupportsVideoDuration(workflow, seconds)) {
       setNotice(detachedAssistedScript
-        ? "Video length changed. Your current words are kept as a manual script; ask Script Builder again for a length-matched draft."
+        ? "Video length changed. Your current direction is preserved; write a new full script for this length."
         : "");
       return;
     }
@@ -1512,7 +1614,7 @@ export function GenerationView({
       ? `${profile.label} supports up to ${videoDurationLabel(profile.maxSeconds)}. ${replacement.name} selected for ${videoDurationLabel(seconds)}.`
       : `No ready video model exposes a supported ${videoDurationLabel(seconds)} duration control.`;
     setNotice(detachedAssistedScript
-      ? `${workflowNotice} Your current words are kept as a manual script; ask Script Builder again for this length.`
+      ? `${workflowNotice} Your current direction is preserved; write a new full script for this length.`
       : workflowNotice);
   };
 
@@ -1534,6 +1636,7 @@ export function GenerationView({
         setLocalError("Choose a video to extend.");
         return;
       }
+      if (asset.id !== quickSourceId) detachAssistedVideoScript();
       setQuickSourceId(asset.id);
       setSourceGalleryExpanded(false);
       if (mediaInputRef.current) mediaInputRef.current.value = "";
@@ -1706,7 +1809,10 @@ export function GenerationView({
             modality: generationIntent,
           });
           const branchPrompt = appendContinuity(branchDirection);
-          const compiledSpeech = generationIntent === "video" ? compileVideoSpeech(branchPrompt, videoScriptUse?.appliedScript) : null;
+          const assistedSpokenText = videoScriptUse?.scriptFormat === "dialogue-v1"
+            ? videoScriptUse.appliedScript
+            : videoScriptUse?.appliedSpokenText ?? undefined;
+          const compiledSpeech = generationIntent === "video" ? compileVideoSpeech(branchPrompt, assistedSpokenText) : null;
           const prompt = compiledSpeech?.prompt ?? branchPrompt;
           const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
           const variant = generationIntent === "video"
@@ -1771,7 +1877,10 @@ export function GenerationView({
         let outputWorkflow = runWorkflow;
         for (let index = 0; index < videoOutputs.length; index += 1) {
           const output = videoOutputs[index];
-          const compiledSpeech = compileVideoSpeech(appendContinuity(output.prompt), videoScriptUse?.appliedScript);
+          const assistedSpokenText = videoScriptUse?.scriptFormat === "dialogue-v1"
+            ? videoScriptUse.appliedScript
+            : videoScriptUse?.appliedSpokenText ?? undefined;
+          const compiledSpeech = compileVideoSpeech(appendContinuity(output.prompt), assistedSpokenText);
           const prompt = compiledSpeech.prompt;
           const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
           if (workflowSeedParameters.length && (outputCount === 4 || output.variant.seed !== null)) {
@@ -1861,7 +1970,7 @@ export function GenerationView({
       resumeCreativeSessionAutosave();
       if (queueError instanceof Error && queueError.message.startsWith("video_script")) {
         setLocalError(queueError.message === "video_script_context_mismatch"
-          ? "This assisted script was written for a different video length. Open Script Builder again, or switch to manual words."
+          ? "This full script was written for a different model, source, or video length. Write it again for the current setup."
           : videoScriptErrorMessage(queueError));
       }
       // The provider exposes a normalized visible error.
@@ -2047,22 +2156,32 @@ export function GenerationView({
     : !directionReady ? "Write a motion direction first." : undefined;
   const videoScriptApplied = Boolean(appliedVideoScriptDraftId && appliedVideoScriptDraft);
   const videoScriptContextChanged = videoScriptApplied && !appliedVideoScriptMatchesContext;
+  const appliedFullVideoScriptDraft = appliedVideoScriptDraft?.scriptFormat === "full-script-v2" ? appliedVideoScriptDraft : null;
+  const appliedFullScriptEdited = Boolean(appliedFullVideoScriptDraft && (
+    direction.trim() !== appliedFullVideoScriptDraft.currentScript?.trim()
+    || (videoSpeechMode === "exact-script" ? videoSpeechText.trim() : "") !== (appliedFullVideoScriptDraft.currentSpokenText ?? "")
+    || videoSpeechMode === "short-natural-line"
+  ));
   const videoScriptButtonLabel = videoScriptPending
     ? activeVideoScriptDraft?.status === "running" ? "Writing…" : "Waiting…"
-    : activeVideoScriptDraft?.status === "completed" && appliedVideoScriptDraftId !== activeVideoScriptDraft.id
-      ? "Review draft"
-      : "Help me write";
+    : activeFullVideoScriptDraft?.status === "completed" && appliedVideoScriptDraftId !== activeFullVideoScriptDraft.id
+      ? "Review full script"
+      : "Write full script";
   const videoScriptStatus = videoScriptPending
-    ? "Local Gemma is building a draft"
+    ? "Local Gemma is writing the full scene"
     : activeVideoScriptDraft?.status === "failed"
-      ? "Draft failed · your words are safe"
+      ? "Full script failed · your direction is safe"
       : videoScriptContextChanged
-        ? `Draft was made for ${appliedVideoScriptDraft?.videoDurationSeconds}s`
-        : videoScriptApplied && videoSpeechMode === "exact-script"
-          ? videoSpeechText.trim() === appliedVideoScriptDraft?.currentScript?.trim()
-            ? "Local Gemma draft applied"
-            : "Edited after Local Gemma"
-          : "";
+        ? "Model, source, or length changed · write this script again"
+        : appliedFullVideoScriptDraft
+          ? appliedFullScriptEdited
+            ? "Full script edited after Gemma"
+            : `Full script applied · ${appliedFullVideoScriptDraft.currentSpokenText ? `${appliedFullVideoScriptDraft.currentSpokenText.split(/\s+/).filter(Boolean).length} spoken words` : "no dialogue"}`
+          : videoScriptApplied && videoSpeechMode === "exact-script"
+            ? videoSpeechText.trim() === appliedVideoScriptDraft?.currentScript?.trim()
+              ? "Legacy Gemma dialogue applied"
+              : "Edited after Local Gemma"
+            : "";
 
   return (
     <section className={`generation-section create-surface quick-create${embedded ? " embedded" : " fade-up"}`} id="creative-dna-generation" aria-label="Create with Creative Studio">
@@ -2236,12 +2355,12 @@ export function GenerationView({
               <span className="quick-source-visual"><Icon name="plus" size={22} /></span>
               <span className="quick-source-copy"><strong>{busy ? "Working…" : uploadSourceLabel}</strong><small>{uiOnlyDevelopment ? "Worker required" : "From this device"}</small></span>
             </label>
-            {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); }}>
+            {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { if (quickSourceId) detachAssistedVideoScript(); setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); }}>
               <span className="quick-source-visual"><Icon name="generate" size={22} /></span>
               <span className="quick-source-copy"><strong>No source</strong><small>Start from prompt</small></span>
               {!quickSource ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
             </button> : null}
-            {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); }}>
+            {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { if (source.id !== quickSourceId) detachAssistedVideoScript(); setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); }}>
               <span className={`quick-source-visual ${source.kind}`} style={{ background: `linear-gradient(135deg, ${source.colors[0]}, ${source.colors[1]})` }}><QuickSourceVisual source={source} allowVideoPreview={sourcePickerOpen} /><span className="quick-source-kind"><Icon name={source.kind === "audio" ? "music" : source.kind} size={11} /></span></span>
               <span className="quick-source-copy"><strong>{source.name}</strong><small>{source.source === "upload" ? "Upload" : "Generated"} · {source.kind}</small></span>
               {quickSource?.id === source.id ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
@@ -2251,7 +2370,7 @@ export function GenerationView({
         </section>
           </div>
         </details>
-        {selectedSourceCompatibilityError ? <div className="quick-source-conflict" role="alert"><Icon name="shield" size={16} /><span><strong>{workflow?.name} cannot use {quickSource?.name}.</strong><small>Choose a compatible model or continue without this source. Creative Studio will not silently drop it.</small></span><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { setQuickSourceId(""); setInputBindings({}); setLocalError(""); setNotice("Continuing without a source."); }}>Continue without source</button></div> : null}
+        {selectedSourceCompatibilityError ? <div className="quick-source-conflict" role="alert"><Icon name="shield" size={16} /><span><strong>{workflow?.name} cannot use {quickSource?.name}.</strong><small>Choose a compatible model or continue without this source. Creative Studio will not silently drop it.</small></span><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { detachAssistedVideoScript(); setQuickSourceId(""); setInputBindings({}); setLocalError(""); setNotice("Continuing without a source."); }}>Continue without source</button></div> : null}
 
         {intent === "music" && songPromptRecommendations.length ? <details className="quick-prompt-ideas"><summary><span><Icon name="star" size={14} /><strong>Song prompt ideas</strong></span><small>{songArtDescription ? "Art + CreativeDNA" : "CreativeDNA"} / {songPromptRecommendations.length}</small></summary><section className="quick-song-prompts" aria-label="Recommended song prompts">
           <header><span><Icon name="star" size={15} /><strong>Prompt ideas</strong></span><small>{songArtDescription ? "Uploaded art + CreativeDNA" : "CreativeDNA"}</small></header>
@@ -2309,11 +2428,18 @@ export function GenerationView({
                 ["no-speech", "No dialogue"],
                 ["short-natural-line", "Simple line"],
                 ["exact-script", "Exact script"],
-              ] as const).map(([mode, label]) => <button type="button" key={mode} className={videoSpeechMode === mode ? "on" : ""} aria-pressed={videoSpeechMode === mode} disabled={busy} onClick={() => { setVideoSpeechMode(mode); setLocalError(""); }}>{label}</button>)}
+              ] as const).map(([mode, label]) => <button type="button" key={mode} className={videoSpeechMode === mode ? "on" : ""} aria-pressed={videoSpeechMode === mode} disabled={busy} onClick={() => {
+                if (mode === "short-natural-line" && appliedFullVideoScriptDraft) {
+                  detachAssistedVideoScript();
+                  setNotice("Full scene kept as your direction. Simple line is now manual, so the assisted-script revision was detached.");
+                }
+                setVideoSpeechMode(mode);
+                setLocalError("");
+              }}>{label}</button>)}
             </div>
             <div className="quick-video-speech-compose">
               {videoSpeechMode !== "no-speech" ? <label className={`quick-video-speech-line${!videoSpeechFitsDuration ? " over" : ""}`}><span>{videoSpeechMode === "exact-script" ? "Exact spoken words" : "Spoken-line idea"}</span><input value={videoSpeechText} maxLength={VIDEO_SPEECH_TEXT_MAX_LENGTH} onChange={(event) => { setVideoSpeechText(event.target.value); setLocalError(""); }} placeholder={videoSpeechMode === "exact-script" ? "I remember this place." : "A short idea; Creative Studio removes filler and keeps one sentence."} /><small>{!videoSpeechFitsDuration ? `Shorten to ${videoSpeechWordBudget.maximum} words for ${videoDurationSeconds}s.` : videoSpeechMode === "exact-script" ? "Sent verbatim once. No improvised dialogue." : "Reduced to one clear sentence. No improvised dialogue."}</small></label> : <p className="quick-video-speech-safe">No dialogue. Ambience, effects, sparkling synth arpeggios, buoyant electronic rhythm, wistful hooks, and dreamy nocturnal-city texture stay active.</p>}
-              <button type="button" className="quick-script-help" disabled={busy || videoScriptPending} title={!videoScriptAvailable ? videoScriptCapability?.detail ?? "Start Local Runner 1.11 and ComfyUI for local Gemma." : undefined} onClick={() => { setVideoScriptBuilderOpen(true); setVideoScriptError(""); }}><Icon name="wand" size={14} />{videoScriptButtonLabel}</button>
+              <button type="button" className="quick-script-help" disabled={busy || videoScriptPending} title={!videoScriptAvailable ? videoScriptCapability?.detail ?? "Start Local Runner 1.12 and ComfyUI for local Gemma." : !workflow ? "Choose a video model before writing a full script." : undefined} onClick={() => { setVideoScriptBuilderOpen(true); setVideoScriptError(""); }}><Icon name="wand" size={14} />{videoScriptButtonLabel}</button>
               {videoScriptStatus ? <small className={`quick-script-status${videoScriptContextChanged || activeVideoScriptDraft?.status === "failed" ? " warn" : ""}`} role="status">{videoScriptStatus}</small> : null}
             </div>
           </section> : null}
@@ -2381,15 +2507,18 @@ export function GenerationView({
         duration={videoDurationSeconds}
         seedIdeas={videoScriptSeedIdeas}
         proposal={videoScriptProposal}
+        proposalSpokenText={videoScriptProposalSpokenText}
         ownerScript={videoSpeechText}
-        draft={activeVideoScriptDraft}
-        available={videoScriptAvailable}
-        capabilityDetail={videoScriptCapability?.detail}
+        ownerDirection={direction}
+        draft={activeFullVideoScriptDraft}
+        available={videoScriptAvailable && Boolean(workflow && videoPromptProfile)}
+        capabilityDetail={!workflow ? "Choose a video model first so the full script matches its prompt format." : videoScriptCapability?.detail}
         busy={busy}
         error={videoScriptError || (activeVideoScriptDraft?.error ? videoScriptErrorMessage(new Error(activeVideoScriptDraft.error)) : "")}
         onClose={() => setVideoScriptBuilderOpen(false)}
         onSeedIdeasChange={(value) => { setVideoScriptSeedIdeas(value); setVideoScriptError(""); }}
-        onProposalChange={(value) => { setVideoScriptProposal(value); setVideoScriptError(""); }}
+        onProposalChange={(value) => { setVideoScriptProposal(value); setVideoScriptProposalDirty(true); setVideoScriptError(""); }}
+        onProposalSpokenTextChange={(value) => { setVideoScriptProposalSpokenText(value); setVideoScriptProposalDirty(true); setVideoScriptError(""); }}
         onBuild={() => void requestVideoScriptDraft("build")}
         onTighten={() => void requestVideoScriptDraft("tighten")}
         onUse={() => void applyVideoScriptProposal()}

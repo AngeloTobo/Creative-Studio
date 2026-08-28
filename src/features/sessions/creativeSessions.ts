@@ -105,7 +105,7 @@ function graphicalSettings(value: unknown): CreativeSessionGraphicalSettings {
     if (typeof rawValue === "string") {
       const maximum = key === "lyrics"
         ? MAX_LYRICS_SETTING_CHARACTERS
-        : key === "originalVideoDirection"
+        : key === "originalVideoDirection" || key === "videoScriptProposal"
           ? MAX_VIDEO_PROMPT_SETTING_CHARACTERS
           : MAX_SETTING_STRING_CHARACTERS;
       normalized[key] = rawValue.slice(0, maximum);

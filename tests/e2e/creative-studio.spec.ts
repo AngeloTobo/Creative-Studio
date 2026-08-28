@@ -104,17 +104,18 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await exactScriptInput.fill(originalScript);
   await expect(page.getByText(/Sent verbatim once/)).toBeVisible();
 
-  const helpButton = page.getByRole("button", { name: "Help me write" });
+  const helpButton = page.getByRole("button", { name: "Write full script" });
   await helpButton.click();
-  const scriptBuilder = page.getByRole("dialog", { name: "Script Builder" });
+  const scriptBuilder = page.getByRole("dialog", { name: "Full Video Script" });
   await expect(scriptBuilder).toBeVisible();
-  await expect(scriptBuilder).toContainText("5s target");
-  await expect(scriptBuilder).toContainText(/3.+8 spoken words/);
-  await expect(scriptBuilder.getByRole("alert")).toContainText("Real Gemma script drafting is never simulated");
-  await scriptBuilder.getByRole("textbox", { name: /Seed phrases and ideas/ })
-    .fill("She recognizes the city\nThis body still feels borrowed");
-  await expect(scriptBuilder.getByRole("button", { name: "Build from ideas" })).toBeDisabled();
-  await expect(scriptBuilder.getByRole("button", { name: "Tighten my script" })).toBeDisabled();
+  await expect(scriptBuilder).toContainText("5s full scene");
+  await expect(scriptBuilder).toContainText("dialogue optional");
+  await expect(scriptBuilder.getByRole("alert")).toContainText("Choose a video model first");
+  await scriptBuilder.getByRole("textbox", { name: /What should happen/ })
+    .fill("They are posing for a fashion shoot");
+  await expect(scriptBuilder).toContainText("action, camera, atmosphere, ending, and sound");
+  await expect(scriptBuilder.getByRole("button", { name: "Write full video script" })).toBeDisabled();
+  await expect(scriptBuilder.getByRole("button", { name: "Polish current direction" })).toBeDisabled();
   const viewport = page.viewportSize();
   const scriptBuilderBounds = await scriptBuilder.boundingBox();
   expect(viewport).not.toBeNull();
