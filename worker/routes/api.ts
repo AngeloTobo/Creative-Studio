@@ -6,6 +6,7 @@ import {
   deriveProductionCockpit,
   generationWorkflowPromptParameters,
   normalizeVideoGenerationVariant,
+  normalizeVideoSpeechStamp,
   type AcceptanceDecision,
   type ArtifactHistoryQuery,
   type Capability,
@@ -778,6 +779,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const videoOperation = requestedVideoOperation(input.videoOperation, modality);
       const videoVariant = input.videoVariant === undefined ? undefined : normalizeVideoGenerationVariant(input.videoVariant);
       if (videoVariant && modality !== "video") throw new Error("invalid_video_generation_variant");
+      const videoSpeech = input.videoSpeech === undefined ? undefined : normalizeVideoSpeechStamp(input.videoSpeech);
+      if (videoSpeech && modality !== "video") throw new Error("invalid_video_speech");
+      if (modality === "video" && !videoSpeech) throw new Error("video_speech_policy_required");
       if (input.promptEnhancement && modality !== "video") throw new Error("prompt_enhancement_video_workflow_required");
       if (input.performanceMode !== undefined && input.performanceMode !== "fast-default" && input.performanceMode !== "explicit-custom") {
         throw new Error("invalid_image_performance_mode");
@@ -858,6 +862,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           throw new Error("workflow_prompt_bound_to_negative");
         }
         const prompt = workflowPrompt;
+        if (videoSpeech && !prompt.includes(videoSpeech.directive)) throw new Error("video_speech_prompt_mismatch");
         if (input.promptEnhancement && boundedPrompt(input.promptEnhancement.appliedPrompt) !== prompt) {
           throw new Error("prompt_enhancement_applied_prompt_mismatch");
         }
@@ -949,6 +954,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             inputSources,
             inputBindings,
             videoVariant,
+            videoSpeech,
             videoOperation,
             evolution,
             outputBatch: outputBatch ? {

@@ -4,8 +4,10 @@ import type {
   ProductionCockpitDecision,
   ProductionCockpitRun,
 } from "../../../shared/contracts";
+import { videoGenerationVariantLabel } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
+import { videoSpeechLabel, videoSpeechSummary } from "../generation/videoContextPresentation";
 
 export type CockpitViewMode = "dashboard" | "needs-action" | "running" | "history";
 
@@ -183,6 +185,7 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
   const runnerAvailable = cockpit.runners.filter((runner) => runner.state === "online" || runner.state === "busy").length;
   const actionPreviewLimit = embedded ? 5 : 3;
   const shownActions = showAllActions ? actions : actions.slice(0, actionPreviewLimit);
+  const jobsById = new Map((snapshot?.jobs ?? []).map((job) => [job.id, job]));
 
   return <section className={`cockpit-view fade-up${embedded ? " cockpit-embedded" : ""} cockpit-mode-${mode}`} aria-label={embedded ? mode === "running" ? "Running work" : mode === "needs-action" ? "Work needing action" : mode === "history" ? "Run history" : "Production activity" : undefined} aria-labelledby={embedded ? undefined : "cockpit-title"}>
     {!embedded ? <header className="cockpit-head">
@@ -236,9 +239,14 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
         </div>
       </details>
       <div className="cockpit-run-list">
-        {runs.map((run) => <article className={`cockpit-run${focusRunId === run.id ? " cockpit-focus" : ""}`} id={`cockpit-run-${run.id}`} key={run.id}>
+        {runs.map((run) => {
+          const job = jobsById.get(run.id);
+          const videoVariant = job?.settingsStamp.videoVariant ?? null;
+          const videoSpeech = job?.settingsStamp.videoSpeech ?? null;
+          const videoRole = videoVariant ? videoGenerationVariantLabel(videoVariant.role) : null;
+          return <article className={`cockpit-run${focusRunId === run.id ? " cockpit-focus" : ""}`} id={`cockpit-run-${run.id}`} key={run.id}>
           <span className="cockpit-run-kind"><Icon name={iconFor(run)} size={18} /><i className={run.status} /></span>
-          <span className="cockpit-run-primary"><small>{run.projectName} · {timestamp(run.createdAt)}</small><strong>{run.title}</strong><p>{run.detail}</p></span>
+          <span className="cockpit-run-primary"><span className="cockpit-run-context"><small>{run.projectName} · {timestamp(run.createdAt)}</small>{videoRole ? <span className="video-context-chip role">{videoRole}</span> : null}{videoSpeech ? <span className="video-context-chip speech" aria-label={videoSpeechSummary(videoSpeech)} title={videoSpeechSummary(videoSpeech)}>{videoSpeechLabel(videoSpeech)}</span> : null}</span><strong>{run.title}</strong><p>{run.detail}</p></span>
           <strong className={`state-pill ${run.status}`}>{run.status.replaceAll("-", " ")}</strong>
           <div className="cockpit-run-facts">
             <span><small>Stage</small><b>{run.stageLabel}{run.queuePosition ? ` · #${run.queuePosition}` : ""}</b></span>
@@ -255,6 +263,8 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
               <span><small>Workflow</small><b>{run.workflowName ? `${run.workflowName}${run.workflowRevision ? ` v${run.workflowRevision}` : ""}` : "Direct"}</b></span>
               <span><small>CreativeDNA</small><b>{run.dnaName ? `${run.dnaName}${run.dnaVersion ? ` v${run.dnaVersion}` : ""}` : "Not resolved"}</b></span>
               <span><small>Timing</small><b>{run.queueMs === null ? "No queue timing" : `${duration(run.queueMs)} queued`}{run.executionMs === null ? "" : ` · ${duration(run.executionMs)} execution`}</b></span>
+              {videoVariant ? <span><small>Direction</small><b>{videoRole} · {videoVariant.personalStyleWeight}% personal / {videoVariant.randomDnaWeight}% random DNA</b></span> : null}
+              {videoSpeech ? <span className="cockpit-run-detail-wide"><small>Speech</small><b>{videoSpeechSummary(videoSpeech)}</b></span> : null}
               <span className="cockpit-run-detail-wide"><small>Models</small><b>{run.models.length ? run.models.join(" · ") : "No model inventory stamped"}</b></span>
               <span className="cockpit-run-detail-wide"><small>Run ID</small><code>{run.id}</code></span>
               {run.error ? <span className="cockpit-run-error cockpit-run-detail-wide"><small>Failure</small><b>{run.error.replaceAll("_", " ")}</b></span> : null}
@@ -265,7 +275,7 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
               {run.artifactId || run.kind === "training" ? <button className="btn btn-primary" onClick={() => openRun(run)}>{run.artifactId ? "Open artifact" : "Open training"} <Icon name="arrow" size={14} /></button> : null}
             </footer>
           </details>
-        </article>)}
+        </article>})}
         {!runs.length ? <p className="empty-copy">No durable activity matches these filters.</p> : null}
       </div>
     </section> : null}

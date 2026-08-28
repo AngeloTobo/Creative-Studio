@@ -111,6 +111,7 @@ export type GenerationSettingsStamp = {
   }>;
   inputBindings?: Record<string, string>;
   videoVariant?: import("./creativeDna").VideoGenerationVariant;
+  videoSpeech?: import("./promptEnhancements").VideoSpeechStamp;
   videoOperation?: VideoGenerationOperation;
   evolution?: GenerationEvolutionStamp;
   outputBatch?: GenerationOutputBatch;

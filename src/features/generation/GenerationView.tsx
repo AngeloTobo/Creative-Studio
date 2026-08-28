@@ -12,6 +12,8 @@ import {
   FAST_IMAGE_MAX_STEPS,
   assessImagePerformance,
   analyzeGenerationWorkload,
+  compileVideoPromptWithSpeech,
+  createFourWayVideoGenerationVersions,
   createVideoGenerationVersions,
   createSongPromptRecommendations,
   canonicalWorkflowParameterValue,
@@ -38,6 +40,7 @@ import {
   workflowSupportsVideoDuration,
   workflowRuntimeHistory,
   VIDEO_PROMPT_ENHANCED_MAX_LENGTH,
+  videoWorkflowPromptProfile,
   type Artifact,
   type MediaAsset,
   type ImagePerformanceMode,
@@ -51,6 +54,8 @@ import {
   type GenerationAspectRatio,
   type GenerationRecipe,
   type GenerationContinuitySelection,
+  type VideoSpeechMode,
+  type VideoSpeechStamp,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
@@ -77,6 +82,7 @@ import {
   type GenerationGoal,
   type GenerationOutputCount,
 } from "./generationGoals";
+import type { VideoCreateEntryMode } from "./createEntry";
 import "./GenerationView.css";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
@@ -185,6 +191,7 @@ export function GenerationView({
   initialSourceId,
   initialCreateIntent,
   initialAutoStart = false,
+  initialVideoCreateMode = "standard",
   embedded = false,
 }: {
   onQueued: () => void;
@@ -197,6 +204,7 @@ export function GenerationView({
   initialSourceId?: string;
   initialCreateIntent?: CreateIntent;
   initialAutoStart?: boolean;
+  initialVideoCreateMode?: VideoCreateEntryMode;
   embedded?: boolean;
 }) {
   const {
@@ -255,11 +263,14 @@ export function GenerationView({
     ? "video"
     : initialEvolutionSource?.kind === "audio" ? "music" : "image");
   const autoAnimate = Boolean(initialAutoStart && initialIntent === "video" && initialDirectSource?.kind === "image");
+  const autoFourWay = autoAnimate && initialVideoCreateMode === "four-way";
   const initialDirection = autoAnimate
     ? quickAnimationDirection(initialDirectArtifact?.prompt ?? initialDirectDescription)
     : initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "";
   const autoStartRequested = useRef(autoAnimate);
+  const autoEnhancementAttempted = useRef(false);
   const queueWorkflowRef = useRef<(openQueueAfter?: boolean) => Promise<void>>(async () => undefined);
+  const requestVideoPromptEnhancementRef = useRef<() => Promise<void>>(async () => undefined);
   const directionInitialized = useRef(Boolean(initialVideoSource || initialEvolutionSource || initialDirectSource));
   const directionProjectId = useRef<string | null>(activeProjectId);
   const [intent, setIntent] = useState<CreateIntent>(initialIntent);
@@ -269,6 +280,8 @@ export function GenerationView({
   const [appliedPromptEnhancementId, setAppliedPromptEnhancementId] = useState("");
   const handledPromptEnhancementId = useRef("");
   const [lyrics, setLyrics] = useState("");
+  const [videoSpeechMode, setVideoSpeechMode] = useState<VideoSpeechMode>("no-speech");
+  const [videoSpeechText, setVideoSpeechText] = useState("");
   const [quickSourceId, setQuickSourceId] = useState(initialVideoSource?.id ?? initialEvolutionSource?.id ?? initialDirectSource?.id ?? "");
   const [evolutionEnabled, setEvolutionEnabled] = useState(Boolean(initialEvolutionSource));
   const [generationGoal, setGenerationGoal] = useState<GenerationGoal>(initialEvolutionSource?.kind === "image" ? "scout" : "explore");
@@ -282,7 +295,7 @@ export function GenerationView({
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
   const [videoDurationSeconds, setVideoDurationSeconds] = useState<VideoDurationSeconds>(5);
-  const [outputCount, setOutputCount] = useState<GenerationOutputCount>(initialIntent === "video" ? 2 : 1);
+  const [outputCount, setOutputCount] = useState<GenerationOutputCount>(autoFourWay ? 4 : initialIntent === "video" ? 2 : 1);
   const [canvasAspectRatio, setCanvasAspectRatio] = useState<GenerationAspectRatio | null>(null);
   const [canvasMegapixels, setCanvasMegapixels] = useState<number | null>(null);
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
@@ -293,7 +306,9 @@ export function GenerationView({
   const [selectedWorldId, setSelectedWorldId] = useState("");
   const [selectedWorldEntityIds, setSelectedWorldEntityIds] = useState<string[]>([]);
   const [localError, setLocalError] = useState("");
-  const [notice, setNotice] = useState(autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected; model compatibility is checked below.` : "");
+  const [notice, setNotice] = useState(autoFourWay
+    ? `Preparing Exact, Enhanced, Left Field, and Awe versions from ${initialDirectSource?.name ?? "this image"}…`
+    : autoAnimate ? `Preparing ${initialDirectSource?.name ?? "image"} for animation…` : initialVideoSource ? `${initialVideoSource.name} is ready to extend from its final frame.` : initialEvolutionSource ? `${initialEvolutionSource.name} is ready to evolve as a grouped study.` : initialDirectSource ? `${initialDirectSource.name} is selected; model compatibility is checked below.` : "");
   const [videoOperation, setVideoOperation] = useState<VideoGenerationOperation | null>(initialVideoSource ? {
     kind: "extend",
     sourceId: initialVideoSource.id,
@@ -335,6 +350,8 @@ export function GenerationView({
       setAppliedPromptEnhancementId("");
       handledPromptEnhancementId.current = "";
       setLyrics("");
+      setVideoSpeechMode("no-speech");
+      setVideoSpeechText("");
       setIntent("image");
       setQuickSourceId("");
       setWorkflowId("");
@@ -412,6 +429,10 @@ export function GenerationView({
         setWorkflowValues(restoredValues);
         setValuesRevisionId(restoredWorkflow?.currentRevision.id ?? "");
         setLyrics(typeof settings.lyrics === "string" ? settings.lyrics : "");
+        setVideoSpeechMode(settings.videoSpeechMode === "short-natural-line" || settings.videoSpeechMode === "exact-script"
+          ? settings.videoSpeechMode
+          : "no-speech");
+        setVideoSpeechText(typeof settings.videoSpeechText === "string" ? settings.videoSpeechText : "");
         setGenerationGoal(latestSession.intentTier);
         setEvolutionEnabled(latestSession.intentTier === "scout");
         setProjectContextEnabled(settings.projectContextEnabled === true);
@@ -589,6 +610,11 @@ export function GenerationView({
     return `${authored}. ${continuityDirective.text}`;
   };
   const providerDirection = appendContinuity(authoredProjectDirection);
+  const exactAuthoredVideoDirection = generationIntent === "video" && originalVideoDirection
+    ? projectContextEnabled && !worldContinuityEnabled && projectContext?.text
+      ? `${originalVideoDirection.trim().replace(/[.\s]+$/, "")}. ${projectContext.text}`
+      : originalVideoDirection
+    : authoredProjectDirection;
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
@@ -684,6 +710,17 @@ export function GenerationView({
   const promptEnhancementAvailable = promptEnhancementCapability?.state === "available";
   const promptEnhancementInputMode = videoOperation ? "video-extension" : quickSource?.kind === "image" ? "image-to-video" : "text-to-video";
   const promptEnhancementSourceId = promptEnhancementInputMode === "text-to-video" ? null : quickSource?.id ?? null;
+  const videoPromptProfile = generationIntent === "video" && workflow
+    ? videoWorkflowPromptProfile(workflow, promptEnhancementInputMode)
+    : null;
+  const videoSpeechReady = generationIntent !== "video" || videoSpeechMode === "no-speech" || videoSpeechText.trim().length > 0;
+  const compileVideoSpeech = (prompt: string): { prompt: string; speech: VideoSpeechStamp } => {
+    if (!videoPromptProfile) throw new Error("video_prompt_profile_required");
+    return compileVideoPromptWithSpeech(prompt, {
+      mode: videoSpeechMode,
+      text: videoSpeechMode === "no-speech" ? undefined : videoSpeechText,
+    }, videoPromptProfile);
+  };
   const promptEnhancementMatchesWorkflow = Boolean(workflow && activePromptEnhancement
     && activePromptEnhancement.workflowId === workflow.id
     && activePromptEnhancement.workflowRevisionId === workflow.currentRevision.id
@@ -696,6 +733,13 @@ export function GenerationView({
     && appliedPromptEnhancement.videoDurationSeconds === videoDurationSeconds
     && appliedPromptEnhancement.inputMode === promptEnhancementInputMode
     && (appliedPromptEnhancement.sourceId ?? null) === promptEnhancementSourceId);
+  const fourWayBoardRequested = generationIntent === "video" && !evolutionEnabled && outputCount === 4;
+  const fourWayEnhancementReady = Boolean(fourWayBoardRequested
+    && appliedPromptEnhancementMatchesContext
+    && appliedPromptEnhancementId
+    && originalVideoDirection?.trim()
+    && direction.trim()
+    && originalVideoDirection.trim().replace(/\s+/g, " ").toLowerCase() !== direction.trim().replace(/\s+/g, " ").toLowerCase());
   const promptEnhancementApplication = (appliedPrompt: string) => generationIntent === "video"
     && appliedPromptEnhancementMatchesContext
     && appliedPromptEnhancement
@@ -814,6 +858,8 @@ export function GenerationView({
     generationGoal,
     evolutionEnabled,
     lyrics,
+    videoSpeechMode,
+    videoSpeechText,
     imagePerformanceMode,
     videoDurationSeconds,
     outputCount,
@@ -842,6 +888,8 @@ export function GenerationView({
     generationGoal,
     evolutionEnabled,
     lyrics,
+    videoSpeechMode,
+    videoSpeechText,
     imagePerformanceMode,
     videoDurationSeconds,
     outputCount,
@@ -865,6 +913,8 @@ export function GenerationView({
       const graphicalSettings = {
         workflowRevisionId: effectiveSessionRevisionId,
         lyrics,
+        videoSpeechMode,
+        videoSpeechText,
         imagePerformanceMode,
         videoDurationSeconds,
         outputCount,
@@ -901,7 +951,7 @@ export function GenerationView({
         if (saved.id !== sessionId) setSessionId(saved.id);
       }
     };
-  }, [activeProjectId, appliedPromptEnhancementId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, workflowId, workflowValues, worldContinuityEnabled]);
+  }, [activeProjectId, appliedPromptEnhancementId, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, videoSpeechMode, videoSpeechText, workflowId, workflowValues, worldContinuityEnabled]);
 
   useEffect(() => {
     if (sessionCompletionVersion !== sessionCompletionBaselineRef.current) {
@@ -1006,6 +1056,8 @@ export function GenerationView({
       clearVideoPromptEnhancement();
       setDirection("");
       setEvolutionEnabled(false);
+      setVideoSpeechMode("no-speech");
+      setVideoSpeechText("");
       setOutputCount(nextIntent === "video" ? 2 : 1);
       const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
       outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
@@ -1076,12 +1128,16 @@ export function GenerationView({
     }
   };
 
+  useEffect(() => {
+    requestVideoPromptEnhancementRef.current = requestVideoPromptEnhancement;
+  });
+
   const keepCurrentVideoPrompt = () => {
     setPromptEnhancementId("");
     setNotice("Keeping your current prompt. The local enhancement result will not replace it.");
   };
 
-  const useCompletedVideoPromptEnhancement = () => {
+  const applyCompletedVideoPromptEnhancement = () => {
     if (!activePromptEnhancement?.enhancedPrompt || activePromptEnhancement.status !== "completed") return;
     setOriginalVideoDirection((current) => current ?? activePromptEnhancement.sourcePrompt);
     setDirection(activePromptEnhancement.enhancedPrompt);
@@ -1282,6 +1338,26 @@ export function GenerationView({
       setLocalError("This video model does not expose a prompt, so Creative Studio cannot direct distinct outputs. Map its prompt input in Models first.");
       return;
     }
+    if (generationIntent === "video" && !videoSpeechReady) {
+      setLocalError(videoSpeechMode === "exact-script"
+        ? "Add the exact words the subject should say, or choose No dialogue."
+        : "Add the idea for one simple spoken line, or choose No dialogue.");
+      return;
+    }
+    if (generationIntent === "video") {
+      try {
+        compileVideoSpeech(providerDirection);
+      } catch (speechError) {
+        setLocalError(speechError instanceof Error && speechError.message === "video_speech_prompt_too_long"
+          ? "Shorten the motion prompt or spoken line so the complete model prompt stays within its safe limit."
+          : "Use a short, plain spoken line, or choose No dialogue.");
+        return;
+      }
+    }
+    if (fourWayBoardRequested && !fourWayEnhancementReady) {
+      setLocalError("The four-way board needs a completed local Gemma enhancement so its Enhanced version is truthful. Start the board again after Gemma is ready.");
+      return;
+    }
     if (outputCountSeedBlocked) {
       setLocalError(`This model does not expose its renderer seed, so Creative Studio cannot guarantee ${outputCount} distinct ${generationIntent} outputs. Choose 1${generationIntent === "video" ? " or 2" : ""}, or map the sampler seed in Models.`);
       return;
@@ -1373,7 +1449,9 @@ export function GenerationView({
             dimensions: dna.shared,
             modality: generationIntent,
           });
-          const prompt = appendContinuity(branchDirection);
+          const branchPrompt = appendContinuity(branchDirection);
+          const compiledSpeech = generationIntent === "video" ? compileVideoSpeech(branchPrompt) : null;
+          const prompt = compiledSpeech?.prompt ?? branchPrompt;
           const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
           const variant = generationIntent === "video"
             ? role === "discovery" ? videoVersions?.[1].variant : videoVersions?.[0].variant
@@ -1395,6 +1473,7 @@ export function GenerationView({
             videoOperation: effectiveVideoOperation ?? undefined,
             performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
             videoVariant: variant,
+            videoSpeech: compiledSpeech?.speech,
             evolution,
             videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
             idempotencyKey: generationBatchIdempotencyKey(attemptEvolutionStudyId, role),
@@ -1416,17 +1495,27 @@ export function GenerationView({
         return;
       }
       if (generationIntent === "video" && workflowPromptParameter) {
-        const videoOutputs = Array.from({ length: Math.ceil(outputCount / 2) }, (_, pairIndex) => createVideoGenerationVersions({
-          direction: authoredProjectDirection,
-          dimensions: dna.shared,
-          pairId: `video_pair_${attemptOutputBatchId.replace(/^output_batch_/, "")}_${pairIndex + 1}`,
-          discoverySeed: generationBatchSeed(attemptOutputBatchId, pairIndex * 2 + 1),
-          hasSource: Boolean(quickSource),
-        })).flat().slice(0, outputCount);
+        const videoOutputs = outputCount === 4
+          ? createFourWayVideoGenerationVersions({
+            exactPrompt: exactAuthoredVideoDirection,
+            enhancedPrompt: authoredProjectDirection,
+            dimensions: dna.shared,
+            pairId: `video_pair_${attemptOutputBatchId.replace(/^output_batch_/, "")}_board`,
+            boardSeed: generationBatchSeed(attemptOutputBatchId, 0),
+            hasSource: Boolean(quickSource),
+          })
+          : Array.from({ length: Math.ceil(outputCount / 2) }, (_, pairIndex) => createVideoGenerationVersions({
+            direction: authoredProjectDirection,
+            dimensions: dna.shared,
+            pairId: `video_pair_${attemptOutputBatchId.replace(/^output_batch_/, "")}_${pairIndex + 1}`,
+            discoverySeed: generationBatchSeed(attemptOutputBatchId, pairIndex * 2 + 1),
+            hasSource: Boolean(quickSource),
+          })).flat().slice(0, outputCount);
         let outputWorkflow = runWorkflow;
         for (let index = 0; index < videoOutputs.length; index += 1) {
           const output = videoOutputs[index];
-          const prompt = appendContinuity(output.prompt);
+          const compiledSpeech = compileVideoSpeech(appendContinuity(output.prompt));
+          const prompt = compiledSpeech.prompt;
           const values: Record<string, WorkflowScalar> = Object.fromEntries(workflowPromptParameters.map((parameter) => [parameter.id, prompt]));
           if (workflowSeedParameters.length && (outputCount === 4 || output.variant.seed !== null)) {
             workflowSeedParameters.forEach((parameter, seedIndex) => {
@@ -1449,6 +1538,7 @@ export function GenerationView({
             dnaArtifactId: dna.artifactId,
             videoOperation: effectiveVideoOperation ?? undefined,
             videoVariant: output.variant,
+            videoSpeech: compiledSpeech.speech,
             videoDurationSeconds,
             idempotencyKey: generationBatchIdempotencyKey(attemptOutputBatchId, `output_${index + 1}`),
             outputBatch: {
@@ -1458,12 +1548,16 @@ export function GenerationView({
               count: outputCount,
             },
             continuity: continuitySelection,
-            promptEnhancement: promptEnhancementApplication(prompt),
+            promptEnhancement: outputCount === 4 && output.variant.role !== "enhanced"
+              ? undefined
+              : promptEnhancementApplication(prompt),
           });
         }
         setValuesRevisionId(outputWorkflow.currentRevision.id);
         setWorkflowValues(Object.fromEntries(outputWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
-        setNotice(`${outputCount} durable video ${outputCount === 1 ? "job" : "jobs"} queued${outputCount > 1 ? " with distinct direction and seed evidence" : ""}. They will render one after another on the Local Runner.`);
+        setNotice(outputCount === 4
+          ? "Exact, Enhanced, Left Field, and Awe are queued as four durable videos with separate prompt, seed, speech, and settings evidence."
+          : `${outputCount} durable video ${outputCount === 1 ? "job" : "jobs"} queued${outputCount > 1 ? " with distinct direction and seed evidence" : ""}. They will render one after another on the Local Runner.`);
         const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
         outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
         setOutputBatchId(nextOutputBatchId);
@@ -1535,13 +1629,67 @@ export function GenerationView({
       stopAutoStart("The available video model needs more than one source. Connect a one-image image-to-video workflow for one-click Animate.");
       return;
     }
+    if (outputCount === 4 && outputCountSeedBlocked) {
+      stopAutoStart("This model does not expose a renderer seed, so Creative Studio cannot guarantee four distinct videos. Map the sampler seed in Models, then tap Animate 4 ways again.");
+      return;
+    }
     if (!directionReady || !workflowPromptParameter) {
-      stopAutoStart("The selected video model must expose a prompt input before one-click Animate can create two distinct versions.");
+      stopAutoStart(`The selected video model must expose a prompt input before one-click Animate can create ${outputCount === 4 ? "the four-way board" : "two distinct versions"}.`);
+      return;
+    }
+    if (!videoSpeechReady) {
+      stopAutoStart("Add the spoken line or choose No dialogue before creating the video board.");
+      return;
+    }
+    if (outputCount === 4 && !fourWayEnhancementReady) {
+      if (!promptEnhancementAvailable) {
+        stopAutoStart("The four-way board needs Local Gemma for its Enhanced version. Start the Local Runner and ComfyUI, then tap Animate 4 ways again.");
+        return;
+      }
+      if (activePromptEnhancement?.status === "failed") {
+        stopAutoStart(`Gemma could not prepare the Enhanced version${activePromptEnhancement.error ? `: ${activePromptEnhancement.error}` : "."} Your image and exact prompt are unchanged.`);
+        return;
+      }
+      if (activePromptEnhancement?.status === "completed" && promptEnhancementMatchesWorkflow && activePromptEnhancement.enhancedPrompt) {
+        return;
+      }
+      if (!promptEnhancementPending && !autoEnhancementAttempted.current) {
+        autoEnhancementAttempted.current = true;
+        void requestVideoPromptEnhancementRef.current();
+      }
       return;
     }
     autoStartRequested.current = false;
     void queueWorkflowRef.current(true);
-  }, [busy, directionReady, snapshot, uiOnlyDevelopment, workflow, workflowPromptParameter, workflowReady]);
+  }, [activePromptEnhancement, busy, directionReady, fourWayEnhancementReady, outputCount, outputCountSeedBlocked, promptEnhancementAvailable, promptEnhancementMatchesWorkflow, promptEnhancementPending, snapshot, uiOnlyDevelopment, videoSpeechReady, workflow, workflowPromptParameter, workflowReady]);
+
+  const startWorkflowGeneration = async () => {
+    if (!fourWayBoardRequested || fourWayEnhancementReady) {
+      await queueWorkflow();
+      return;
+    }
+    setLocalError("");
+    if (!promptEnhancementAvailable) {
+      setLocalError("The four-way board needs Local Gemma for its Enhanced version. Start the Local Runner and ComfyUI, then try again.");
+      return;
+    }
+    if (!videoSpeechReady) {
+      setLocalError(videoSpeechMode === "exact-script"
+        ? "Add the exact words the subject should say, or choose No dialogue."
+        : "Add the idea for one simple spoken line, or choose No dialogue.");
+      return;
+    }
+    autoStartRequested.current = true;
+    autoEnhancementAttempted.current = false;
+    if (activePromptEnhancement?.status === "completed" && promptEnhancementMatchesWorkflow && activePromptEnhancement.enhancedPrompt) {
+      applyCompletedVideoPromptEnhancement();
+      return;
+    }
+    if (!promptEnhancementPending) {
+      autoEnhancementAttempted.current = true;
+      await requestVideoPromptEnhancement();
+    }
+  };
 
   const submitRemote = async () => {
     if (generationIntent === "video") return;
@@ -1596,6 +1744,8 @@ export function GenerationView({
       ? `Choose ${sourceRequirement ?? "source"}`
       : evolutionEnabled
         ? generationGoal === "scout" ? generationGoalRunLabel(generationGoal, generationIntent) : `Generate 3 ${generationLabel} branches`
+      : fourWayBoardRequested
+        ? settingsChanged ? "Save & generate 4-way board" : "Generate 4-way video board"
       : settingsChanged
         ? effectiveVideoOperation ? `Save & extend ${outputCount} ${outputCount === 1 ? "version" : "versions"}` : `Save & generate ${countedGenerationLabel}`
         : effectiveVideoOperation
@@ -1866,11 +2016,22 @@ export function GenerationView({
                       : direction.trim() === appliedPromptEnhancement?.enhancedPrompt?.trim() ? "Enhanced locally · Gemma 4" : "Edited after enhancement · Gemma 4"}</small></span>
               <span className="quick-prompt-enhancement-actions">
                 {promptEnhancementPending ? <button type="button" onClick={keepCurrentVideoPrompt}>Keep current</button> : null}
-                {activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={useCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
+                {activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={applyCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
                 {originalVideoDirection !== null && direction.trim() !== originalVideoDirection.trim() ? <button type="button" onClick={restoreOriginalVideoPrompt}>Restore original</button> : null}
               </span>
             </div> : null}
           </div>
+          {generationIntent === "video" ? <section className="quick-video-speech" aria-label="Video speech controls">
+            <div className="quick-video-speech-head"><span><Icon name="music" size={14} /><strong>Speech</strong></span><small>{videoSpeechMode === "no-speech" ? "Sound on · no dialogue" : videoSpeechMode === "exact-script" ? "Verbatim only" : "One clear line"}</small></div>
+            <div className="quick-video-speech-modes" role="group" aria-label="Video speech">
+              {([
+                ["no-speech", "No dialogue"],
+                ["short-natural-line", "Simple line"],
+                ["exact-script", "Exact script"],
+              ] as const).map(([mode, label]) => <button type="button" key={mode} className={videoSpeechMode === mode ? "on" : ""} aria-pressed={videoSpeechMode === mode} disabled={busy} onClick={() => { setVideoSpeechMode(mode); setLocalError(""); }}>{label}</button>)}
+            </div>
+            {videoSpeechMode !== "no-speech" ? <label className="quick-video-speech-line"><span>{videoSpeechMode === "exact-script" ? "Exact words" : "What should they say?"}</span><input value={videoSpeechText} maxLength={500} onChange={(event) => setVideoSpeechText(event.target.value)} placeholder={videoSpeechMode === "exact-script" ? "I remember this place." : "A short idea; Creative Studio removes filler and keeps one sentence."} /><small>{videoSpeechMode === "exact-script" ? "Sent verbatim once. The model is told not to paraphrase or add words." : "Reduced to one natural sentence of up to 14 words. No improvised dialogue."}</small></label> : <p className="quick-video-speech-safe">No invented words. Sound stays active with ambience, effects, sparkling synth arpeggios, buoyant electronic rhythm, wistful hooks, and dreamy nocturnal-city texture.</p>}
+          </section> : null}
           {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
           {!evolutionEnabled && (generationIntent === "image" || generationIntent === "video") ? <div className="quick-output-count">
             <span><strong>Outputs</strong><small>{outputCountSeedBlocked ? "This model must expose a sampler seed for that many distinct results." : "Every result is a separate durable job with its own retained settings."}</small></span>
@@ -1881,8 +2042,9 @@ export function GenerationView({
                 return <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy || unavailable} title={unavailable ? "Map this model's sampler seed in Models to guarantee distinct outputs." : `${count} retained ${generationIntent} ${count === 1 ? "output" : "outputs"}`} onClick={() => { setOutputCount(count); setLocalError(""); }}>{count}</button>;
               })}
             </div>
+            {fourWayBoardRequested ? <div className="quick-four-way-roles" aria-label="Four-way video roles"><span><b>Exact</b> your motion</span><span><b>Enhanced</b> local Gemma</span><span><b>Left Field</b> new direction</span><span><b>Awe</b> beautiful strange</span></div> : null}
           </div> : null}
-          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void queueWorkflow()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
+          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || !videoSpeechReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void startWorkflowGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>

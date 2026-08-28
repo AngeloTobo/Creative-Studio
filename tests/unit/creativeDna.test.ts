@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CREATIVE_DNA_SCHEMA_VERSION,
   compileCreativeDna,
+  createFourWayVideoGenerationVersions,
   createVideoGenerationVersions,
   creativeDnaDescriptionSummaries,
   creativeDnaGenerationPrompt,
@@ -58,6 +59,41 @@ describe("CreativeDNA v1", () => {
       hasSource: false,
     });
     expect(() => normalizeVideoGenerationVariant({ ...discovery.variant, personalStyleWeight: 70, randomDnaWeight: 30 })).toThrow("invalid_video_generation_variant");
+  });
+
+  it("creates a deterministic and truthful four-way image-to-video board", () => {
+    const dimensions = { energy: 64, tension: 48, contrast: 62, warmth: 55, spaciousness: 58, rhythmicity: 60, organicity: 50, polish: 58 };
+    const input = {
+      exactPrompt: "The figure turns toward the storm as the camera moves across the rooftop.",
+      enhancedPrompt: "The figure holds still for one beat, then turns toward the storm while the camera slides low across the wet rooftop and settles on the reflected skyline.",
+      dimensions,
+      pairId: "video_pair_board-12345678",
+      boardSeed: 4_294_967_294,
+      hasSource: true,
+    } as const;
+    const versions = createFourWayVideoGenerationVersions(input);
+    expect(versions.map((version) => version.variant.role)).toEqual(["exact", "enhanced", "left-field", "awe"]);
+    expect(versions.map((version) => version.prompt)).toHaveLength(new Set(versions.map((version) => version.prompt)).size);
+    expect(versions.map((version) => version.variant.seed)).toHaveLength(new Set(versions.map((version) => version.variant.seed)).size);
+    expect(versions[0].prompt).toBe(input.exactPrompt);
+    expect(versions[1].prompt).toBe(input.enhancedPrompt);
+    expect(versions[2].variant).toMatchObject({ schemaVersion: "creative-studio-video-variant/1.1", personalStyleWeight: 25, randomDnaWeight: 75 });
+    expect(versions[3].variant).toMatchObject({ schemaVersion: "creative-studio-video-variant/1.1", personalStyleWeight: 10, randomDnaWeight: 90 });
+    expect(versions[2].prompt).toMatch(/Preserve the source subject/);
+    expect(versions[3].prompt).toMatch(/opening frame must remain unmistakable/);
+    expect(createFourWayVideoGenerationVersions(input)).toEqual(versions);
+    versions.forEach((version) => expect(normalizeVideoGenerationVariant(version.variant)).toEqual(version.variant));
+  });
+
+  it("does not claim an Enhanced version when no actual enhancement exists", () => {
+    expect(() => createFourWayVideoGenerationVersions({
+      exactPrompt: "The figure turns toward the storm.",
+      enhancedPrompt: "  THE figure turns toward   the storm. ",
+      dimensions: { energy: 50, tension: 50, contrast: 50, warmth: 50, spaciousness: 50, rhythmicity: 50, organicity: 50, polish: 50 },
+      pairId: "video_pair_board-87654321",
+      boardSeed: 42,
+      hasSource: true,
+    })).toThrow("enhanced_prompt_must_differ");
   });
 
   it("preserves lineage and typed cross-modal translations", () => {

@@ -1,7 +1,9 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  compileVideoPromptWithSpeech,
   compileContinuityDirective,
+  videoPromptProfileForIdentity,
   type CanonReference,
   type ContinuityRule,
   type CreativeDnaArtifact,
@@ -2320,6 +2322,11 @@ describe("Creative Studio Worker API", () => {
     const { bucket, values } = memoryBucket();
     const local = workerEnv("development", undefined, bucket);
     const inputBytes = new Uint8Array([137, 80, 78, 71]);
+    const h3Prompt = compileVideoPromptWithSpeech(
+      "Original H3 motion prompt",
+      undefined,
+      videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" }),
+    );
     const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
       method: "POST",
       headers: {
@@ -2333,7 +2340,7 @@ describe("Creative Studio Worker API", () => {
     }), local)) as { asset: { id: string } };
     const graph = JSON.stringify({
       "1": { class_type: "LoadImage", inputs: { image: "source.png" } },
-      "2": { class_type: "MiniMaxH3I2V", inputs: { prompt: "Original H3 motion prompt", image: ["1", 0], seed: 42, duration: 10 } },
+      "2": { class_type: "MiniMaxH3I2V", inputs: { prompt: h3Prompt.prompt, image: ["1", 0], seed: 42, duration: 10 } },
       "3": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
     });
     const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
@@ -2370,6 +2377,52 @@ describe("Creative Studio Worker API", () => {
     const unauthorized = await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", { method: "POST" }), local);
     expect(unauthorized.status).toBe(401);
 
+    const missingSpeechPolicy = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_missing_speech_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+          expectedPrompt: h3Prompt.prompt,
+        },
+      }),
+    }), local);
+    expect(missingSpeechPolicy.status).toBe(400);
+    expect(await result(missingSpeechPolicy)).toMatchObject({ error: "video_speech_policy_required" });
+
+    const differentSpeech = compileVideoPromptWithSpeech(
+      "Original H3 motion prompt",
+      { mode: "exact-script", text: "Look up." },
+      videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" }),
+    );
+    const mismatchedSpeechPolicy = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_mismatch_speech_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+          expectedPrompt: h3Prompt.prompt,
+        },
+        videoSpeech: differentSpeech.speech,
+      }),
+    }), local);
+    expect(mismatchedSpeechPolicy.status).toBe(400);
+    expect(await result(mismatchedSpeechPolicy)).toMatchObject({ error: "video_speech_prompt_mismatch" });
+
     const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -2383,9 +2436,10 @@ describe("Creative Studio Worker API", () => {
           workflowId: imported.workflow.id,
           revisionId: imported.workflow.currentRevision.id,
           inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
-          expectedPrompt: "Original H3 motion prompt",
+          expectedPrompt: h3Prompt.prompt,
         },
         videoVariant: alignedVideoVariant,
+        videoSpeech: h3Prompt.speech,
         evolution: {
           schemaVersion: "creative-studio-evolution-request/1.0",
           studyId: "evolve_runner-test-001",
@@ -2394,11 +2448,12 @@ describe("Creative Studio Worker API", () => {
           source: "upload",
         },
       }),
-    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; videoDurationSeconds: number; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant; evolution: { studyId: string; role: string; sourceId: string; sourceKind: string; projectCanon: { identity: string; currentDirection: string } } } } };
+    }), local)) as { job: { id: string; status: string; startedAt: string | null; executionStage: string; settingsStamp: { workflow: { contentHash: string }; videoDurationSeconds: number; inputBindings: Record<string, string>; workloadEvidence: { source: string; profileId: string; label: string }; videoVariant: typeof alignedVideoVariant; videoSpeech: typeof h3Prompt.speech; evolution: { studyId: string; role: string; sourceId: string; sourceKind: string; projectCanon: { identity: string; currentDirection: string } } } } };
     expect(created.job).toMatchObject({ status: "queued", startedAt: null, executionStage: "queued", settingsStamp: { workflow: { contentHash: imported.workflow.currentRevision.contentHash }, videoDurationSeconds: 10 } });
     expect(created.job.settingsStamp.workloadEvidence).toEqual({ source: "workflow-revision", profileId: imported.workflow.currentRevision.id, label: "MiniMax H3 I2V v1" });
     expect(created.job.settingsStamp.inputBindings[mediaParameter!.id]).toBe(uploaded.asset.id);
     expect(created.job.settingsStamp.videoVariant).toEqual(alignedVideoVariant);
+    expect(created.job.settingsStamp.videoSpeech).toEqual(h3Prompt.speech);
     expect(created.job.settingsStamp.evolution).toMatchObject({ studyId: "evolve_runner-test-001", role: "refine", sourceId: uploaded.asset.id, sourceKind: "image" });
     expect(created.job.settingsStamp.evolution.projectCanon).toEqual({ identity: project.description, currentDirection: project.note });
 
@@ -2427,8 +2482,8 @@ describe("Creative Studio Worker API", () => {
     }), local);
     const retried = await result(await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${created.job.id}/retry`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "runner_video_retry_001" }),
-    }), local)) as { job: { id: string; upstreamId: string; retryOfJobId: string; settingsStamp: { videoVariant: typeof alignedVideoVariant } } };
-    expect(retried.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", retryOfJobId: created.job.id, settingsStamp: { videoVariant: alignedVideoVariant } });
+    }), local)) as { job: { id: string; upstreamId: string; retryOfJobId: string; settingsStamp: { videoVariant: typeof alignedVideoVariant; videoSpeech: typeof h3Prompt.speech } } };
+    expect(retried.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", retryOfJobId: created.job.id, settingsStamp: { videoVariant: alignedVideoVariant, videoSpeech: h3Prompt.speech } });
     const retriedClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
     }), local)) as { bundle: { job: { id: string; upstreamId: string } } };
@@ -2474,8 +2529,9 @@ describe("Creative Studio Worker API", () => {
           workflowId: imported.workflow.id,
           revisionId: imported.workflow.currentRevision.id,
           inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
-          expectedPrompt: "Original H3 motion prompt",
+          expectedPrompt: h3Prompt.prompt,
         },
+        videoSpeech: h3Prompt.speech,
         videoOperation: {
           kind: "extend",
           sourceId: history.artifacts[0].id,
@@ -2555,10 +2611,15 @@ describe("Creative Studio Worker API", () => {
     expect(extensionEvidence.status).toBe(201);
     expect(await result(extensionEvidence)).toMatchObject({ evidence: { jobId: extensionArtifact.jobId, outcome: "completed" } });
 
+    const chainedPrompt = compileVideoPromptWithSpeech(
+      "Continue the retained motion study",
+      undefined,
+      videoPromptProfileForIdentity({ name: "Video remix" }),
+    );
     const remixGraph = JSON.stringify({
       "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },
       "11": { class_type: "SaveVideo", inputs: { video: ["10", 0] } },
-      "12": { class_type: "PrimitiveStringMultiline", inputs: { value: "Continue the retained motion study" }, _meta: { title: "Prompt" } },
+      "12": { class_type: "PrimitiveStringMultiline", inputs: { value: chainedPrompt.prompt }, _meta: { title: "Prompt" } },
     });
     const remixWorkflow = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
       method: "POST",
@@ -2585,8 +2646,9 @@ describe("Creative Studio Worker API", () => {
           workflowId: remixWorkflow.workflow.id,
           revisionId: remixWorkflow.workflow.currentRevision.id,
           inputBindings: { [videoInput!.id]: history.artifacts[0].id },
-          expectedPrompt: "Continue the retained motion study",
+          expectedPrompt: chainedPrompt.prompt,
         },
+        videoSpeech: chainedPrompt.speech,
       }),
     }), local)) as { job: { id: string; settingsStamp: { inputAssetIds: string[]; inputArtifactIds: string[]; inputSources: Array<{ id: string; source: string }> } } };
     expect(chained.job.settingsStamp).toMatchObject({

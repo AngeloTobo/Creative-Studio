@@ -8,7 +8,7 @@ import "./work.css";
 
 export type WorkSegment = "needs-action" | "running" | "results";
 
-export type WorkViewProps = Pick<ArtifactsViewProps, "onQueued" | "onContinueLoop" | "onExtendVideo" | "onEvolve" | "onAnimate"> & {
+export type WorkViewProps = Pick<ArtifactsViewProps, "onQueued" | "onContinueLoop" | "onExtendVideo" | "onEvolve" | "onAnimate" | "onAnimateFourWay"> & {
   onOpen: (action: ProductionCockpitAction) => void;
   focusRunId?: string;
   focusArtifactId?: string;
@@ -32,6 +32,7 @@ export function WorkView({
   onExtendVideo,
   onEvolve,
   onAnimate,
+  onAnimateFourWay,
   focusRunId,
   focusArtifactId,
   initialSegment,
@@ -137,7 +138,7 @@ export function WorkView({
             <div className="work-history-stats"><span><small>All runs</small><strong>{projectRuns.length}</strong></span><span><small>Completed</small><strong>{completedCount}</strong></span><span><small>Failed / cancelled</small><strong>{failedCount}</strong></span><span><small>Retained</small><strong>{retainedBytes >= 1024 * 1024 ? `${(retainedBytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(retainedBytes / 1024)} KB`}</strong></span></div>
             <CockpitView embedded mode="history" projectId={activeProjectId} onOpen={openAction} />
           </details>
-          <ArtifactsView embedded compact focusArtifactId={focusArtifactId} onQueued={queued} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} />
+          <ArtifactsView embedded compact focusArtifactId={focusArtifactId} onQueued={queued} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} />
         </> : null}
       </div>
     </section>

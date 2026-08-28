@@ -18,6 +18,7 @@
 .quick-create-card > .quick-song-analysis { order: 4; }
 .quick-create-card > .quick-direction,
 .quick-create-card > .quick-training-paths { order: 5; }
+.quick-create-card > .quick-video-speech { order: 6; }
 .quick-create-card > .quick-song-lyrics { order: 6; }
 .quick-create-card > .quick-compose-model { order: 7; }
 .quick-create-card > .quick-recipe-tools { order: 7; }
@@ -689,9 +690,74 @@
   color: var(--text-main);
 }
 
+.quick-video-speech {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto auto minmax(180px,1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: rgba(255,255,255,.035);
+}
+
+.quick-video-speech-head,
+.quick-video-speech-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.quick-video-speech-head { flex-direction: column; align-items: flex-start; gap: 1px; }
+.quick-video-speech-head strong { color: var(--text-main); font-size: 9px; }
+.quick-video-speech-head svg { color: var(--cyan); }
+.quick-video-speech-head small { color: var(--text-muted); font-size: 6.5px; white-space: nowrap; }
+
+.quick-video-speech-modes {
+  display: inline-grid;
+  grid-template-columns: repeat(3,auto);
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(31,41,55,.07);
+}
+
+.quick-video-speech-modes button {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 7px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.quick-video-speech-modes button.on {
+  border-color: rgba(34,211,238,.24);
+  background: rgba(34,211,238,.09);
+  color: var(--text-main);
+}
+
+.quick-video-speech-line {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0,1fr);
+  align-items: center;
+  gap: 2px 7px;
+}
+
+.quick-video-speech-line > span { color: var(--text-soft); font-size: 7px; font-weight: 800; }
+.quick-video-speech-line input { min-width: 0; height: 32px; padding: 5px 8px; border: 1px solid var(--border-soft); border-radius: 8px; background: rgba(5,5,18,.35); color: var(--text-main); font: inherit; font-size: 8px; }
+.quick-video-speech-line small { grid-column: 2; overflow: hidden; color: var(--text-muted); font-size: 6.5px; text-overflow: ellipsis; white-space: nowrap; }
+.quick-video-speech-safe { min-width: 0; margin: 0; color: var(--text-muted); font-size: 7px; line-height: 1.35; }
+
 .quick-output-count {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -721,7 +787,7 @@
   white-space: nowrap;
 }
 
-.quick-output-count > div {
+.quick-output-count > div[role="group"] {
   display: grid;
   flex: none;
   grid-template-columns: repeat(3,38px);
@@ -730,6 +796,26 @@
   border-radius: 10px;
   background: rgba(31,41,55,.07);
 }
+
+.quick-four-way-roles {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  gap: 4px;
+}
+
+.quick-four-way-roles span {
+  overflow: hidden;
+  padding: 4px 6px;
+  border-radius: 7px;
+  background: rgba(217,70,239,.055);
+  color: var(--text-muted);
+  font-size: 6.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-four-way-roles b { color: var(--text-soft); }
 
 .quick-output-count button {
   min-height: 34px;
@@ -881,6 +967,23 @@
     min-height: 36px;
   }
 
+  .quick-video-speech {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .quick-video-speech-head {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+
+  .quick-video-speech-modes { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .quick-video-speech-modes button { min-height: 40px; padding-inline: 5px; }
+  .quick-video-speech-line { grid-template-columns: 1fr; }
+  .quick-video-speech-line input { height: 40px; }
+  .quick-video-speech-line small { grid-column: 1; white-space: normal; }
+  .quick-four-way-roles { grid-template-columns: repeat(2,minmax(0,1fr)); }
+
   .quick-output-count {
     gap: 8px;
     padding: 6px;
@@ -890,7 +993,7 @@
     max-width: 190px;
   }
 
-  .quick-output-count > div {
+  .quick-output-count > div[role="group"] {
     grid-template-columns: repeat(3,44px);
   }
 

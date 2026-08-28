@@ -31,6 +31,7 @@ import type {
   RunnerPromptEnhancementBundle,
   RunnerPromptEnhancementHeartbeatRequest,
   VideoPromptEnhancement,
+  VideoSpeechStamp,
 } from "./promptEnhancements";
 import type {
   CompleteModelTrainingJobRequest,
@@ -277,6 +278,7 @@ export type SubmitJobRequest = {
   performanceMode?: ImagePerformanceMode;
   videoDurationSeconds?: VideoDurationSeconds;
   videoVariant?: VideoGenerationVariant;
+  videoSpeech?: VideoSpeechStamp;
   videoOperation?: VideoGenerationOperation;
   evolution?: EvolutionJobContext;
   outputBatch?: GenerationOutputBatch;

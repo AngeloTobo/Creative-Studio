@@ -11,6 +11,7 @@ export type MediaViewProps = {
   onUseAsset?: (sourceId: string, kind: MediaKind) => void;
   onEvolve: (sourceId: string) => void;
   onAnimate: (sourceId: string) => void;
+  onAnimateFourWay: (sourceId: string) => void;
   onAnalyze?: (sourceId: string) => void;
   onTrain?: (sourceId: string, kind: MediaKind) => void;
   embedded?: boolean;
@@ -52,7 +53,7 @@ function MediaInspector({ asset, onClose }: { asset: MediaAsset; onClose: () => 
   </dialog>;
 }
 
-export function MediaView({ onGenerate, onUseAsset, onEvolve, onAnimate, onAnalyze, onTrain, embedded = false }: MediaViewProps) {
+export function MediaView({ onGenerate, onUseAsset, onEvolve, onAnimate, onAnimateFourWay, onAnalyze, onTrain, embedded = false }: MediaViewProps) {
   const { snapshot, activeProjectId, uploadMedia, busy, error } = useStudio();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -137,12 +138,12 @@ export function MediaView({ onGenerate, onUseAsset, onEvolve, onAnimate, onAnaly
             <p>{asset.originalFileName}</p>
             <div className="media-card-meta"><span>{formatBytes(asset.size)}</span><span>{new Date(asset.createdAt).toLocaleDateString()}</span><span>{asset.trainingEligible ? "training allowed" : "training excluded"}</span></div>
             <div className="media-card-actions media-smart-actions">
-              <button className="btn btn-primary" onClick={() => openAssetInCreate(asset)}><Icon name="wand" size={15} /> Use</button>
+              {asset.kind === "image" ? <button className="btn btn-primary media-animate-four" onClick={() => onAnimateFourWay(asset.id)} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="video" size={15} /> Animate ×4</button> : <button className="btn btn-primary" onClick={() => openAssetInCreate(asset)}><Icon name="wand" size={15} /> Use</button>}
               <details className="media-action-menu">
                 <summary className="btn btn-ghost" aria-label={`More actions for ${asset.name}`}><Icon name="more" size={17} /></summary>
                 <div role="menu">
                   <button role="menuitem" onClick={() => setInspected(asset)}><Icon name="external" size={14} /> Inspect</button>
-                  {asset.kind === "image" ? <button role="menuitem" onClick={() => onAnimate(asset.id)}><Icon name="video" size={14} /> Animate</button> : null}
+                  {asset.kind === "image" ? <><button role="menuitem" onClick={() => openAssetInCreate(asset)}><Icon name="wand" size={14} /> Use in Create</button><button role="menuitem" onClick={() => onAnimateFourWay(asset.id)}><Icon name="star" size={14} /> Animate 4 ways</button><button role="menuitem" onClick={() => onAnimate(asset.id)}><Icon name="video" size={14} /> Standard animate</button></> : null}
                   <button role="menuitem" onClick={() => onEvolve(asset.id)}><Icon name="star" size={14} /> Evolve</button>
                   {onAnalyze ? <button role="menuitem" disabled={!asset.trainingEligible} title={asset.trainingEligible ? undefined : "This upload was excluded from training"} onClick={() => onAnalyze(asset.id)}><Icon name="dna" size={14} /> Analyze media</button> : null}
                   {asset.kind === "audio" && onTrain ? <button role="menuitem" disabled={!asset.trainingEligible} title={asset.trainingEligible ? undefined : "This upload was excluded from training"} onClick={() => onTrain(asset.id, asset.kind)}><Icon name="runtime" size={14} /> Train music LoRA</button> : null}

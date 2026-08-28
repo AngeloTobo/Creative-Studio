@@ -22,6 +22,7 @@ export type StudioViewProps = {
   onUseAsset?: (sourceId: string, kind: MediaKind) => void;
   onEvolve: (sourceId: string) => void;
   onAnimate: (sourceId: string) => void;
+  onAnimateFourWay: (sourceId: string) => void;
   onAnalyze?: (sourceId: string) => void;
   onTrain?: (sourceId: string, kind: MediaKind) => void;
   initialSystemTab?: SystemTab;
@@ -44,6 +45,7 @@ export function StudioView({
   onUseAsset,
   onEvolve,
   onAnimate,
+  onAnimateFourWay,
   onAnalyze,
   onTrain,
   initialSystemTab,
@@ -96,7 +98,7 @@ export function StudioView({
 
     <div className="studio-hub-panel" id={`studio-panel-${activeSection}`} role="tabpanel" aria-labelledby={`studio-tab-${activeSection}`}>
       {activeSection === "project" ? <ProjectsView embedded onOpen={onOpenProject} /> : null}
-      {activeSection === "media" ? <MediaView embedded onGenerate={onCreate} onUseAsset={onUseAsset} onEvolve={onEvolve} onAnimate={onAnimate} onAnalyze={onAnalyze} onTrain={onTrain} /> : null}
+      {activeSection === "media" ? <MediaView embedded onGenerate={onCreate} onUseAsset={onUseAsset} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} onAnalyze={onAnalyze} onTrain={onTrain} /> : null}
       {activeSection === "memory" ? <LibraryView embedded /> : null}
       {activeSection === "models" ? <FlowsView embedded /> : null}
       {activeSection === "system" ? <SystemView key={initialSystemTab} embedded initialTab={initialSystemTab} /> : null}

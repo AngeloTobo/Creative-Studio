@@ -3,6 +3,7 @@ import {
   CONTINUITY_FACETS,
   PROMOTE_TO_CANON_SCHEMA_VERSION,
   compileCreativeTasteMemory,
+  videoGenerationVariantLabel,
   type Acceptance,
   type AcceptanceDecision,
   type Artifact,
@@ -15,6 +16,7 @@ import {
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ArtifactThumb } from "../../components/Visuals";
+import { videoSpeechLabel, videoSpeechSummary } from "../generation/videoContextPresentation";
 import { artifactMatchesHistoryFilter, artifactsForHistoryEntry, countArtifactsInHistory, loadedArtifactHistory, type ArtifactHistoryEntry } from "./artifactHistory";
 import { artifactCanSaveWinningRecipe, generationRecipeMatchesArtifact, winningRecipeForArtifact } from "./winningRecipe";
 
@@ -256,7 +258,7 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onMakeCanon, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focused, compact = false }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onMakeCanon: (intent: CanonIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focused: boolean; compact?: boolean }) {
+function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onMakeCanon, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, focused, compact = false }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onMakeCanon: (intent: CanonIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; onAnimateFourWay: (artifactId: string) => void; focused: boolean; compact?: boolean }) {
   const { snapshot, reuseJob, createGenerationRecipe, recordGenerationRecipeEvidence, busy } = useStudio();
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [recipePromotion, setRecipePromotion] = useState<RecipePromotionState>({ status: "idle", message: "", acceptance: null });
@@ -301,12 +303,17 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
     ? promptEnhancement
     : null;
   const exactEnhancedPrompt = videoPromptEnhancement?.appliedPrompt ?? promptEnhancement?.enhancedPrompt ?? "";
+  const videoRole = artifact.settingsStamp.videoVariant
+    ? videoGenerationVariantLabel(artifact.settingsStamp.videoVariant.role)
+    : null;
+  const videoSpeech = artifact.settingsStamp.videoSpeech ?? null;
   const reuse = async () => {
     await reuseJob(artifact.jobId);
     onQueued();
   };
   const disabled = busy || artifact.status === "retaining";
-  const animateAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Animate</button> : null;
+  const animateAction = artifact.kind === "image" ? <button className="btn btn-ghost artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Standard animate</button> : null;
+  const animateFourWayAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate-four" disabled={disabled} onClick={() => onAnimateFourWay(artifact.id)} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="star" size={16} /> Animate ×4</button> : null;
   const evolveAction = <button className="btn artifact-evolve" disabled={disabled} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>;
   const reuseAction = <button className="btn btn-ghost artifact-reuse" disabled={disabled} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>;
   const acceptAction = <button className="btn artifact-accept" disabled={disabled} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>;
@@ -354,20 +361,21 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
         {artifact.kind === "video" && artifact.preview.url ? <button type="button" className="artifact-play" onClick={() => onPlayVideo(artifact)} aria-label={`Play ${artifact.name}`}><Icon name="video" size={17} /><span>Play</span></button> : null}
       </div>
       <div className="artifact-body">
-        <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span><h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
+        <div className="artifact-title"><div><span className={`state-pill ${artifact.status}`}>{artifact.status}</span>{videoRole ? <span className="video-context-chip role">{videoRole}</span> : null}{videoSpeech ? <span className="video-context-chip speech" aria-label={videoSpeechSummary(videoSpeech)} title={videoSpeechSummary(videoSpeech)}>{videoSpeechLabel(videoSpeech)}</span> : null}<h3>{artifact.name}</h3></div><Icon name={artifact.kind} size={20} /></div>
         <p className={`artifact-prompt${promptExpanded ? " expanded" : ""}`}>{prompt}</p>
         {hasLongPrompt ? <button type="button" className="artifact-prompt-toggle" aria-expanded={promptExpanded} onClick={() => setPromptExpanded((value) => !value)}>{promptExpanded ? "Show less" : "Read full prompt"}</button> : null}
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
         {artifact.kind !== "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => undefined} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} /> : null}
-        {compact ? <div className="artifact-compact-actions" aria-label={`Actions for ${artifact.name}`}>
-          {artifact.status === "ready" ? acceptAction : artifact.kind === "image" ? animateAction : evolveAction}
+        {compact ? <div className={`artifact-compact-actions${artifact.kind === "image" ? " has-four-way" : ""}`} aria-label={`Actions for ${artifact.name}`}>
+          {artifact.kind === "image" ? animateFourWayAction : artifact.status === "ready" ? acceptAction : evolveAction}
+          {artifact.kind === "image" ? artifact.status === "ready" ? acceptAction : evolveAction : null}
           <details>
             <summary className="btn btn-ghost"><Icon name="more" size={16} /> More actions</summary>
             <div>
               {artifact.status !== "ready" ? acceptAction : null}
               {rejectAction}
-              {artifact.kind === "image" && artifact.status === "ready" ? animateAction : null}
-              {artifact.status === "ready" || artifact.kind === "image" ? evolveAction : null}
+              {animateAction}
+              {artifact.status === "ready" ? evolveAction : null}
               {reuseAction}
               {promotionAction}
               {canonAction}
@@ -376,6 +384,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
           </details>
         </div> : <>
           <div className="artifact-actions artifact-create-actions" aria-label={`Create from ${artifact.name}`}>
+            {animateFourWayAction}
             {animateAction}
             {evolveAction}
             {reuseAction}
@@ -400,7 +409,8 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
             <span>DNA <code>{artifact.dnaArtifactId}</code></span>
             {artifact.settingsStamp.evolution ? <span>Evolution <b>{artifact.settingsStamp.evolution.role}</b> · study <code>{artifact.settingsStamp.evolution.studyId}</code></span> : null}
             {artifact.settingsStamp.outputBatch ? <span>Output <b>{artifact.settingsStamp.outputBatch.index} of {artifact.settingsStamp.outputBatch.count}</b> · batch <code>{artifact.settingsStamp.outputBatch.batchId}</code></span> : null}
-            {artifact.settingsStamp.videoVariant ? <span>Version <b>{artifact.settingsStamp.videoVariant.role === "aligned" ? "Aligned" : "Discovery"}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}
+            {artifact.settingsStamp.videoVariant ? <span>Direction <b>{videoRole}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}
+            {videoSpeech ? <span>Speech <b>{videoSpeechSummary(videoSpeech)}</b></span> : null}
             {promptEnhancement ? <>
               <span>{videoPromptEnhancement ? "Video prompt" : "Song prompt"} <b>{promptEnhancement.targetModel ?? artifact.settingsStamp.workflow?.name ?? "selected model"}</b> · Gemma 4 · {promptEnhancement.sourceWordCount} → {promptEnhancement.enhancedWordCount} words{videoPromptEnhancement?.editedAfterEnhancement ? " · edited after enhancement" : ""}</span>
               <details className="lineage-prompt" open><summary>{videoPromptEnhancement ? "Exact motion prompt sent to the video model" : "Exact caption sent to the music model"}</summary><pre>{exactEnhancedPrompt}</pre></details>
@@ -449,9 +459,9 @@ function LearnedNotice({ signals, onClose }: { signals: CreativeTasteSignal[]; o
   return <div className="creative-learned" role="status"><Icon name="dna" size={18} /><span><strong>Creative Studio learned from that decision</strong>{signals.map((signal) => <small key={signal.id}><b>{signal.kind}</b> · {signal.text}</small>)}</span><button className="icon-button" aria-label="Close learned feedback" onClick={onClose}><Icon name="close" size={15} /></button></div>;
 }
 
-export type ArtifactsViewProps = { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; focusArtifactId?: string; embedded?: boolean; compact?: boolean };
+export type ArtifactsViewProps = { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; onAnimateFourWay: (artifactId: string) => void; focusArtifactId?: string; embedded?: boolean; compact?: boolean };
 
-export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, focusArtifactId, embedded = false, compact = embedded }: ArtifactsViewProps) {
+export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, focusArtifactId, embedded = false, compact = embedded }: ArtifactsViewProps) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact, loadArtifactHistory, promoteArtifactToCanon } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [playingVideo, setPlayingVideo] = useState<Artifact | null>(null);
@@ -655,8 +665,8 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
   };
 
   const renderHistoryEntry = (entry: ArtifactHistoryEntry) => entry.kind === "study"
-    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onMakeCanon: setCanonIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate, compact }} />
-    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onMakeCanon={setCanonIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} focused={focusArtifactId === entry.artifact.id} compact={compact} />;
+    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onMakeCanon: setCanonIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, compact }} />
+    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onMakeCanon={setCanonIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} focused={focusArtifactId === entry.artifact.id} compact={compact} />;
   return (
     <section className={`artifacts-view fade-up${embedded ? " artifacts-embedded" : ""}`} aria-label={embedded ? "Completed results" : undefined}>
       {!embedded ? <div className="artifacts-toolbar glass">

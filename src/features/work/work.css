@@ -118,6 +118,8 @@
   margin-top: 9px;
 }
 
+.artifact-compact-actions.has-four-way { grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr) auto; }
+
 .artifact-compact-actions > .btn,
 .artifact-compact-actions > details > summary { min-height: 34px; padding: 0 11px; font-size: 9px; }
 .artifact-compact-actions > details > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; white-space: nowrap; }

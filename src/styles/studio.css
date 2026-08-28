@@ -988,6 +988,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .artifact-title { display: flex; justify-content: space-between; gap: 12px; }
 .artifact-title h3 { margin-top: 7px; font-family: var(--font-display); font-size: 17px; }
 .artifact-title > svg { color: var(--text-muted); }
+.video-context-chip { display: inline-flex; min-height: 18px; align-items: center; margin-left: 5px; padding: 2px 6px; border: 1px solid rgba(124,58,237,.15); border-radius: 999px; background: rgba(124,58,237,.07); color: var(--text-soft); font-size: 7px; font-weight: 800; letter-spacing: .035em; line-height: 1; text-transform: uppercase; white-space: nowrap; }
+.video-context-chip.role { border-color: rgba(217,70,239,.18); background: rgba(217,70,239,.07); color: var(--pink); }
+.video-context-chip.speech { border-color: rgba(34,211,238,.18); background: rgba(34,211,238,.07); color: var(--cyan); }
 .artifact-body > p { display: -webkit-box; margin-top: 7px; overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .artifact-body > .artifact-prompt.expanded { display: block; overflow: visible; -webkit-line-clamp: unset; }
 .artifact-prompt-toggle { display: block; margin-top: 3px; color: var(--cyan); font-size: 9px; font-weight: 700; }
@@ -1036,7 +1039,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .lineage-prompt pre, .lineage-prompt p { margin: 0; padding: 0 8px 8px; color: var(--text-muted); font: inherit; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .artifact-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; margin-top: 11px; }
 .artifact-actions .btn { height: 38px; padding: 0 12px; font-size: 11px; }
-.artifact-create-actions:has(.artifact-animate) { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.artifact-create-actions:has(.artifact-animate-four) { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.artifact-animate-four { background: linear-gradient(135deg,rgba(139,92,246,.28),rgba(217,70,239,.2)); }
+.artifact-create-actions:has(.artifact-animate):not(:has(.artifact-animate-four)) { grid-template-columns: repeat(3,minmax(0,1fr)); }
 .artifact-create-actions:not(:has(.artifact-animate)) { grid-template-columns: repeat(2,minmax(0,1fr)); }
 .artifact-review-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; margin-top: 7px; }
 .artifact-review-actions .btn { min-width: 0; height: 31px; padding: 0 7px; font-size: 9px; }
@@ -1334,6 +1339,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .cockpit-run-kind > i.failed { background: var(--rose); }
 .cockpit-run-kind > i.running, .cockpit-run-kind > i.waiting-for-runner { background: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
 .cockpit-run-primary { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.cockpit-run-context { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.cockpit-run-context > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cockpit-run-context .video-context-chip { flex: none; margin-left: 0; }
 .cockpit-run small { color: var(--text-faint); font-size: 8px; text-transform: uppercase; }
 .cockpit-run-primary strong { overflow: hidden; color: var(--text-main); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .cockpit-run-primary p { display: -webkit-box; overflow: hidden; color: var(--text-muted); font-size: 9px; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }

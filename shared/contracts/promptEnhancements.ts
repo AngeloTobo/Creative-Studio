@@ -13,6 +13,21 @@ export type VideoPromptProfileId =
 
 export type VideoPromptOutputFormat = "minimax-h3-timeline" | "natural-language";
 
+export type VideoSpeechMode = "no-speech" | "short-natural-line" | "exact-script";
+
+export type VideoSpeechInput = {
+  mode?: VideoSpeechMode;
+  text?: string | null;
+};
+
+export type VideoSpeechStamp = {
+  schemaVersion: "creative-studio-video-speech/1.0";
+  mode: VideoSpeechMode;
+  authoredText: string | null;
+  spokenText: string | null;
+  directive: string;
+};
+
 export type VideoPromptProfile = {
   id: VideoPromptProfileId;
   label: string;
@@ -21,6 +36,144 @@ export type VideoPromptProfile = {
   minimumWords: number;
   maximumWords: number;
 };
+
+const VIDEO_SOUND_DESIGN_DIRECTIVE = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
+const NO_SPEECH_DIRECTIVE = `No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
+const VIDEO_SPEECH_TEXT_MAX_LENGTH = 500;
+const VIDEO_SPEECH_NATURAL_LINE_MAX_WORDS = 14;
+
+function speechText(value: unknown) {
+  return String(value ?? "").trim().slice(0, VIDEO_SPEECH_TEXT_MAX_LENGTH + 1);
+}
+
+function simplifyNaturalSpeechLine(value: unknown) {
+  let line = speechText(value);
+  if (!line || line.length > VIDEO_SPEECH_TEXT_MAX_LENGTH) throw new Error("video_speech_text_invalid");
+  line = line
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
+    .replace(/^\s*(?:(?:please\s+)?(?:have|make|let)\s+(?:the\s+)?(?:subject|person|character|speaker|them|him|her)\s+(?:say|speak)|(?:the\s+)?(?:subject|person|character|speaker)\s+says?|dialogue)\s*[:,.-]?\s*/i, "")
+    .replace(/^\s*["'\u201c\u201d]+|["'\u201c\u201d]+\s*$/g, "")
+    .replace(/\b(?:um+|uh+|you know|kind of|sort of|basically|literally)\b\s*[,;:-]?\s*/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const firstSentence = line.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? line;
+  const tokens = firstSentence.replace(/[.!?]+$/, "").trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) throw new Error("video_speech_text_invalid");
+  const bounded = tokens.slice(0, VIDEO_SPEECH_NATURAL_LINE_MAX_WORDS).join(" ").replace(/[,;:-]+$/, "").trim();
+  if (!bounded) throw new Error("video_speech_text_invalid");
+  const capitalized = `${bounded.charAt(0).toUpperCase()}${bounded.slice(1)}`;
+  const punctuation = /\?$/.test(firstSentence) ? "?" : /!$/.test(firstSentence) ? "!" : ".";
+  return `${capitalized}${punctuation}`;
+}
+
+function exactSpeechText(value: unknown) {
+  const line = speechText(value);
+  if (!line || line.length > VIDEO_SPEECH_TEXT_MAX_LENGTH || /<\/?d(?:\s|>)/i.test(line)) {
+    throw new Error("video_speech_text_invalid");
+  }
+  return line;
+}
+
+function h3SpeechDirective(mode: Exclude<VideoSpeechMode, "no-speech">, spokenText: string) {
+  const delivery = mode === "exact-script" ? "says exactly once without paraphrase" : "says once, clearly and naturally";
+  return `(S1) is the visible subject. At the intended beat, (S1) ${delivery}: <d>[English] ${spokenText}</d>. Do not add, repeat, or improvise any other words. No other dialogue or human vocalization. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
+}
+
+function naturalLanguageSpeechDirective(mode: Exclude<VideoSpeechMode, "no-speech">, spokenText: string) {
+  const delivery = mode === "exact-script" ? "says exactly once, verbatim" : "says once, clearly and naturally";
+  return `The visible subject ${delivery}: "${spokenText}" Do not add, repeat, paraphrase, or improvise any other words. No other dialogue or human vocalization. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
+}
+
+function speechDirective(mode: VideoSpeechMode, spokenText: string | null, outputFormat: VideoPromptOutputFormat) {
+  if (mode === "no-speech") return NO_SPEECH_DIRECTIVE;
+  if (!spokenText) throw new Error("video_speech_text_invalid");
+  return outputFormat === "minimax-h3-timeline"
+    ? h3SpeechDirective(mode, spokenText)
+    : naturalLanguageSpeechDirective(mode, spokenText);
+}
+
+function compileSpeechStamp(input: VideoSpeechInput | undefined, outputFormat: VideoPromptOutputFormat): VideoSpeechStamp {
+  const mode = input?.mode ?? "no-speech";
+  if (mode !== "no-speech" && mode !== "short-natural-line" && mode !== "exact-script") throw new Error("video_speech_mode_invalid");
+  if (mode === "no-speech") {
+    if (speechText(input?.text)) throw new Error("video_speech_text_unexpected");
+    return { schemaVersion: "creative-studio-video-speech/1.0", mode, authoredText: null, spokenText: null, directive: NO_SPEECH_DIRECTIVE };
+  }
+  const authoredText = speechText(input?.text);
+  if (!authoredText || authoredText.length > VIDEO_SPEECH_TEXT_MAX_LENGTH) throw new Error("video_speech_text_invalid");
+  const spokenText = mode === "exact-script" ? exactSpeechText(authoredText) : simplifyNaturalSpeechLine(authoredText);
+  return {
+    schemaVersion: "creative-studio-video-speech/1.0",
+    mode,
+    authoredText,
+    spokenText,
+    directive: speechDirective(mode, spokenText, outputFormat),
+  };
+}
+
+/** Validates a browser-provided speech stamp without trusting its description. */
+export function normalizeVideoSpeechStamp(value: unknown): VideoSpeechStamp {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_video_speech_stamp");
+  const input = value as Record<string, unknown>;
+  const mode = input.mode;
+  if (input.schemaVersion !== "creative-studio-video-speech/1.0"
+    || (mode !== "no-speech" && mode !== "short-natural-line" && mode !== "exact-script")) {
+    throw new Error("invalid_video_speech_stamp");
+  }
+  const authoredText = input.authoredText === null ? null : String(input.authoredText ?? "");
+  const spokenText = input.spokenText === null ? null : String(input.spokenText ?? "");
+  const directive = String(input.directive ?? "");
+  try {
+    if (mode === "no-speech") {
+      if (authoredText !== null || spokenText !== null || directive !== NO_SPEECH_DIRECTIVE) throw new Error("invalid");
+    } else {
+      if (authoredText === null || spokenText === null) throw new Error("invalid");
+      const expectedSpokenText = mode === "exact-script" ? exactSpeechText(authoredText) : simplifyNaturalSpeechLine(authoredText);
+      if (spokenText !== expectedSpokenText) throw new Error("invalid");
+      const validDirectives = [
+        speechDirective(mode, spokenText, "minimax-h3-timeline"),
+        speechDirective(mode, spokenText, "natural-language"),
+      ];
+      if (!validDirectives.includes(directive)) throw new Error("invalid");
+    }
+  } catch {
+    throw new Error("invalid_video_speech_stamp");
+  }
+  return { schemaVersion: "creative-studio-video-speech/1.0", mode, authoredText, spokenText, directive };
+}
+
+/**
+ * Applies an explicit speech policy after visual prompt enhancement. H3 speech
+ * follows its timeline dialogue syntax; no-speech modifies only the Audio line
+ * and intentionally creates no speaker identity. Natural-language profiles get
+ * one literal chronological sentence.
+ */
+export function compileVideoPromptWithSpeech(
+  value: unknown,
+  input: VideoSpeechInput | undefined,
+  profile: Pick<VideoPromptProfile, "outputFormat">,
+) {
+  const basePrompt = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  if (basePrompt.length < 4) throw new Error("directive_required");
+  const speech = compileSpeechStamp(input, profile.outputFormat);
+  let prompt: string;
+  if (profile.outputFormat === "minimax-h3-timeline") {
+    const audioPattern = /(Audio\s*:\s*[^\n]*)/i;
+    if (speech.mode === "no-speech") {
+      prompt = audioPattern.test(basePrompt)
+        ? basePrompt.replace(audioPattern, `$1 ${speech.directive}`)
+        : `${basePrompt}\nAudio: ${speech.directive}`;
+    } else {
+      prompt = audioPattern.test(basePrompt)
+        ? basePrompt.replace(audioPattern, `${speech.directive}\n$1`)
+        : `${basePrompt}\n${speech.directive}\nAudio: Soundscape follows the visible action.`;
+    }
+  } else {
+    prompt = `${basePrompt.replace(/\s+/g, " ").trim()} ${speech.directive}`.trim();
+  }
+  if (prompt.length > VIDEO_PROMPT_ENHANCED_MAX_LENGTH) throw new Error("video_speech_prompt_too_long");
+  return { prompt, speech };
+}
 
 export function videoPromptProfileForIdentity(input: {
   name?: string | null;

@@ -81,7 +81,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.getByText(/A luminous embryo-like form floats in a dark violet field/)).toBeVisible();
   await expect(page.locator(".orb-stage")).toHaveCount(0);
 
-  await page.getByRole("button", { name: /Animate/ }).click();
+  await page.getByRole("button", { name: /^Animate 4 ways/ }).click();
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
@@ -91,10 +91,16 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
   await expect(page.getByRole("button", { name: "Local Gemma offline" })).toBeDisabled();
   const outputCount = page.getByRole("group", { name: "Number of video outputs" });
-  await expect(outputCount.getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(outputCount.getByRole("button", { name: "4", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(outputCount.getByRole("button", { name: "2", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "1", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "4", exact: true })).toBeDisabled();
   await expect(page.getByRole("alert")).toContainText("development adapter cannot submit simulated video");
+  await expect(page.getByRole("button", { name: "No dialogue", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText(/sparkling synth arpeggios/)).toBeVisible();
+  await page.getByRole("button", { name: "Exact script", exact: true }).click();
+  await page.getByLabel("Exact words").fill("Look at the light.");
+  await expect(page.getByText(/Sent verbatim once/)).toBeVisible();
 
   await page.goto("/#/portal");
   await page.getByRole("button", { name: /Train DNA/ }).click();
@@ -350,6 +356,7 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
   const createdAt = "2026-08-24T04:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     const project = { id: "project_video_gallery", activeDnaArtifactId: null, name: "Video gallery", type: "Motion", status: "active", description: "", note: "", hue: "#d946ef", initials: "VG", createdAt: time, updatedAt: time };
+    const dimensions = { energy: 70, tension: 58, contrast: 74, warmth: 32, spaciousness: 68, rhythmicity: 62, organicity: 44, polish: 78 };
     const poster = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
     const video = "data:video/mp4;base64,AAAA";
     const artifacts = Array.from({ length: 12 }, (_, index) => {
@@ -361,7 +368,9 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
         settingsStamp: {
           schemaVersion: 1, source: "development-adapter", createdAt: date, reusedFromJobId: null, prompt, provider: "development-adapter", modality: "video", workflow: null, parameters: { prompt }, models: [], inputAssetIds: [],
           ...(index === 11 ? {
-            outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId: "output_batch_video_gallery", index: 2, count: 4 },
+            outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId: "output_batch_video_gallery", index: 4, count: 4 },
+            videoVariant: { schemaVersion: "creative-studio-video-variant/1.1", pairId: "video_board_gallery", role: "awe", seed: 404, personalStyleWeight: 10, randomDnaWeight: 90, baseDimensions: dimensions, randomDimensions: dimensions, effectiveDimensions: dimensions },
+            videoSpeech: { schemaVersion: "creative-studio-video-speech/1.0", mode: "exact-script", authoredText: "Look at the light.", spokenText: "Look at the light.", directive: "(S1) is the visible subject. At the intended beat, (S1) says exactly once without paraphrase: <d>[English] Look at the light.</d>. Do not add, repeat, or improvise any other words. No other dialogue or human vocalization." },
             promptEnhancement: {
               schemaVersion: "creative-studio-video-prompt-enhancement/1.0", requestId: "promptenh_gallery", generationWorkflowId: "workflow_h3", generationWorkflowRevisionId: "workflowrev_h3_job", enhancementWorkflowRevisionId: "workflowrev_h3_source",
               sourcePrompt: "The figure turns toward the city.", enhancedPrompt: "Enhanced Gemma timeline that is not the final downstream variant.", basePrompt: "Enhanced Gemma timeline that is not the final downstream variant.", appliedPrompt: "Exact applied motion prompt with the final Discovery camera turn.", editedAfterEnhancement: false,
@@ -371,7 +380,10 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
         }, createdAt: date, updatedAt: date,
       };
     });
-    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} }));
+    const newest = artifacts[11];
+    const jobCreatedAt = new Date(Date.now() + 60_000).toISOString();
+    const job = { id: newest.jobId, projectId: project.id, dnaArtifactId: newest.dnaArtifactId, capability: "VIDEO_GENERATE", modality: "video", status: "queued", progress: 0, prompt: newest.prompt, provider: newest.provider, upstreamId: null, artifactId: newest.id, retryOfJobId: null, error: null, createdAt: jobCreatedAt, updatedAt: jobCreatedAt, startedAt: null, executionStage: "queued", stageUpdatedAt: jobCreatedAt, completedAt: null, settingsStamp: newest.settingsStamp };
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project], dnaArtifacts: [], jobs: [job], artifacts, mediaAssets: [], workflows: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} }));
   }, { createdAt });
 
   await page.goto("/#/gallery");
@@ -387,13 +399,26 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
   await player.getByRole("button", { name: "Close video player" }).click();
   await expect(page.locator("video")).toHaveCount(0);
   const newestVideoCard = page.locator("#artifact-card-artifact_video_11");
+  await expect(newestVideoCard.locator(".video-context-chip.role")).toHaveText("Awe");
+  await expect(newestVideoCard.locator(".video-context-chip.speech")).toHaveText("Exact script");
   await newestVideoCard.getByText("Details & history").click();
   await expect(newestVideoCard.getByText("Video prompt", { exact: false })).toBeVisible();
   await expect(newestVideoCard.getByText("Exact motion prompt sent to the video model")).toBeVisible();
   await expect(newestVideoCard.locator(".lineage-prompt pre")).toContainText("Exact applied motion prompt with the final Discovery camera turn.");
   await expect(newestVideoCard.locator(".lineage-prompt pre")).not.toContainText("Enhanced Gemma timeline that is not the final downstream variant.");
-  await expect(newestVideoCard.getByText("Output 2 of 4", { exact: false })).toBeVisible();
+  await expect(newestVideoCard.getByText("Output 4 of 4", { exact: false })).toBeVisible();
+  await expect(newestVideoCard.getByText("Direction Awe · 10% personal / 90% random DNA", { exact: false })).toBeVisible();
+  await expect(newestVideoCard.getByText("Speech Exact script · “Look at the light.”", { exact: false })).toBeVisible();
   await expect(newestVideoCard.getByText("Song prompt", { exact: false })).toHaveCount(0);
+
+  await page.goto("/#/queue");
+  const queuedRun = page.locator("#cockpit-run-job_video_11");
+  await expect(queuedRun).toBeVisible();
+  await expect(queuedRun.locator(".video-context-chip.role")).toHaveText("Awe");
+  await expect(queuedRun.locator(".video-context-chip.speech")).toHaveText("Exact script");
+  await queuedRun.getByText("Details", { exact: true }).click();
+  await expect(queuedRun.getByText("Awe · 10% personal / 90% random DNA", { exact: true })).toBeVisible();
+  await expect(queuedRun.getByText("Exact script · “Look at the light.”", { exact: true })).toBeVisible();
 });
 
 test("Projects opens the exact pending trained-DNA review instead of the default Create panel", async ({ page }) => {

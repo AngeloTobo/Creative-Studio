@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  compileVideoPromptWithSpeech,
   matchCreativeStudioRoute,
   normalizeEnhancedVideoPrompt,
+  normalizeVideoSpeechStamp,
   videoPromptProfileForIdentity,
 } from "../../shared/contracts";
 
@@ -47,6 +49,54 @@ describe("video prompt enhancement contracts", () => {
     expect(normalizeEnhancedVideoPrompt(output, profile)).toBe(output);
     expect(() => normalizeEnhancedVideoPrompt(`${output} This prompt is ready for the target model.`, profile))
       .toThrow("video_prompt_enhancement_metadata_leak");
+  });
+
+  it("defaults every video prompt to an explicit no-speech policy", () => {
+    const h3Profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" });
+    const compiled = compileVideoPromptWithSpeech(h3Timeline, undefined, h3Profile);
+    expect(compiled.speech).toEqual({
+      schemaVersion: "creative-studio-video-speech/1.0",
+      mode: "no-speech",
+      authoredText: null,
+      spokenText: null,
+      directive: "No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns. Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.",
+    });
+    expect(compiled.prompt).toMatch(/Audio: .*No dialogue or intelligible human speech/);
+    expect(compiled.prompt).toContain("bright arpeggiated synths");
+    expect(compiled.prompt).not.toMatch(/Owl City/i);
+    expect(compiled.prompt).not.toContain("(S1)");
+    expect(normalizeVideoSpeechStamp(compiled.speech)).toEqual(compiled.speech);
+  });
+
+  it("simplifies a natural line and uses MiniMax H3 dialogue syntax", () => {
+    const h3Profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" });
+    const compiled = compileVideoPromptWithSpeech(h3Timeline, {
+      mode: "short-natural-line",
+      text: "Have the subject say: um, I think we should leave this impossible city before it folds into us, you know? Then add a long explanation.",
+    }, h3Profile);
+    expect(compiled.speech).toMatchObject({
+      mode: "short-natural-line",
+      spokenText: "I think we should leave this impossible city before it folds into us?",
+    });
+    expect(compiled.prompt).toContain("(S1) is the visible subject.");
+    expect(compiled.prompt).toContain("<d>[English] I think we should leave this impossible city before it folds into us?</d>");
+    expect(compiled.prompt.indexOf("<d>[English]")).toBeLessThan(compiled.prompt.indexOf("Audio:"));
+    expect(normalizeVideoSpeechStamp(compiled.speech)).toEqual(compiled.speech);
+  });
+
+  it("preserves an exact script verbatim and prohibits improvised words", () => {
+    const ltxProfile = videoPromptProfileForIdentity({ name: "LTX 2.5 Image to Video" });
+    const script = "Wait—this isn't our sky.  Keep moving.";
+    const compiled = compileVideoPromptWithSpeech("The subject crosses the room in one continuous shot.", {
+      mode: "exact-script",
+      text: script,
+    }, ltxProfile);
+    expect(compiled.speech.authoredText).toBe(script);
+    expect(compiled.speech.spokenText).toBe(script);
+    expect(compiled.prompt).toContain(`"${script}"`);
+    expect(compiled.prompt).toMatch(/Do not add, repeat, paraphrase, or improvise any other words/);
+    expect(normalizeVideoSpeechStamp(compiled.speech)).toEqual(compiled.speech);
+    expect(() => normalizeVideoSpeechStamp({ ...compiled.speech, spokenText: "Something else." })).toThrow("invalid_video_speech_stamp");
   });
 
   it("allowlists owner and runner prompt-enhancement routes exactly", () => {

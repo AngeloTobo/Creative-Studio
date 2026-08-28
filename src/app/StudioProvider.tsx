@@ -26,6 +26,7 @@ import type {
   VideoDurationSeconds,
   EvolutionJobContext,
   GenerationOutputBatch,
+  VideoSpeechStamp,
   ReviewArtifactResponse,
   CreateModelTrainingJobRequest,
   ModelTrainingJob,
@@ -121,6 +122,7 @@ export type SubmitWorkflowJobInput = {
   videoOperation?: VideoGenerationOperation;
   performanceMode?: ImagePerformanceMode;
   videoVariant?: VideoGenerationVariant;
+  videoSpeech?: VideoSpeechStamp;
   evolution?: EvolutionJobContext;
   outputBatch?: GenerationOutputBatch;
   videoDurationSeconds?: VideoDurationSeconds;
@@ -139,6 +141,8 @@ function message(error: unknown) {
   if (error.message === "video_duration_not_supported_by_model") return "That model cannot create the selected length. Choose a shorter length or an available LTX model.";
   if (error.message === "video_duration_control_missing") return "This workflow does not expose a duration control. Update its model workflow before generating.";
   if (error.message === "video_duration_revision_mismatch") return "The saved workflow duration does not match your selected length. Choose the length again and retry.";
+  if (error.message === "video_speech_policy_required") return "Choose No dialogue, Simple line, or Exact script before generating video.";
+  if (error.message === "video_speech_prompt_mismatch" || error.message === "invalid_video_speech_stamp") return "The saved speech control no longer matches the exact video prompt. Choose the speech setting again and retry.";
   if (error.message === "prompt_enhancement_requires_local_runner" || error.message === "prompt_enhancement_runner_unavailable") return "Start the Local Runner and ComfyUI to enhance this prompt with Gemma 4. Your prompt is unchanged.";
   if (error.message === "prompt_enhancement_source_too_short") return "Add a little more motion direction before asking Gemma to enhance it.";
   if (error.message === "model_training_provider_unavailable") return "ACE-Step 1.5 training is not ready on the paired machine yet. Install its runtime and Base checkpoints, then restart the Local Runner.";
@@ -356,7 +360,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter]);
 
   const submitWorkflowJob = useCallback(async (input: SubmitWorkflowJobInput) => {
-    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, evolution, outputBatch, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement } = input;
+    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, videoSpeech, evolution, outputBatch, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement } = input;
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -376,6 +380,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       performanceMode,
       videoDurationSeconds,
       videoVariant,
+      videoSpeech,
       videoOperation,
       evolution,
       outputBatch,

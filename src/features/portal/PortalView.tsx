@@ -11,6 +11,7 @@ import { useStudio } from "../../app/StudioProvider";
 import type { StudioView } from "../../app/views";
 import { Icon, type IconName } from "../../components/Icon";
 import { ArtifactThumb, StatusDot } from "../../components/Visuals";
+import type { VideoCreateEntryMode } from "../generation/createEntry";
 import type { CreateIntent } from "../generation/quickCreate";
 import { useCreativeSessions } from "../sessions";
 
@@ -105,7 +106,7 @@ export function PortalView({
   onTrain,
 }: {
   navigate: (view: StudioView) => void;
-  onCreate: (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart?: boolean) => void;
+  onCreate: (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart?: boolean, videoEntryMode?: VideoCreateEntryMode) => void;
   onTrain: (sourceId: string) => void;
 }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, busy, error } = useStudio();
@@ -202,9 +203,11 @@ export function PortalView({
             const detail = !selectedSource || !sourceCompatible
               ? "Start without this source"
               : action.intent === "video"
-                ? selectedSource.kind === "image" ? "Make 2 videos now" : "Open video controls"
+                ? selectedSource.kind === "image" ? "Exact · Enhanced · Left field · Awe" : "Open video controls"
                 : action.intent === "music" && selectedSource.kind === "audio" ? "Use as an audio source" : action.detail;
-            return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, action.intent === "video" && selectedSource?.kind === "image")}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
+            const fourWayVideo = action.intent === "video" && selectedSource?.kind === "image";
+            const label = fourWayVideo ? "Animate 4 ways" : action.label;
+            return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, fourWayVideo, fourWayVideo ? "four-way" : "standard")}><span><Icon name={action.icon} size={20} /></span><strong>{label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
           })}
           <button className="home-action train" disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><span><Icon name="dna" size={20} /></span><strong>Train DNA</strong><small>{selectedSource ? analysisMatch ? "Build another version" : "Analyze this work" : "Select an upload first"}</small><Icon name="arrow" size={15} /></button>
         </div>

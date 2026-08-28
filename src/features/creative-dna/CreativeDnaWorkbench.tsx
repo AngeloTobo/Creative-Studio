@@ -18,6 +18,7 @@ import {
 import { creativeDnaCanGenerate, creativeDnaReviewDecision, useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { GenerationView } from "../generation/GenerationView";
+import type { VideoCreateEntryMode } from "../generation/createEntry";
 import type { CreateIntent } from "../generation/quickCreate";
 import { DnaTrainingPanel } from "./DnaTrainingPanel";
 import { ProductionLoopPanel } from "./ProductionLoopPanel";
@@ -51,7 +52,7 @@ function ReferenceAssetPreview({ asset }: { asset: MediaAsset }) {
   return <Icon name={asset.kind === "audio" ? "music" : "video"} size={20} />;
 }
 
-export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflows, initialReviewJobId, initialVideoExtensionArtifactId, initialEvolutionSourceId, initialSourceId, initialCreateIntent, initialAutoStart = false, initialTrainingAssetIds = [], initialTrainingPath, onCockpitTargetHandled }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void; onWorkflows: () => void; initialReviewJobId?: string; initialVideoExtensionArtifactId?: string; initialEvolutionSourceId?: string; initialSourceId?: string; initialCreateIntent?: CreateIntent; initialAutoStart?: boolean; initialTrainingAssetIds?: string[]; initialTrainingPath?: TrainingPath; onCockpitTargetHandled?: () => void }) {
+export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflows, initialReviewJobId, initialVideoExtensionArtifactId, initialEvolutionSourceId, initialSourceId, initialCreateIntent, initialAutoStart = false, initialVideoCreateMode = "standard", initialTrainingAssetIds = [], initialTrainingPath, onCockpitTargetHandled }: { onQueued: () => void; onMedia: () => void; onArtifacts: () => void; onWorkflows: () => void; initialReviewJobId?: string; initialVideoExtensionArtifactId?: string; initialEvolutionSourceId?: string; initialSourceId?: string; initialCreateIntent?: CreateIntent; initialAutoStart?: boolean; initialVideoCreateMode?: VideoCreateEntryMode; initialTrainingAssetIds?: string[]; initialTrainingPath?: TrainingPath; onCockpitTargetHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, selectDna, saveDna, busy, error } = useStudio();
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
@@ -250,7 +251,7 @@ export function CreativeDnaWorkbench({ onQueued, onMedia, onArtifacts, onWorkflo
       </div></> : null}
 
       {workspace === "train" ? <><button className="workspace-return" onClick={() => setWorkspace("create")}><Icon name="chevron" size={15} /> Back to Create</button><DnaTrainingPanel onMedia={onMedia} initialAssetIds={trainingSeedAssetIds} initialPath={trainingPath} reviewJobId={requestedReviewJobId || initialReviewJobId} onReviewJobHandled={() => { setRequestedReviewJobId(""); onCockpitTargetHandled?.(); }} /></> : null}
-      {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} onTrain={(assetIds = [], path = "analyze") => { setTrainingSeedAssetIds(assetIds); setTrainingPath(path); setWorkspace("train"); }} initialVideoExtensionArtifactId={initialVideoExtensionArtifactId} initialEvolutionSourceId={initialEvolutionSourceId} initialSourceId={initialSourceId} initialCreateIntent={initialCreateIntent} initialAutoStart={initialAutoStart} embedded /> : null}
+      {workspace === "create" ? <GenerationView onQueued={onQueued} onMedia={onMedia} onWorkflows={onWorkflows} onDesign={() => setWorkspace("design")} onTrain={(assetIds = [], path = "analyze") => { setTrainingSeedAssetIds(assetIds); setTrainingPath(path); setWorkspace("train"); }} initialVideoExtensionArtifactId={initialVideoExtensionArtifactId} initialEvolutionSourceId={initialEvolutionSourceId} initialSourceId={initialSourceId} initialCreateIntent={initialCreateIntent} initialAutoStart={initialAutoStart} initialVideoCreateMode={initialVideoCreateMode} embedded /> : null}
     </section>
   );
 }

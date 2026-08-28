@@ -18,9 +18,11 @@ export type CreativeDnaTarget = "music" | "image";
 export type CreativeDnaSourceKind = "original" | "owner_uploads" | "commercial_reference";
 export type CreativeDnaDimensions = Record<CreativeDnaDimensionKey, number>;
 
-export type VideoGenerationVariantRole = "aligned" | "discovery";
+export type LegacyVideoGenerationVariantRole = "aligned" | "discovery";
+export type FourWayVideoGenerationVariantRole = "exact" | "enhanced" | "left-field" | "awe";
+export type VideoGenerationVariantRole = LegacyVideoGenerationVariantRole | FourWayVideoGenerationVariantRole;
 export type VideoGenerationVariant = {
-  schemaVersion: "creative-studio-video-variant/1.0";
+  schemaVersion: "creative-studio-video-variant/1.0" | "creative-studio-video-variant/1.1";
   pairId: string;
   role: VideoGenerationVariantRole;
   seed: number | null;
@@ -215,27 +217,34 @@ export function normalizeVideoGenerationVariant(value: unknown): VideoGeneration
   const seed = input.seed === null ? null : Number(input.seed);
   const personalStyleWeight = Number(input.personalStyleWeight);
   const randomDnaWeight = Number(input.randomDnaWeight);
-  if (input.schemaVersion !== "creative-studio-video-variant/1.0"
+  const legacyRole = role === "aligned" || role === "discovery";
+  const fourWayRole = role === "exact" || role === "enhanced" || role === "left-field" || role === "awe";
+  const legacyVariant = input.schemaVersion === "creative-studio-video-variant/1.0" && legacyRole;
+  const fourWayVariant = input.schemaVersion === "creative-studio-video-variant/1.1" && fourWayRole;
+  if ((!legacyVariant && !fourWayVariant)
     || !/^video_pair_[a-z0-9-]{8,80}$/i.test(pairId)
-    || (role !== "aligned" && role !== "discovery")
     || (seed !== null && (!Number.isInteger(seed) || seed < 0 || seed > 0xffff_ffff))
     || !Number.isInteger(personalStyleWeight) || !Number.isInteger(randomDnaWeight)
     || personalStyleWeight < 0 || randomDnaWeight < 0 || personalStyleWeight + randomDnaWeight !== 100
-    || (role === "aligned" && (seed !== null || personalStyleWeight <= randomDnaWeight || input.randomDimensions !== null))
-    || (role === "discovery" && (seed === null || randomDnaWeight <= personalStyleWeight))) {
+    || (role === "aligned" && (seed !== null || personalStyleWeight !== 100 || randomDnaWeight !== 0 || input.randomDimensions !== null))
+    || (role === "discovery" && (seed === null || randomDnaWeight <= personalStyleWeight))
+    || ((role === "exact" || role === "enhanced") && (seed === null || personalStyleWeight !== 100 || randomDnaWeight !== 0 || input.randomDimensions !== null))
+    || (role === "left-field" && (seed === null || personalStyleWeight !== 25 || randomDnaWeight !== 75))
+    || (role === "awe" && (seed === null || personalStyleWeight !== 10 || randomDnaWeight !== 90))) {
     throw new Error("invalid_video_generation_variant");
   }
   const baseDimensions = videoVariantDimensions(input.baseDimensions);
-  const randomDimensions = role === "discovery" ? videoVariantDimensions(input.randomDimensions) : null;
+  const hasRandomDimensions = role === "discovery" || role === "left-field" || role === "awe";
+  const randomDimensions = hasRandomDimensions ? videoVariantDimensions(input.randomDimensions) : null;
   const effectiveDimensions = videoVariantDimensions(input.effectiveDimensions);
   const validEffectiveDimensions = CREATIVE_DNA_DIMENSION_KEYS.every((key) => (
-    role === "aligned"
+    !hasRandomDimensions
       ? effectiveDimensions[key] === baseDimensions[key]
       : effectiveDimensions[key] === Math.round((baseDimensions[key] * personalStyleWeight + randomDimensions![key] * randomDnaWeight) / 100)
   ));
   if (!validEffectiveDimensions) throw new Error("invalid_video_generation_variant");
   return {
-    schemaVersion: "creative-studio-video-variant/1.0",
+    schemaVersion: input.schemaVersion as VideoGenerationVariant["schemaVersion"],
     pairId,
     role,
     seed,
@@ -274,6 +283,134 @@ function videoDiscoveryPrompt(direction: string, dimensions: CreativeDnaDimensio
     ? "Keep the source identity and opening frame recognizable, but let the staging and motion take the less expected path."
     : "Keep the central subject continuous, but let the staging and motion take the less expected path.";
   return boundedNarrative(`${direction.trim()} ${motion} ${cadence} ${tension} ${camera} ${light} ${surface} ${continuity}`, 2_400);
+}
+
+function deriveVideoSeed(baseSeed: number, index: number) {
+  return ((baseSeed >>> 0) + Math.imul(index, 0x9e37_79b9)) >>> 0;
+}
+
+function randomVideoDimensions(baseDimensions: CreativeDnaDimensions, seed: number) {
+  const random = seededRandom(seed);
+  return CREATIVE_DNA_DIMENSION_KEYS.reduce((result, key) => {
+    result[key] = divergentRandomDimension(baseDimensions[key], random);
+    return result;
+  }, {} as CreativeDnaDimensions);
+}
+
+function blendVideoDimensions(
+  baseDimensions: CreativeDnaDimensions,
+  randomDimensions: CreativeDnaDimensions,
+  personalStyleWeight: number,
+  randomDnaWeight: number,
+) {
+  return CREATIVE_DNA_DIMENSION_KEYS.reduce((result, key) => {
+    result[key] = Math.round((baseDimensions[key] * personalStyleWeight + randomDimensions[key] * randomDnaWeight) / 100);
+    return result;
+  }, {} as CreativeDnaDimensions);
+}
+
+function seededChoice<T>(values: readonly T[], random: () => number) {
+  return values[Math.min(values.length - 1, Math.floor(random() * values.length))];
+}
+
+function leftFieldVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, hasSource: boolean) {
+  const random = seededRandom(seed);
+  const premise = seededChoice([
+    "Reverse cause and effect: the environment reacts first, then the subject completes the motion that appears to have caused it",
+    "Treat stillness as the event while the surrounding space reorganizes itself around the subject in one continuous move",
+    "Turn the expected action inside out: the background advances toward the lens while the subject seems fixed in a moving pocket of space",
+    "Build the scene around one impossible transition in which foreground and distance quietly exchange places",
+  ], random);
+  const camera = seededChoice([
+    "Use a low orbit that crosses behind one foreground obstruction before returning at a radically different scale",
+    "Begin with a locked close view, then let the camera fall sideways into a wide architectural reveal without a cut",
+    "Track against the apparent motion so the subject and world briefly seem to travel in opposite directions",
+    "Let the frame rotate only after the spatial reversal is visible, ending in a clean, unfamiliar composition",
+  ], random);
+  const finish = dimensions.polish >= 60
+    ? "Keep every transition physically legible, sharply timed, and materially precise."
+    : "Let one rough, tactile transition remain visible instead of polishing away the surprise.";
+  const continuity = hasSource
+    ? "Preserve the source subject, first-frame composition, and defining features even as the staging changes direction."
+    : "Keep the central subject recognizable and continuous through the spatial change.";
+  return boundedNarrative(`${premise}. ${camera}. ${finish} ${continuity}`, 2_400);
+}
+
+function aweVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, hasSource: boolean) {
+  const random = seededRandom(seed);
+  const transformation = seededChoice([
+    "A hairline opening in reality reveals nested versions of the same moment at planetary, cellular, and architectural scales",
+    "Gravity folds into visible ribbons and each ribbon briefly contains a different impossible weather system",
+    "The subject casts a shadow upward; the shadow becomes a vast living structure that bends the horizon without obscuring the subject",
+    "Empty space crystallizes into translucent anatomy, then blooms outward as a silent impossible ecosystem before collapsing into one luminous detail",
+  ], random);
+  const movement = seededChoice([
+    "Move through the transformation as one unbroken impossible macro-to-cosmic push",
+    "Hold the subject with unnerving calm while scale, gravity, and depth transform around it in three escalating beats",
+    "Use a precise spiral move that reveals each new scale only after the previous one becomes physically impossible",
+    "Let the camera pass through one microscopic surface and emerge into a monumental version of the same composition",
+  ], random);
+  const finish = `${dimensions.contrast >= 60 ? "Use radiant separation against absolute shadow" : "Use pearlescent low-contrast light"}, with ${dimensions.organicity >= 60 ? "tactile living surfaces" : "uncannily exact synthetic surfaces"}; end on one breathtaking image that could not exist in ordinary physics.`;
+  const continuity = hasSource
+    ? "The source identity and opening frame must remain unmistakable anchors throughout the transformation."
+    : "The central subject must remain an unmistakable anchor throughout the transformation.";
+  return boundedNarrative(`${transformation}. ${movement}. ${finish} ${continuity}`, 2_400);
+}
+
+/**
+ * Creates one truthful four-way motion board. Exact is the authored prompt,
+ * Enhanced is the supplied model-enhanced prompt, and the two exploratory
+ * prompts are deterministic from the board seed. A caller must not substitute
+ * a local template for `enhancedPrompt`; equality is rejected so the label
+ * cannot overstate what happened.
+ */
+export function createFourWayVideoGenerationVersions(input: {
+  exactPrompt: string;
+  enhancedPrompt: string;
+  dimensions: CreativeDnaDimensions;
+  pairId: string;
+  boardSeed: number;
+  hasSource: boolean;
+}): [VideoGenerationVersion, VideoGenerationVersion, VideoGenerationVersion, VideoGenerationVersion] {
+  const exactPrompt = boundedNarrative(input.exactPrompt, 2_400);
+  const enhancedPrompt = boundedNarrative(input.enhancedPrompt, 4_000);
+  if (exactPrompt.length < 4) throw new Error("directive_required");
+  if (enhancedPrompt.length < 4) throw new Error("enhanced_prompt_required");
+  const canonicalPrompt = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+  if (canonicalPrompt(exactPrompt) === canonicalPrompt(enhancedPrompt)) throw new Error("enhanced_prompt_must_differ");
+
+  const baseDimensions = videoVariantDimensions(input.dimensions);
+  const seeds = [0, 1, 2, 3].map((index) => deriveVideoSeed(input.boardSeed, index));
+  const leftFieldRandomDimensions = randomVideoDimensions(baseDimensions, seeds[2]);
+  const aweRandomDimensions = randomVideoDimensions(baseDimensions, seeds[3]);
+  const leftFieldDimensions = blendVideoDimensions(baseDimensions, leftFieldRandomDimensions, 25, 75);
+  const aweDimensions = blendVideoDimensions(baseDimensions, aweRandomDimensions, 10, 90);
+
+  const variant = (
+    role: FourWayVideoGenerationVariantRole,
+    seed: number,
+    personalStyleWeight: number,
+    randomDnaWeight: number,
+    randomDimensions: CreativeDnaDimensions | null,
+    effectiveDimensions: CreativeDnaDimensions,
+  ): VideoGenerationVariant => ({
+    schemaVersion: "creative-studio-video-variant/1.1",
+    pairId: input.pairId,
+    role,
+    seed,
+    personalStyleWeight,
+    randomDnaWeight,
+    baseDimensions,
+    randomDimensions,
+    effectiveDimensions,
+  });
+
+  return [
+    { prompt: exactPrompt, variant: variant("exact", seeds[0], 100, 0, null, baseDimensions) },
+    { prompt: enhancedPrompt, variant: variant("enhanced", seeds[1], 100, 0, null, baseDimensions) },
+    { prompt: leftFieldVideoPrompt(leftFieldDimensions, seeds[2], input.hasSource), variant: variant("left-field", seeds[2], 25, 75, leftFieldRandomDimensions, leftFieldDimensions) },
+    { prompt: aweVideoPrompt(aweDimensions, seeds[3], input.hasSource), variant: variant("awe", seeds[3], 10, 90, aweRandomDimensions, aweDimensions) },
+  ];
 }
 
 export function createVideoGenerationVersions(input: {
@@ -328,7 +465,14 @@ export function createVideoGenerationVersions(input: {
 }
 
 export function videoGenerationVariantLabel(role: VideoGenerationVariantRole) {
-  return role === "aligned" ? "Aligned" : "Discovery";
+  switch (role) {
+    case "aligned": return "Aligned";
+    case "discovery": return "Discovery";
+    case "exact": return "Exact";
+    case "enhanced": return "Enhanced";
+    case "left-field": return "Left Field";
+    case "awe": return "Awe";
+  }
 }
 
 function dimensionBand(value: number) {
