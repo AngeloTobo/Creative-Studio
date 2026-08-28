@@ -14,8 +14,8 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Custom domain: `cs.angelotoborg.com`
 - Local Runner API domain: `runner.cs.angelotoborg.com` (runner routes only; no shell)
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-17: `aa11b082-0f8d-4f66-94e2-3a969c4b66ad`
-- Installed runner process: `Angelo RTX 3090 workstation`, runner `1.3.0`, ComfyUI `0.33.0`; D1 recorded a healthy idle heartbeat at `2026-08-18T00:29:05.960Z` with no runner error
+- Production Worker version verified on 2026-08-28: `cf283ab4-510a-4df0-8584-ead9272baf21`
+- Installed runner process: `Angelo RTX 3090 workstation`, runner `1.12.0`; D1 recorded a healthy idle heartbeat at `2026-08-28T19:55:53.630Z` with no runner error
 
 ## Release sequence
 
@@ -33,8 +33,8 @@ This runs the complete local verification suite, validates the production contra
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
 6. `runner.cs.angelotoborg.com/` returns `404`; its unauthenticated claim route returns `401`; the main product root still redirects through Cloudflare Access.
-7. An authenticated Runtime-page check reports Local Runner, video generation, and multimodal CreativeDNA descriptions available while a recent Local Runner 1.3 heartbeat is healthy.
-8. Remote D1 has no pending migration after `0010_creative_dna_training_evidence_reservations.sql`; runner registration exists and deployment verification adds no job, artifact, or training-review fixtures.
+7. An authenticated Runtime-page check reports Local Runner, video generation, multimodal CreativeDNA descriptions, and Full Video Script v2 available while a recent Local Runner 1.12 heartbeat is healthy.
+8. Remote D1 has no pending migration after `0019_full_video_scripts.sql`; runner registration exists and deployment verification adds no job, artifact, or training-review fixtures.
 9. Windows Scheduled Task `Creative Studio Local Runner` is running, its config ACL permits only the current user and SYSTEM, and D1 reports no runner error.
 10. `npm run check:cloudflare-free` reports no more than 2,904 baseline Worker invocations per day, and deployment output confirms the hourly schedule with Queue retries capped at three.
 
