@@ -1,0 +1,565 @@
+/* Bright Studio visual layer.
+   Loaded last so the product can keep its existing layout and behavior while
+   sharing one lightweight, high-contrast glass treatment across every view. */
+
+:root {
+  color-scheme: light;
+  --bg-0: #f4f5fb;
+  --bg-main: #fafaff;
+  --bg-soft: #f0eff8;
+  --bg-elev: #ffffff;
+
+  --glass-op: .7;
+  --glass-strong-op: .86;
+  --glass-blur: 10px;
+  --surface: rgba(255, 255, 255, .68);
+  --surface-strong: rgba(255, 255, 255, .88);
+  --surface-inset: rgba(78, 61, 120, .045);
+  --border-soft: rgba(65, 48, 104, .12);
+  --border-mid: rgba(65, 48, 104, .2);
+
+  --text: #171226;
+  --text-main: #171226;
+  --text-soft: #38304f;
+  --text-muted: #625a76;
+  --text-faint: #716a80;
+
+  --purple: #7c3aed;
+  --violet: #8b3fd1;
+  --pink: #d12678;
+  --rose: #d91f4f;
+  --magenta: #b52ac6;
+  --cyan: #087fa3;
+  --blue: #2563d8;
+  --green: #087f5b;
+  --amber: #a95608;
+  --teal: #087f78;
+  --accent: var(--violet);
+  --accent-2: var(--pink);
+
+  --shadow-soft: 0 12px 34px rgba(72, 54, 112, .08);
+  --shadow: 0 16px 44px rgba(72, 54, 112, .11);
+}
+
+html,
+body {
+  background: var(--bg-0);
+  color: var(--text-main);
+}
+
+body {
+  accent-color: var(--accent);
+}
+
+::selection {
+  background: rgba(139, 63, 209, .22);
+  color: var(--text-main);
+}
+
+.cosmos {
+  background:
+    radial-gradient(850px 580px at 7% 4%, rgba(209, 38, 120, .12), transparent 64%),
+    radial-gradient(920px 650px at 96% 12%, rgba(8, 127, 163, .12), transparent 62%),
+    radial-gradient(760px 600px at 56% 104%, rgba(124, 58, 237, .09), transparent 65%),
+    linear-gradient(145deg, #f8f8fd 0%, #f2f3fa 52%, #f7f4fb 100%);
+}
+
+.cosmos::after {
+  background-image: radial-gradient(circle, rgba(88, 68, 130, .13) 1px, transparent 1.1px);
+  background-size: 26px 26px;
+  opacity: .28;
+  animation: none;
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 82%);
+  mask-image: linear-gradient(to bottom, black, transparent 82%);
+}
+
+/* Most cards get the glass edge and soft depth without a per-card blur. Only
+   large shell surfaces use backdrop-filter, which keeps scrolling responsive. */
+.glass,
+.glass-strong {
+  border-color: var(--border-soft);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), var(--shadow-soft);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.glass-strong {
+  border-color: var(--border-mid);
+  background: var(--surface-strong);
+}
+
+.sidebar,
+.rightpanel,
+.player,
+.mtop,
+.mtabbar,
+.studio-hub-tabs,
+.work-segments,
+.quick-generate-dock,
+.creative-learned {
+  background: rgba(255, 255, 255, .78);
+  border-color: var(--border-soft);
+  box-shadow: 0 10px 32px rgba(72, 54, 112, .08);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+}
+
+.sidebar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .82), rgba(248, 247, 253, .72));
+  box-shadow: 10px 0 34px rgba(72, 54, 112, .055);
+}
+
+.rightpanel,
+.player {
+  background: rgba(255, 255, 255, .76);
+}
+
+.topbar {
+  position: relative;
+  z-index: 20;
+}
+
+.mtop {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.mtabbar {
+  border-top: 1px solid var(--border-soft);
+}
+
+.brand-txt .bt-2,
+.mtop .mt-name {
+  background: linear-gradient(110deg, var(--text-main) 12%, var(--violet) 58%, var(--pink));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.brand-mark .bm-orb,
+.mtop .mt-mark .bm-orb {
+  box-shadow: 0 8px 24px rgba(139, 63, 209, .24), inset 0 0 10px rgba(255, 255, 255, .55);
+}
+
+.nav-item.active {
+  color: #5b238d;
+  background: linear-gradient(100deg, rgba(139, 63, 209, .14), rgba(209, 38, 120, .08));
+}
+
+.nav-item.active::before {
+  box-shadow: 0 0 8px rgba(139, 63, 209, .32);
+}
+
+.nav-item:hover,
+.btn-icon:hover,
+.btn-ghost:hover,
+.chip:hover {
+  color: var(--text-main);
+}
+
+.btn-ghost,
+.btn-icon,
+.chip,
+.mobile-project-switch,
+.sb-proj-btn {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .72);
+}
+
+.btn-primary {
+  box-shadow: 0 9px 22px -9px rgba(139, 63, 209, .52), inset 0 1px 0 rgba(255, 255, 255, .34);
+}
+
+button.on:not(.btn-primary),
+button.active:not(.btn-primary),
+.seg button.on,
+.studio-hub-tabs button.on,
+.media-tools > div button.on,
+.memory-tabs button.on,
+.work-segments button.active {
+  color: #5c247f;
+}
+
+button.on:not(.btn-primary) :is(strong, b),
+button.active:not(.btn-primary) :is(strong, b) {
+  color: inherit;
+}
+
+.work-segments button.active strong {
+  color: #6b278c;
+}
+
+.mtab.on .mtab-ic {
+  filter: drop-shadow(0 3px 5px rgba(209, 38, 120, .2));
+}
+
+.scroll {
+  scrollbar-color: rgba(75, 59, 111, .24) transparent;
+}
+
+.scroll::-webkit-scrollbar-thumb {
+  background: rgba(75, 59, 111, .2);
+  background-clip: padding-box;
+}
+
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(75, 59, 111, .32);
+  background-clip: padding-box;
+}
+
+input,
+textarea,
+select {
+  color-scheme: light;
+}
+
+select option {
+  background: #fff;
+  color: var(--text-main);
+}
+
+/* Light insets replace dark translucent wells while preserving hierarchy. */
+:is(
+  .production-loop-steps article,
+  .gravity-card,
+  .dna-source-descriptions,
+  .ace-audio-picker,
+  .ace-config,
+  .ace-dataset-items article,
+  .dna-training-inputs,
+  .dna-training-config,
+  .training-dimension-compare,
+  .training-source-evidence,
+  .training-review-history,
+  .quick-intents,
+  .evolution-create-plan > div span,
+  .quick-video-duration button,
+  .quick-render-group button,
+  .quick-seed-control button,
+  .quick-render-estimate,
+  .quick-video-tools .quick-video-audio,
+  .generation-optional-route,
+  .workflow-import-fields .field input,
+  .workflow-field input,
+  .workflow-field textarea,
+  .direct-generation-profile,
+  .evolution-branch .artifact-card,
+  .evolution-active-runs li,
+  .evolution-no-media li,
+  .decision-history,
+  .lineage-panel,
+  .lineage-prompt,
+  .project-card > .project-form,
+  .project-progress,
+  .workflow-generate,
+  .cockpit-filters select,
+  .home-dna-values span,
+  .world-stage
+) {
+  background: var(--surface-inset);
+}
+
+:is(
+  .quick-advanced-section select,
+  .quick-binding-grid select,
+  .quick-direction textarea,
+  .quick-song-lyrics textarea,
+  .quick-video-tools select,
+  .create-step select,
+  .create-input-binding select,
+  .review-note-field textarea,
+  .canon-targets select,
+  .workflow-generate select,
+  .world-form input:not([type="checkbox"]),
+  .world-form textarea,
+  .world-form select
+) {
+  background: rgba(255, 255, 255, .76);
+  color: var(--text-main);
+}
+
+.home-source-preview {
+  background: radial-gradient(circle at 50% 42%, rgba(139, 63, 209, .11), transparent 58%), rgba(255, 255, 255, .48);
+}
+
+.home-dna-pane {
+  background: radial-gradient(circle at 50% 45%, rgba(124, 58, 237, .08), transparent 62%);
+}
+
+.home-pane-head em,
+.dna-result-references > div > span,
+.training-learned,
+.memory-active {
+  color: #08718f;
+}
+
+.home-source-empty-icon,
+.home-dna-pulse {
+  color: #8b3fd1;
+}
+
+.quick-generation-goals > p small {
+  color: var(--cyan);
+}
+
+.home-action > span {
+  color: color-mix(in oklab, var(--home-action-color) 72%, var(--text-main));
+}
+
+.world-board-icon,
+.world-entity-icon,
+.world-empty-graphic {
+  color: color-mix(in oklab, var(--world-hue) 68%, var(--text-main));
+}
+
+.production-loop-boundary,
+.runtime-all-clear,
+.runtime-healthy > summary b,
+.ace-runtime.available,
+.state-pill.approved,
+.badge.active,
+.training-dimension-compare b.up,
+.training-status-dot.completed + * {
+  color: #087653;
+}
+
+.production-loop-stage.review-output,
+.production-loop-stage.review-training,
+.production-loop-stage.evidence-ready,
+.training-runner-state,
+.ace-runtime,
+.ace-runtime-callout,
+.state-pill.waiting-for-runner,
+.studio-hub-tabs button b.warning,
+.runtime-summary .warning b,
+.quick-create-head > em.offline,
+.quick-image-speed.blocked > small,
+.quick-development,
+.create-run-head > em.offline,
+.generation-optional-route > summary em.degraded,
+.generation-development-route small,
+.workflow-state.api-export-required,
+.workflow-notice,
+.state-pill.queued,
+.state-pill.retaining,
+.job-performance.long-running > summary em,
+.job-issue.cancelled header,
+.lineage-drift,
+.workflow-generate > header em.offline,
+.runner-token > header em,
+.quick-world-empty {
+  color: #9a4a05;
+}
+
+.production-loop-stage.generation-running,
+.production-loop-stage.training-running,
+.runtime-optional > summary b,
+.quick-world-entities button.on,
+.canon-facets button.on,
+.artifact-continuity-stamp header span {
+  color: #08718f;
+}
+
+.production-loop-stage.needs-dna,
+.production-loop-stage.generation-failed,
+.runtime-summary .critical b,
+.project-menu > div .project-archive,
+.world-entity-panel > header > button.confirm,
+.world-form-error,
+.training-dimension-compare b.down,
+.generation-optional-route > summary em.unavailable,
+.state-pill.failed,
+.state-pill.rejected,
+.queue-error,
+.job-issue header,
+.job-issue code,
+.artifact-reject,
+.project-archive,
+.runner-list > article em,
+.cockpit-count,
+.cockpit-action-icon,
+.cockpit-run .state-pill.failed,
+.cockpit-run-error b,
+.quick-world-continuity > details.continuity-overflow > small,
+.world-reference-card > div button.confirm,
+.world-rule-card.strength-avoid .world-rule-mark,
+.world-danger-zone strong,
+.world-danger-zone button {
+  color: #c41d46;
+}
+
+:is(
+  .dna-version,
+  .production-loop-steps article.current .production-loop-index,
+  .evolution-create-plan > header > span,
+  .create-step > header > b,
+  .create-output-icon.music,
+  .job-performance-facts span,
+  .direct-generation-profile > div span,
+  .artifact-filters button.active,
+  .artifact-filters button.active b,
+  .evolution-study-count,
+  .artifact-evolve,
+  .artifact-audio-review > div,
+  .artifact-video-tools .artifact-extend,
+  .project-current,
+  .quick-project-context-toggle > svg
+) {
+  color: #762a8b;
+}
+
+.dna-slider strong,
+.cockpit-summary strong {
+  color: var(--text-main);
+}
+
+.badge.rights,
+.rights-panel,
+.rights-panel p {
+  color: #8d4708;
+}
+
+.creative-learned {
+  background: rgba(239, 252, 255, .88);
+}
+
+.project-menu > div,
+.media-action-menu > div,
+.studio-modal,
+.media-inspector,
+.world-sheet {
+  border-color: var(--border-mid);
+  background: rgba(255, 255, 255, .96);
+  color: var(--text-main);
+  box-shadow: 0 28px 80px rgba(53, 38, 86, .2), inset 0 1px 0 #fff;
+}
+
+.msheet {
+  border-color: var(--border-mid);
+  background: rgba(255, 255, 255, .97);
+  box-shadow: 0 -22px 60px rgba(53, 38, 86, .16);
+}
+
+.project-menu > div button:hover,
+.media-action-menu > div button:hover,
+.media-action-menu > div a:hover,
+.project-menu > summary:hover,
+.world-icon-button:hover,
+.world-quick-actions button:hover:not(:disabled) {
+  background: rgba(139, 63, 209, .08);
+  color: var(--text-main);
+}
+
+.studio-modal-backdrop,
+.world-sheet-backdrop,
+.media-inspector::backdrop,
+.msheet-back {
+  background: rgba(47, 36, 70, .3);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.world-sheet-actions {
+  background: rgba(255, 255, 255, .96);
+}
+
+.world-stage-hero strong,
+.world-entity-panel > header strong,
+.world-panel-section > header strong,
+.world-sheet > header strong {
+  color: var(--text-main);
+}
+
+.world-form select {
+  color: var(--text-main);
+}
+
+.training-review-workspace {
+  background: linear-gradient(145deg, rgba(8, 127, 163, .055), rgba(181, 42, 198, .045) 55%, rgba(255, 255, 255, .7));
+}
+
+.training-steps li > span,
+.training-steps strong {
+  background: var(--bg-elev);
+}
+
+.media-preview,
+.home-source-preview.has-source,
+.home-source-preview > video,
+.image-inspector-canvas,
+.video-inspector-canvas,
+.media-inspector-canvas {
+  background-color: #0a0911;
+}
+
+.quick-source-none .quick-source-visual {
+  background: radial-gradient(circle at 50% 42%, rgba(209, 38, 120, .26), transparent 24%), linear-gradient(145deg, rgba(139, 63, 209, .1), rgba(255, 255, 255, .76));
+  color: var(--magenta);
+}
+
+.inline-error {
+  border-color: rgba(217, 31, 79, .22);
+  background: rgba(217, 31, 79, .07);
+  color: #b4183c;
+}
+
+.development-flag {
+  border-color: rgba(169, 86, 8, .2);
+  background: rgba(255, 250, 235, .9);
+  color: #8d4708;
+  box-shadow: 0 8px 22px rgba(97, 61, 17, .1);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .sidebar,
+  .rightpanel,
+  .player,
+  .mtop,
+  .mtabbar,
+  .studio-hub-tabs,
+  .work-segments,
+  .quick-generate-dock,
+  .creative-learned {
+    background: rgba(255, 255, 255, .96);
+  }
+}
+
+@media (max-width: 859px) {
+  .studio-hub-tabs,
+  .work-segments,
+  .quick-generate-dock,
+  .creative-learned {
+    background: rgba(255, 255, 255, .94);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .mtop,
+  .mtabbar {
+    -webkit-backdrop-filter: blur(8px) saturate(1.05);
+    backdrop-filter: blur(8px) saturate(1.05);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .glass-strong,
+  .sidebar,
+  .rightpanel,
+  .player,
+  .mtop,
+  .mtabbar,
+  .studio-hub-tabs,
+  .work-segments,
+  .quick-generate-dock,
+  .creative-learned {
+    background: #fff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cosmos::after {
+    animation: none;
+  }
+}

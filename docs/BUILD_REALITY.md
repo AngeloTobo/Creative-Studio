@@ -2,6 +2,14 @@
 
 Last verified: 2026-08-27 (America/Chicago)
 
+## Current worktree - bright glass visual refresh, not released
+
+- The application now has a cosmetic-only bright visual layer loaded after the existing product CSS. It replaces the dark cosmic palette with high-contrast ink, white translucent surfaces, pale violet/cyan/pink atmosphere, native light form controls, and bright dialog, sheet, menu, shell, sticky-navigation, status, and selected-state treatments. Home, Create, Work, Studio, project onboarding, and Creative Worlds keep their existing component structure and behavior.
+- Glass performance is bounded: ordinary cards use translucent fill, a tinted border, inset highlight, and one soft shadow without `backdrop-filter`; only shell and sticky navigation surfaces retain a 10px desktop blur. Phone scrolling surfaces do not blur, the mobile shell uses an 8px blur, the former animated star field is now static, and unsupported or reduced-transparency environments receive opaque fallbacks.
+- No contract, route, adapter, Worker, storage, generation, training, project, job, artifact, polling, Queue, cron, AFDFW, or Cloudflare behavior changed. There is no migration and no placeholder data. Production publication is not yet claimed in this section.
+- The complete local gate passed ESLint, all TypeScript projects, 25 browser-domain files with 109 tests, 32 Workers-runtime tests, the Local Runner self-test, local environment and Cloudflare Free guards, a Vite production build, and the secret scan across 174 source files. The serial Playwright matrix ran 38 desktop/mobile checks with 32 passes and six intentional device-specific skips.
+- Real Chromium inspection at 1440 by 1000 and 390 by 844 covered first-project onboarding, the actionable Home canvas, Create, Work, Studio, and the Creative World sheet. Both widths matched the viewport with no horizontal overflow; light color-scheme controls and World inputs resolved to dark ink on translucent white; the browser console reported zero errors and zero warnings.
+
 ## Current release — production proven
 
 - Source implementation is current for persistent Creative Worlds and character continuity: additive migrations `0015_creative_worlds_and_history.sql` and `0016_canon_promotion_integrity.sql`, owner/project-scoped versioned Worlds, character/place/object entities, modality-scoped rules, provenance-bearing references, transaction-bound append-only canon promotions, exact-version generation selections, and immutable continuity settings stamps for local ComfyUI image/video work.
@@ -13,7 +21,7 @@ Last verified: 2026-08-27 (America/Chicago)
 
 ## Working now
 
-- Vite + React + TypeScript module application with the original Creative Studio visual language retained across desktop and mobile layouts.
+- Vite + React + TypeScript module application with a product-owned bright glass visual language shared across desktop and mobile layouts.
 - The primary shell is consolidated to four destinations: Home, Create, Work, and Studio. Desktop no longer repeats project, queue, runtime, artifact, or settings controls in a permanent right rail or review dock; mobile uses the same four-destination model with a persistent active-project selector and no competing route tabs.
 - Work combines Needs action, Running, and Results in one project-scoped lifecycle. Results keeps the complete artifact review surface newest-first, hides archived work behind an explicit disclosure, and places durable run history and performance before the media feed. Legacy Production, Queue, and Artifact deep links remain functional and open the correct Work segment, including through browser Back/Forward navigation. Cancelling a run now moves directly to its durable recovery action; retry creates a new job while the cancelled ancestor remains visible in history.
 - Studio combines Project, Media, Memory, Models, and System in one responsive hub. Runtime, Settings, Media, Library, Flows, and Projects deep links remain functional and open their owning Studio tool. System separates genuine failures from intentionally disabled AFDFW remote-only routes, which are labeled `off by design`; Models can be browsed before onboarding while import honestly remains disabled until a Creative Studio project owns the workflow provenance.
