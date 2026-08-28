@@ -112,6 +112,7 @@ export type GenerationSettingsStamp = {
   inputBindings?: Record<string, string>;
   videoVariant?: import("./creativeDna").VideoGenerationVariant;
   videoSpeech?: import("./promptEnhancements").VideoSpeechStamp;
+  videoScript?: import("./videoScripts").VideoScriptStamp;
   videoOperation?: VideoGenerationOperation;
   evolution?: GenerationEvolutionStamp;
   outputBatch?: GenerationOutputBatch;
@@ -360,6 +361,7 @@ export type CapabilityKey =
   | "image-generation"
   | "video-generation"
   | "prompt-enhancement"
+  | "script-builder"
   | "afdfw-music-generation"
   | "afdfw-image-generation"
   | "local-runner"

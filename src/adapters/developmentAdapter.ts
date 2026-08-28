@@ -135,6 +135,7 @@ function capabilitySnapshot(now: string): Capability[] {
     { key: "creative-dna-training-data", label: "CreativeDNA training data", state: "degraded", provider: "development adapter", detail: "Candidate metadata is browser-only; no real media is presented as training-ready output.", checkedAt: now },
     { key: "creative-dna-training", label: "CreativeDNA training", state: "unavailable", provider: "not connected", detail: "Upload-based training requires the Creative Studio Worker and an authenticated local runner.", checkedAt: now },
     { key: "prompt-enhancement", label: "Video prompt enhancement", state: "unavailable", provider: "local runner required", detail: "Real Gemma prompt enhancement is never simulated by the development adapter.", checkedAt: now },
+    { key: "script-builder", label: "Video script builder", state: "unavailable", provider: "local runner required", detail: "Real Gemma script drafting is never simulated by the development adapter.", checkedAt: now },
     { key: "model-adapter-training", label: "ACE-Step music LoRA", state: "unavailable", provider: "not connected", detail: "Real LoRA training requires the Creative Studio Worker and a configured local ACE-Step 1.5 runtime. This development adapter never simulates a checkpoint.", checkedAt: now },
     { key: "music-generation", label: "Music generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; no real audio is rendered in this mode.", checkedAt: now },
     { key: "image-generation", label: "Image generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; gradients stand in for generated media.", checkedAt: now },
@@ -166,6 +167,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     promptEnhancements: [],
+    videoScriptDrafts: [],
     recipes: [],
     trainingExamples: [...(state.trainingExamples ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     trainingJobs: [...(state.trainingJobs ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -787,6 +789,15 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async getVideoPromptEnhancement() {
       throw new Error("prompt_enhancement_requires_local_runner");
+    },
+    async createVideoScriptDraft() {
+      throw new Error("video_script_builder_requires_local_runner");
+    },
+    async getVideoScriptDraft() {
+      throw new Error("video_script_builder_requires_local_runner");
+    },
+    async updateVideoScriptDraft() {
+      throw new Error("video_script_builder_requires_local_runner");
     },
     async listGenerationRecipes() {
       return [];

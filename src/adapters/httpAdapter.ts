@@ -53,6 +53,10 @@ import {
   type WorldResponse,
   type CreateVideoPromptEnhancementRequest,
   type VideoPromptEnhancementResponse,
+  type CreateVideoScriptDraftRequest,
+  type CreateVideoScriptDraftResponse,
+  type UpdateVideoScriptDraftRequest,
+  type UpdateVideoScriptDraftResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -176,6 +180,24 @@ export function createHttpAdapter(): StudioAdapter {
     async getVideoPromptEnhancement(promptEnhancementId: string) {
       const result = await request<VideoPromptEnhancementResponse>(`${CREATIVE_STUDIO_ROUTES.promptEnhancements}/${encodeURIComponent(promptEnhancementId)}`);
       return result.promptEnhancement;
+    },
+    async createVideoScriptDraft(input: CreateVideoScriptDraftRequest) {
+      const result = await request<CreateVideoScriptDraftResponse>(CREATIVE_STUDIO_ROUTES.videoScripts, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.videoScriptDraft;
+    },
+    async getVideoScriptDraft(videoScriptDraftId: string) {
+      const result = await request<CreateVideoScriptDraftResponse>(`${CREATIVE_STUDIO_ROUTES.videoScripts}/${encodeURIComponent(videoScriptDraftId)}`);
+      return result.videoScriptDraft;
+    },
+    async updateVideoScriptDraft(videoScriptDraftId: string, input: UpdateVideoScriptDraftRequest) {
+      const result = await request<UpdateVideoScriptDraftResponse>(`${CREATIVE_STUDIO_ROUTES.videoScripts}/${encodeURIComponent(videoScriptDraftId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
+      return result.videoScriptDraft;
     },
     async submitJob(input: SubmitJobRequest) {
       const result = await request<SubmitJobResponse>(CREATIVE_STUDIO_ROUTES.jobs, {

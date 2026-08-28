@@ -16,6 +16,7 @@ const emptySnapshot: StudioSnapshot = {
   dnaArtifacts: [],
   jobs: [],
   promptEnhancements: [],
+  videoScriptDrafts: [],
   artifacts: [],
   mediaAssets: [],
   workflows: [],
@@ -143,6 +144,71 @@ describe("HTTP adapter request budget", () => {
       videoDurationSeconds: 10,
     });
     expect(fetchMock.mock.calls[1][1]?.method).toBeUndefined();
+  });
+
+  it("creates and checks one explicit durable video-script draft without polling the snapshot", async () => {
+    const videoScriptDraft = {
+      id: "video_script_1",
+      projectId: "project_1",
+      status: "waiting-for-runner",
+      progress: 0,
+      mode: "build",
+      seedPhrases: ["tired astronaut", "living blue flower"],
+      sourceScript: null,
+      sceneDirection: "The astronaut kneels while the flower opens.",
+      videoDurationSeconds: 10,
+      generatedScript: null,
+      currentScript: null,
+      editRevision: 0,
+      provider: "local-comfyui",
+      model: null,
+      comfyPromptId: null,
+      runnerId: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      completedAt: null,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json({ ok: true, videoScriptDraft });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = createHttpAdapter();
+
+    await adapter.createVideoScriptDraft({
+      projectId: "project_1",
+      mode: "build",
+      seedPhrases: videoScriptDraft.seedPhrases,
+      sceneDirection: videoScriptDraft.sceneDirection,
+      videoDurationSeconds: 10,
+      idempotencyKey: "video_script_once_1",
+    });
+    await adapter.getVideoScriptDraft(videoScriptDraft.id);
+    await adapter.updateVideoScriptDraft(videoScriptDraft.id, { currentScript: "I thought the stars were silent until you opened.", expectedRevision: 0 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/creative-studio/video-scripts",
+      "/api/creative-studio/video-scripts/video_script_1",
+      "/api/creative-studio/video-scripts/video_script_1",
+    ]);
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      mode: "build",
+      seedPhrases: videoScriptDraft.seedPhrases,
+      sceneDirection: videoScriptDraft.sceneDirection,
+      videoDurationSeconds: 10,
+    });
+    expect(fetchMock.mock.calls[1][1]?.method).toBeUndefined();
+    expect(fetchMock.mock.calls[2][1]?.method).toBe("PATCH");
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      currentScript: "I thought the stars were silent until you opened.",
+      expectedRevision: 0,
+    });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/snapshot"))).toBe(false);
   });
 
   it("encodes stable artifact-history cursors and filters without extra requests", async () => {

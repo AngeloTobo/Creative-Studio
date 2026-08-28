@@ -14,7 +14,7 @@ npm run local
 
 3. Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default; it selects the next free port when needed).
 
-The command applies local D1 migrations, starts or reuses the Wrangler-local BFF on port 8787, enrolls a localhost-only runner credential, starts Local Runner 1.9, and starts the Vite UI. The credential is stored outside the repository at `%LOCALAPPDATA%\Creative Studio Runner\local-config.json` with a current-user/SYSTEM ACL.
+The command applies local D1 migrations, starts or reuses the Wrangler-local BFF on port 8787, enrolls a localhost-only runner credential, starts Local Runner 1.11, and starts the Vite UI. The credential is stored outside the repository at `%LOCALAPPDATA%\Creative Studio Runner\local-config.json` with a current-user/SYSTEM ACL.
 
 Press `Ctrl+C` in that terminal to stop the processes started by the command. A previously running local BFF is reused and is not stopped.
 
@@ -28,6 +28,7 @@ Press `Ctrl+C` in that terminal to stop the processes started by the command. A 
 | Uploads and completed results | Wrangler-local R2 state under `.wrangler` |
 | Image, audio, video generation | ComfyUI on `127.0.0.1:8188` and this machine's GPU |
 | Multimodal CreativeDNA analysis | Local Runner, FFmpeg, Sharp, Gemma 4, and ComfyUI |
+| Video script drafting | Local Runner 1.11, Gemma 4, ComfyUI, and owner-reviewed D1 revisions |
 | ACE-Step music LoRA training | Local Runner, pinned ACE-Step 1.5 runtime under `D:\AI`, reviewed local audio/captions, and RTX 3090 |
 
 Local mode has no development generation fallback. Image, music/audio, and video generation require a real imported ComfyUI API-format workflow. Every result still receives its immutable workflow, model, prompt, parameter, input, and lineage stamp before being retained locally.

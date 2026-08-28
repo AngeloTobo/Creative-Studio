@@ -37,8 +37,17 @@ Local and remote storage never synchronize implicitly. This prevents local exper
 - Creative Studio D1 owns project metadata, CreativeDNA in every environment, versioned Worlds/entities/rules/references, append-only canon promotions, upload metadata and consent, jobs, artifact history, retained-media pointers, and append-only review decisions.
 - Creative Studio R2 owns owner-uploaded media and every completed generated result, independent of later acceptance decisions.
 - AFDFW provides an approved session plus generation submission/status and temporary media through exact routes.
-- Local Runner 1.4 owns browser-independent execution of API-format ComfyUI workflows and CreativeDNA evidence synthesis. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
+- Local Runner 1.11 owns browser-independent execution of API-format ComfyUI workflows, CreativeDNA evidence synthesis, prompt enhancement, and video-script drafting. It cannot call owner routes, AFDFW, D1, R2, or arbitrary Worker paths directly.
 - In local-first mode the runner and browser call only the localhost BFF; two-second UI refresh and five-second runner claims therefore consume no Cloudflare allowance. The remote build fails closed to the one-minute polling floor.
+
+## Video Script Builder
+
+1. Exact dialogue remains directly editable in Create and does not require Gemma or a runner.
+2. **Help me write** can submit either owner-authored seed phrases or an existing script plus the current scene direction and video length. The request is project/owner scoped, idempotent, and durable in D1.
+3. Local Runner 1.11 claims that request under the same renewable lease boundary as other local work and runs a text-only Gemma 4 ComfyUI graph. The output must be one strict JSON object containing spoken words only and must fit the selected 5, 10, 15, 30, or 60 second word budget.
+4. Completion produces an editable proposal; it never replaces the owner's current words. **Use this script** is the explicit approval action, and every later edit creates a compare-and-swap revision.
+5. Generation reloads the completed owner-scoped draft, requires the exact current text and revision to match Exact script speech, and stamps the seed/source text, generated proposal, applied text, edit revision, model, and ComfyUI prompt ID on each output. A multi-output or evolution request reuses the same reviewed script lineage across all branches.
+6. The development adapter reports Script Builder unavailable and never creates a simulated Gemma draft. The feature adds no AFDFW route, generic proxy, cron, or Queue producer.
 
 ## CreativeDNA vertical slice
 
@@ -88,7 +97,7 @@ Page requests are owner actions rather than a new polling loop. The browser cont
 ## CreativeDNA evidence synthesis
 
 1. The owner starts an idempotent durable run from selected consented uploads, all explicitly training-ready accepted results in the project, and an optional base DNA version.
-2. An authenticated Local Runner 1.4 claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
+2. An authenticated Local Runner claims the exact bundle under a renewable two-minute lease. Owner-session routes cannot submit a fabricated completion payload.
 3. The runner measures image pixels with Sharp, decodes bounded audio/video segments with the bundled local FFmpeg binary, and submits each selected upload to the bundled Gemma 4 multimodal ComfyUI graph. Image, audio, and video use explicit modality bindings; video supplies both decoded frames and its audio track.
 4. Gemma returns a `longSummary` with the full observable-media analysis and a `shortSummary` containing the polished reusable generation prompt. Deterministic measurements, accepted-result prompt/settings context, and an optional base-DNA prior shape the eight CreativeDNA dimensions. Both summaries keep their model, prompt, workflow version, ComfyUI prompt ID, and inference settings as durable source provenance; only the short summary enters generation.
 5. Each source produces the detailed description, bounded observations, primitive metrics, eight dimension values, and confidence. The runner aggregates the dimensions deterministically rather than treating free-form model text as authority.

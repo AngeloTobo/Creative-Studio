@@ -11,5 +11,6 @@ export * from "./productionCockpit";
 export * from "./promptEnhancements";
 export * from "./songPrompts";
 export * from "./videoDuration";
+export * from "./videoScripts";
 export * from "./worlds";
 export * from "./workflows";

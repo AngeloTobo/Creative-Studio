@@ -14,6 +14,7 @@ describe("development adapter", () => {
     const snapshot = await adapter.load();
 
     expect(snapshot.promptEnhancements).toEqual([]);
+    expect(snapshot.videoScriptDrafts).toEqual([]);
     expect(snapshot.capabilities.find((capability) => capability.key === "prompt-enhancement")).toMatchObject({
       state: "unavailable",
       provider: "local runner required",
@@ -29,6 +30,23 @@ describe("development adapter", () => {
       idempotencyKey: "enhance_dev_1",
     })).rejects.toThrow("prompt_enhancement_requires_local_runner");
     await expect(adapter.getVideoPromptEnhancement("prompt_enhancement_1")).rejects.toThrow("prompt_enhancement_requires_local_runner");
+    expect(snapshot.capabilities.find((capability) => capability.key === "script-builder")).toMatchObject({
+      state: "unavailable",
+      provider: "local runner required",
+    });
+    await expect(adapter.createVideoScriptDraft({
+      projectId: "project_1",
+      mode: "build",
+      seedPhrases: ["tired astronaut", "living blue flower"],
+      sceneDirection: "The astronaut kneels while the flower opens.",
+      videoDurationSeconds: 10,
+      idempotencyKey: "video_script_dev_1",
+    })).rejects.toThrow("video_script_builder_requires_local_runner");
+    await expect(adapter.getVideoScriptDraft("video_script_1")).rejects.toThrow("video_script_builder_requires_local_runner");
+    await expect(adapter.updateVideoScriptDraft("video_script_1", {
+      currentScript: "I thought the stars were silent until you opened.",
+      expectedRevision: 0,
+    })).rejects.toThrow("video_script_builder_requires_local_runner");
   });
 
   it("persists DNA, durable job progression, artifacts, and decisions across adapter instances", async () => {

@@ -47,6 +47,9 @@ import type {
   WorldEntity,
   CreateVideoPromptEnhancementRequest,
   VideoPromptEnhancement,
+  CreateVideoScriptDraftRequest,
+  UpdateVideoScriptDraftRequest,
+  VideoScriptDraft,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -60,6 +63,9 @@ export interface StudioAdapter {
   saveCreativeDna(input: CreateCreativeDnaRequest): Promise<CreativeDnaArtifact>;
   createVideoPromptEnhancement(input: CreateVideoPromptEnhancementRequest): Promise<VideoPromptEnhancement>;
   getVideoPromptEnhancement(promptEnhancementId: string): Promise<VideoPromptEnhancement>;
+  createVideoScriptDraft(input: CreateVideoScriptDraftRequest): Promise<VideoScriptDraft>;
+  getVideoScriptDraft(videoScriptDraftId: string): Promise<VideoScriptDraft>;
+  updateVideoScriptDraft(videoScriptDraftId: string, input: UpdateVideoScriptDraftRequest): Promise<VideoScriptDraft>;
   submitJob(input: SubmitJobRequest): Promise<Job>;
   retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
   reuseJob(jobId: string, idempotencyKey: string): Promise<Job>;

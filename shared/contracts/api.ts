@@ -34,6 +34,16 @@ import type {
   VideoSpeechStamp,
 } from "./promptEnhancements";
 import type {
+  CreateVideoScriptDraftRequest,
+  RunnerCompleteVideoScriptDraftRequest,
+  RunnerFailVideoScriptDraftRequest,
+  RunnerVideoScriptDraftBundle,
+  RunnerVideoScriptDraftHeartbeatRequest,
+  UpdateVideoScriptDraftRequest,
+  VideoScriptDraft,
+  VideoScriptUse,
+} from "./videoScripts";
+import type {
   CompleteModelTrainingJobRequest,
   CreateModelTrainingJobRequest,
   ModelAdapter,
@@ -87,6 +97,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   dna: `${CREATIVE_STUDIO_API_PREFIX}/dna`,
   jobs: `${CREATIVE_STUDIO_API_PREFIX}/jobs`,
   promptEnhancements: `${CREATIVE_STUDIO_API_PREFIX}/prompt-enhancements`,
+  videoScripts: `${CREATIVE_STUDIO_API_PREFIX}/video-scripts`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
@@ -107,7 +118,7 @@ export type CreativeStudioRoute =
   | "world-entity-create" | "world-entity-update" | "world-entity-retire"
   | "world-rule-create" | "world-rule-update" | "world-rule-retire"
   | "world-reference-create" | "world-reference-update" | "world-reference-retire" | "world-reference-promote" | "world-artifact-promote"
-  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel" | "prompt-enhancement-create" | "prompt-enhancement-get"
+  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel" | "prompt-enhancement-create" | "prompt-enhancement-get" | "video-script-create" | "video-script-get" | "video-script-update"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
@@ -117,6 +128,7 @@ export type CreativeStudioRoute =
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
   | "runner-prompt-enhancement-heartbeat" | "runner-prompt-enhancement-complete" | "runner-prompt-enhancement-fail"
+  | "runner-video-script-heartbeat" | "runner-video-script-complete" | "runner-video-script-fail"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail"
   | "runner-model-training-dataset" | "runner-model-training-heartbeat" | "runner-model-training-complete" | "runner-model-training-fail";
 
@@ -152,6 +164,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/reuse$/i.test(pathname)) return "job-reuse";
   if (method === "POST" && pathname === "/api/creative-studio/prompt-enhancements") return "prompt-enhancement-create";
   if (method === "GET" && /^\/api\/creative-studio\/prompt-enhancements\/[a-z0-9_]+$/i.test(pathname)) return "prompt-enhancement-get";
+  if (method === "POST" && pathname === "/api/creative-studio/video-scripts") return "video-script-create";
+  if (method === "GET" && /^\/api\/creative-studio\/video-scripts\/[a-z0-9_]+$/i.test(pathname)) return "video-script-get";
+  if (method === "PATCH" && /^\/api\/creative-studio\/video-scripts\/[a-z0-9_]+$/i.test(pathname)) return "video-script-update";
   if (method === "GET" && pathname === "/api/creative-studio/artifacts") return "artifacts-list";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/media$/i.test(pathname)) return "artifact-media";
   if (method === "GET" && /^\/api\/creative-studio\/artifacts\/[a-z0-9_]+\/thumbnail$/i.test(pathname)) return "artifact-thumbnail";
@@ -194,6 +209,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/runner\/prompt-enhancements\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-prompt-enhancement-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/prompt-enhancements\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-prompt-enhancement-complete";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/prompt-enhancements\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-prompt-enhancement-fail";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/video-scripts\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-video-script-heartbeat";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/video-scripts\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-video-script-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/video-scripts\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-video-script-fail";
   if (method === "POST" && pathname === "/api/creative-studio/runner/training/claim") return "runner-training-claim";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-training-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-training-complete";
@@ -218,6 +236,7 @@ export type StudioSnapshot = {
   dnaArtifacts: CreativeDnaArtifact[];
   jobs: Job[];
   promptEnhancements: VideoPromptEnhancement[];
+  videoScriptDrafts?: VideoScriptDraft[];
   artifacts: Artifact[];
   mediaAssets: MediaAsset[];
   workflows: WorkflowDefinition[];
@@ -279,6 +298,7 @@ export type SubmitJobRequest = {
   videoDurationSeconds?: VideoDurationSeconds;
   videoVariant?: VideoGenerationVariant;
   videoSpeech?: VideoSpeechStamp;
+  videoScript?: VideoScriptUse;
   videoOperation?: VideoGenerationOperation;
   evolution?: EvolutionJobContext;
   outputBatch?: GenerationOutputBatch;
@@ -292,6 +312,8 @@ export type SubmitJobResponse = {
 
 export type CreatePromptEnhancementRequest = CreateVideoPromptEnhancementRequest;
 export type CreatePromptEnhancementResponse = { promptEnhancement: VideoPromptEnhancement };
+export type CreateVideoScriptDraftResponse = { videoScriptDraft: VideoScriptDraft };
+export type UpdateVideoScriptDraftResponse = { videoScriptDraft: VideoScriptDraft };
 
 export type RetryJobRequest = { idempotencyKey: string };
 export type RetryJobResponse = { job: Job };
@@ -413,6 +435,7 @@ export type RunnerJobBundle = {
 export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
 export type RunnerWorkClaimResponse =
   | { kind: "prompt-enhancement"; bundle: RunnerPromptEnhancementBundle }
+  | { kind: "video-script"; bundle: RunnerVideoScriptDraftBundle }
   | { kind: "generation"; bundle: RunnerJobBundle }
   | { kind: "training"; bundle: CreativeDnaTrainingBundleResponse }
   | { kind: "model-training"; bundle: ModelTrainingBundleResponse }
@@ -425,6 +448,8 @@ export type RunnerJobHeartbeatRequest = {
 };
 export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
 export type { RunnerPromptEnhancementHeartbeatRequest, RunnerCompletePromptEnhancementRequest, RunnerFailPromptEnhancementRequest };
+export type { RunnerVideoScriptDraftHeartbeatRequest, RunnerCompleteVideoScriptDraftRequest, RunnerFailVideoScriptDraftRequest };
+export type { CreateVideoScriptDraftRequest, UpdateVideoScriptDraftRequest };
 export type RunnerFailJobRequest = { error: string };
 export type RunnerTrainingClaimResponse = { bundle: CreativeDnaTrainingBundleResponse | null };
 export type RunnerTrainingHeartbeatRequest = { progress: number };

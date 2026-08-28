@@ -39,7 +39,7 @@ export type VideoPromptProfile = {
 
 const VIDEO_SOUND_DESIGN_DIRECTIVE = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
 const NO_SPEECH_DIRECTIVE = `No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
-const VIDEO_SPEECH_TEXT_MAX_LENGTH = 500;
+export const VIDEO_SPEECH_TEXT_MAX_LENGTH = 1_200;
 const VIDEO_SPEECH_NATURAL_LINE_MAX_WORDS = 14;
 
 function speechText(value: unknown) {

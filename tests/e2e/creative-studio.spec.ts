@@ -99,8 +99,34 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.getByRole("button", { name: "No dialogue", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText(/sparkling synth arpeggios/)).toBeVisible();
   await page.getByRole("button", { name: "Exact script", exact: true }).click();
-  await page.getByLabel("Exact words").fill("Look at the light.");
+  const originalScript = "Look at the light.";
+  const exactScriptInput = page.getByRole("textbox", { name: "Exact spoken words" });
+  await exactScriptInput.fill(originalScript);
   await expect(page.getByText(/Sent verbatim once/)).toBeVisible();
+
+  const helpButton = page.getByRole("button", { name: "Help me write" });
+  await helpButton.click();
+  const scriptBuilder = page.getByRole("dialog", { name: "Script Builder" });
+  await expect(scriptBuilder).toBeVisible();
+  await expect(scriptBuilder).toContainText("5s target");
+  await expect(scriptBuilder).toContainText(/3.+8 spoken words/);
+  await expect(scriptBuilder.getByRole("alert")).toContainText("Real Gemma script drafting is never simulated");
+  await scriptBuilder.getByRole("textbox", { name: /Seed phrases and ideas/ })
+    .fill("She recognizes the city\nThis body still feels borrowed");
+  await expect(scriptBuilder.getByRole("button", { name: "Build from ideas" })).toBeDisabled();
+  await expect(scriptBuilder.getByRole("button", { name: "Tighten my script" })).toBeDisabled();
+  const viewport = page.viewportSize();
+  const scriptBuilderBounds = await scriptBuilder.boundingBox();
+  expect(viewport).not.toBeNull();
+  expect(scriptBuilderBounds).not.toBeNull();
+  expect(scriptBuilderBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(scriptBuilderBounds!.y).toBeGreaterThanOrEqual(0);
+  expect(scriptBuilderBounds!.x + scriptBuilderBounds!.width).toBeLessThanOrEqual(viewport!.width);
+  expect(scriptBuilderBounds!.y + scriptBuilderBounds!.height).toBeLessThanOrEqual(viewport!.height);
+  await page.keyboard.press("Escape");
+  await expect(scriptBuilder).toBeHidden();
+  await expect(helpButton).toBeFocused();
+  await expect(exactScriptInput).toHaveValue(originalScript);
 
   await page.goto("/#/portal");
   await page.getByRole("button", { name: /Train DNA/ }).click();

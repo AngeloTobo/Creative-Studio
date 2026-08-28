@@ -54,6 +54,12 @@ import {
   type RunnerPromptEnhancementHeartbeatRequest,
   type RunnerCompletePromptEnhancementRequest,
   type RunnerFailPromptEnhancementRequest,
+  type CreateVideoScriptDraftRequest,
+  type UpdateVideoScriptDraftRequest,
+  type RunnerVideoScriptDraftHeartbeatRequest,
+  type RunnerCompleteVideoScriptDraftRequest,
+  type RunnerFailVideoScriptDraftRequest,
+  videoScriptWordRange,
   videoWorkflowDurationParameters,
   videoWorkflowPromptProfile,
   workflowSupportsVideoDuration,
@@ -168,6 +174,18 @@ import {
   videoPromptEnhancementById,
   videoPromptEnhancementStampForJob,
 } from "../promptEnhancements";
+import {
+  claimVideoScriptDraft,
+  completeVideoScriptDraft,
+  createVideoScriptDraft,
+  failVideoScriptDraft,
+  heartbeatVideoScriptDraft,
+  listVideoScriptDrafts,
+  supportsVideoScriptDrafts,
+  updateVideoScriptDraft,
+  videoScriptDraftById,
+  videoScriptStampForJob,
+} from "../videoScripts";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -204,6 +222,10 @@ function statusFor(error: string) {
   if (error === "prompt_enhancement_not_completable" || error === "prompt_enhancement_not_ready"
     || error === "prompt_enhancement_idempotency_conflict" || error === "prompt_enhancement_context_mismatch"
     || error === "prompt_enhancement_applied_prompt_mismatch") return 409;
+  if (error === "video_script_draft_not_completable" || error === "video_script_draft_not_ready"
+    || error === "video_script_idempotency_conflict" || error === "video_script_context_mismatch"
+    || error === "video_script_version_conflict" || error === "video_script_applied_text_mismatch"
+    || error === "video_script_speech_mismatch") return 409;
   if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
     || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
     || error === "artifact_already_canonical") return 409;
@@ -314,6 +336,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
     const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
     const promptEnhancementAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoPromptEnhancement(runner.version));
+    const videoScriptAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoScriptDrafts(runner.version));
     const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
       && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
     if (localHardwareMode(env)) return [
@@ -329,6 +352,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable image workflow is required; no development media is generated.", checkedAt },
       { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable video workflow is required and runs on this machine.", checkedAt },
       { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: promptEnhancementAvailable ? "Gemma 4 can inspect the selected first frame and compile an editable, model-specific video direction." : "Start Local Runner 1.10 or newer with Gemma 4 available.", checkedAt },
+      { key: "script-builder", label: "Video Script Builder", state: videoScriptAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: videoScriptAvailable ? "Build or tighten editable spoken dialogue on this machine." : "Start Local Runner 1.11 or newer with Gemma 4 available.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends music generation to AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends image generation to AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Local Creative Studio D1", detail: "Review decisions are explicit, append-only, and local.", checkedAt },
@@ -348,6 +372,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "image-generation", label: "Image generation", state: "degraded", provider: "development worker", detail: "Durable metadata and decisions are real; generated media is a development placeholder.", checkedAt },
       { key: "video-generation", label: "Video generation", state: "unavailable", provider: "local runner required", detail: "Video workflow execution requires a paired Local Runner.", checkedAt },
       { key: "prompt-enhancement", label: "Video prompt enhancement", state: "unavailable", provider: "local runner required", detail: "Real prompt enhancement is never simulated by the development adapter.", checkedAt },
+      { key: "script-builder", label: "Video Script Builder", state: "unavailable", provider: "local runner required", detail: "Real script writing is never simulated by the development adapter.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -361,6 +386,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
   const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
   const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
   const promptEnhancementAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoPromptEnhancement(runner.version));
+  const videoScriptAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoScriptDrafts(runner.version));
   const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
     && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
   const generationState = session.status === "approved" ? "available" : "unavailable";
@@ -377,6 +403,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     { key: "image-generation", label: "Image generation", state: runnerAvailable ? "available" : "degraded", provider: "Creative Studio Local Runner + ComfyUI", detail: runnerAvailable ? "Imported API-format image workflows execute on the paired machine." : "Image jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local Runner + ComfyUI", detail: runnerAvailable ? "Versioned API-format video workflows can execute on the paired machine." : "Video jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: promptEnhancementAvailable ? "Gemma 4 can inspect a selected image or extension frame and return an editable prompt compiled for the selected video model." : "Prompt requests stay durable until Local Runner 1.10 or newer is online.", checkedAt },
+    { key: "script-builder", label: "Video Script Builder", state: videoScriptAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: videoScriptAvailable ? "Gemma 4 can turn seed phrases into dialogue or tighten an existing script without replacing it automatically." : "Script drafts stay durable until Local Runner 1.11 or newer is online.", checkedAt },
     { key: "afdfw-music-generation", label: "AFDFW music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "Optional remote route through the exact allowlisted AFDFW music capability; it is never selected automatically.", checkedAt },
     { key: "afdfw-image-generation", label: "AFDFW image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "Optional remote route through the exact allowlisted AFDFW image capability; it is never selected automatically.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -393,7 +420,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, runners, worldRecords] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, runners, worldRecords] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -410,6 +437,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listModelAdapters(env, session.userId),
     listModelAdapterReviews(env, session.userId),
     listVideoPromptEnhancements(env, session.userId),
+    listVideoScriptDrafts(env, session.userId),
     listLocalRunners(env, session.userId),
     listWorldRecords(env, session.userId),
   ]);
@@ -433,6 +461,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     dnaArtifacts,
     jobs,
     promptEnhancements,
+    videoScriptDrafts,
     artifacts,
     mediaAssets,
     workflows,
@@ -467,6 +496,8 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const currentRunner = { ...runner, version: heartbeat.version };
     const promptEnhancement = await claimVideoPromptEnhancement(env, currentRunner);
     if (promptEnhancement) return json({ ok: true, kind: "prompt-enhancement", bundle: promptEnhancement });
+    const videoScript = await claimVideoScriptDraft(env, currentRunner);
+    if (videoScript) return json({ ok: true, kind: "video-script", bundle: videoScript });
     const generation = await claimLocalRunnerJob(env, currentRunner);
     if (generation) return json({ ok: true, kind: "generation", bundle: generation });
     const training = await claimLocalRunnerTrainingJob(env, currentRunner);
@@ -497,6 +528,24 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const input = await body<RunnerFailPromptEnhancementRequest>(request);
     if (!match || !input) throw new Error("invalid_runner_request");
     return json({ ok: true, promptEnhancement: await failVideoPromptEnhancement(env, runner, match[1], input.error) });
+  }
+  if (route === "runner-video-script-heartbeat") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/video-scripts\/([a-z0-9_]+)\/heartbeat$/i);
+    const input = await body<RunnerVideoScriptDraftHeartbeatRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, videoScriptDraft: await heartbeatVideoScriptDraft(env, runner, match[1], input.progress) });
+  }
+  if (route === "runner-video-script-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/video-scripts\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<RunnerCompleteVideoScriptDraftRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, videoScriptDraft: await completeVideoScriptDraft(env, runner, match[1], input) });
+  }
+  if (route === "runner-video-script-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/video-scripts\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<RunnerFailVideoScriptDraftRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, videoScriptDraft: await failVideoScriptDraft(env, runner, match[1], input.error) });
   }
   if (route === "runner-job-claim") {
     return json({ ok: true, bundle: await claimLocalRunnerJob(env, runner) });
@@ -725,6 +774,22 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (!match) throw new Error("invalid_prompt_enhancement_request");
       return json({ ok: true, promptEnhancement: await videoPromptEnhancementById(env, session.userId, match[1]) });
     }
+    if (route === "video-script-create") {
+      const input = await body<CreateVideoScriptDraftRequest>(request);
+      if (!input) throw new Error("invalid_video_script_request");
+      return json({ ok: true, videoScriptDraft: await createVideoScriptDraft(env, session.userId, input) }, { status: 202 });
+    }
+    if (route === "video-script-get") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/video-scripts\/([a-z0-9_]+)$/i);
+      if (!match) throw new Error("invalid_video_script_request");
+      return json({ ok: true, videoScriptDraft: await videoScriptDraftById(env, session.userId, match[1]) });
+    }
+    if (route === "video-script-update") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/video-scripts\/([a-z0-9_]+)$/i);
+      const input = await body<UpdateVideoScriptDraftRequest>(request);
+      if (!match || !input) throw new Error("invalid_video_script_request");
+      return json({ ok: true, videoScriptDraft: await updateVideoScriptDraft(env, session.userId, match[1], input) });
+    }
     if (route === "jobs-create") {
       const input = await body<SubmitJobRequest>(request);
       if (!input || !["music", "image", "video"].includes(input.modality)) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
@@ -782,6 +847,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const videoSpeech = input.videoSpeech === undefined ? undefined : normalizeVideoSpeechStamp(input.videoSpeech);
       if (videoSpeech && modality !== "video") throw new Error("invalid_video_speech");
       if (modality === "video" && !videoSpeech) throw new Error("video_speech_policy_required");
+      if (videoSpeech?.spokenText && videoDurationSeconds !== undefined
+        && videoSpeech.spokenText.split(/\s+/).filter(Boolean).length > videoScriptWordRange(videoDurationSeconds).maximum) {
+        throw new Error("video_speech_too_long_for_duration");
+      }
+      if (input.videoScript && (modality !== "video" || !videoSpeech || videoDurationSeconds === undefined)) {
+        throw new Error("video_script_video_workflow_required");
+      }
       if (input.promptEnhancement && modality !== "video") throw new Error("prompt_enhancement_video_workflow_required");
       if (input.performanceMode !== undefined && input.performanceMode !== "fast-default" && input.performanceMode !== "explicit-custom") {
         throw new Error("invalid_image_performance_mode");
@@ -849,8 +921,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         }
         const promptParameters = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
         const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);
-        const expectedPrompt = boundedPrompt(input.workflow.expectedPrompt);
-        const workflowPrompt = boundedPrompt(workflowPromptParameter?.value);
+        const exactExpectedPrompt = String(input.workflow.expectedPrompt ?? "").trim();
+        const exactWorkflowPrompt = String(workflowPromptParameter?.value ?? "").trim();
+        if (input.videoScript && (exactExpectedPrompt.length > 4_000 || exactWorkflowPrompt.length > 4_000)) {
+          throw new Error("video_script_combined_prompt_too_long");
+        }
+        const expectedPrompt = boundedPrompt(exactExpectedPrompt);
+        const workflowPrompt = boundedPrompt(exactWorkflowPrompt);
         const negativePromptParameters = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
         if (!expectedPrompt) throw new Error("workflow_prompt_confirmation_required");
         if (!workflowPromptParameter || !workflowPrompt || workflowPromptParameter.promptRole === "negative") throw new Error("workflow_positive_prompt_missing");
@@ -878,6 +955,12 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           workflowRevisionId: plan.workflow.currentRevision.id,
           promptProfileId: promptEnhancementProfile.id,
           promptOutputFormat: promptEnhancementProfile.outputFormat,
+        }) : undefined;
+        const videoScript = input.videoScript ? await videoScriptStampForJob(env, session.userId, {
+          ...input.videoScript,
+          projectId: input.projectId,
+          videoDurationSeconds: videoDurationSeconds!,
+          videoSpeech: videoSpeech!,
         }) : undefined;
         const continuity = input.continuity
           ? await generationContinuityStamp(env, session.userId, input.projectId, modality, input.continuity, prompt)
@@ -955,6 +1038,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             inputBindings,
             videoVariant,
             videoSpeech,
+            videoScript,
             videoOperation,
             evolution,
             outputBatch: outputBatch ? {
