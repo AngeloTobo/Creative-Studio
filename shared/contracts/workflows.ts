@@ -239,14 +239,24 @@ function linkedNodeId(value: unknown) {
     : null;
 }
 
-function dependencyClosure(graph: RecordValue, roots: Set<string>) {
+const POSITIVE_CONDITIONING_INPUT = /^(?:positive|positive_prompt|positive_conditioning)$/i;
+const NEGATIVE_CONDITIONING_INPUT = /negative|undesired|avoid/i;
+
+type PromptDependencyRole = "positive" | "negative";
+
+function dependencyClosure(graph: RecordValue, roots: Set<string>, role: PromptDependencyRole) {
   const result = new Set(roots);
   const pending = [...roots];
   while (pending.length) {
     const nodeId = pending.pop()!;
     const node = graph[nodeId];
     if (!record(node) || !record(node.inputs)) continue;
-    for (const value of Object.values(node.inputs)) {
+    for (const [inputName, value] of Object.entries(node.inputs)) {
+      // Conditioning nodes can expose positive and negative branches through
+      // different output slots while downstream guiders link both slots back to
+      // the same node id. Preserve the branch role as we traverse upstream.
+      if (role === "positive" && NEGATIVE_CONDITIONING_INPUT.test(inputName)) continue;
+      if (role === "negative" && POSITIVE_CONDITIONING_INPUT.test(inputName)) continue;
       const linked = linkedNodeId(value);
       if (!linked || result.has(linked)) continue;
       result.add(linked);
@@ -264,13 +274,13 @@ function apiPromptRoles(graph: RecordValue) {
     for (const [inputName, value] of Object.entries(rawNode.inputs)) {
       const linked = linkedNodeId(value);
       if (!linked) continue;
-      if (/^(?:positive|positive_prompt|positive_conditioning)$/i.test(inputName)) positiveRoots.add(linked);
-      if (/negative|undesired|avoid/i.test(inputName)) negativeRoots.add(linked);
+      if (POSITIVE_CONDITIONING_INPUT.test(inputName)) positiveRoots.add(linked);
+      if (NEGATIVE_CONDITIONING_INPUT.test(inputName)) negativeRoots.add(linked);
     }
   }
   return {
-    positive: dependencyClosure(graph, positiveRoots),
-    negative: dependencyClosure(graph, negativeRoots),
+    positive: dependencyClosure(graph, positiveRoots, "positive"),
+    negative: dependencyClosure(graph, negativeRoots, "negative"),
   };
 }
 
@@ -326,6 +336,43 @@ function apiInspection(graph: RecordValue): WorkflowGraphInspection {
     }
   }
   return { format: "comfyui-api", modality: inferModality(types), nodeCount: Object.keys(graph).length, parameters, models: [...models].sort() };
+}
+
+export type ExactWorkflowPromptContamination = {
+  positiveParameterId: string;
+  negativeParameterId: string;
+  sharedValue: string;
+};
+
+/**
+ * Reports exact non-empty text copied into both a structurally positive and a
+ * structurally negative prompt parameter. This is deliberately read-only so a
+ * caller can decide whether to create a corrected immutable workflow revision.
+ */
+export function detectExactWorkflowPromptContamination(graph: unknown): ExactWorkflowPromptContamination[] {
+  const parameters = inspectWorkflowGraph(graph).parameters;
+  const positive = parameters.filter((parameter) =>
+    parameter.kind === "text"
+    && parameter.promptRole === "positive"
+    && typeof parameter.value === "string"
+    && parameter.value.length > 0);
+  const negative = parameters.filter((parameter) =>
+    parameter.kind === "text"
+    && parameter.promptRole === "negative"
+    && typeof parameter.value === "string"
+    && parameter.value.length > 0);
+  const matches: ExactWorkflowPromptContamination[] = [];
+  for (const positiveParameter of positive) {
+    for (const negativeParameter of negative) {
+      if (positiveParameter.value !== negativeParameter.value) continue;
+      matches.push({
+        positiveParameterId: positiveParameter.id,
+        negativeParameterId: negativeParameter.id,
+        sharedValue: positiveParameter.value as string,
+      });
+    }
+  }
+  return matches;
 }
 
 type UiWidgetSpec = { name: string; index: number; media?: "image" | "audio" | "video" };

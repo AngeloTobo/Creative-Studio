@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyWorkflowValues, canonicalWorkflowParameterValue, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter, recoverWorkflowPromptRoles, workflowParameterChoices } from "../../shared/contracts";
+import { applyWorkflowValues, canonicalWorkflowParameterValue, detectExactWorkflowPromptContamination, generationWorkflowPromptParameters, inspectWorkflowGraph, musicPromptProfileForIdentity, primaryWorkflowPromptParameter, recoverWorkflowPromptRoles, workflowParameterChoices } from "../../shared/contracts";
+import { TRUSTED_LTX_25_I2V_GRAPH_FIXTURE } from "../worker/fixtures/trustedLtx25I2vGraph";
 
 describe("ComfyUI workflow inspection", () => {
   it("recognizes API prompt graphs and exposes only safe scalar controls", () => {
@@ -98,6 +99,29 @@ describe("ComfyUI workflow inspection", () => {
     const updated = applyWorkflowValues(graph, inspection.parameters, { "405:376::value": "A ceramic body emerging from violet water" }) as typeof graph;
     expect(updated["405:376"].inputs.value).toBe("A ceramic body emerging from violet water");
     expect(updated["405:373"].inputs.text).toBe("bad anatomy, captions, black frames");
+  });
+
+  it("keeps prompt roles isolated through the full trusted LTX dual-CFG topology", () => {
+    const graph = structuredClone(TRUSTED_LTX_25_I2V_GRAPH_FIXTURE);
+    const before = structuredClone(graph);
+    const inspection = inspectWorkflowGraph(graph);
+
+    expect(inspection.parameters.find((parameter) => parameter.id === "398:376::value")).toMatchObject({
+      promptRole: "positive",
+      value: "A reflective figure turns through violet light while the camera moves with deliberate calm.",
+    });
+    expect(inspection.parameters.find((parameter) => parameter.id === "398:373::text")).toMatchObject({
+      promptRole: "negative",
+      value: "A reflective figure turns through violet light while the camera moves with deliberate calm.",
+    });
+    expect(generationWorkflowPromptParameters(inspection.parameters).map((parameter) => parameter.id)).toContain("398:376::value");
+    expect(generationWorkflowPromptParameters(inspection.parameters).map((parameter) => parameter.id)).not.toContain("398:373::text");
+    expect(detectExactWorkflowPromptContamination(graph)).toEqual([{
+      positiveParameterId: "398:376::value",
+      negativeParameterId: "398:373::text",
+      sharedValue: "A reflective figure turns through violet light while the camera moves with deliberate calm.",
+    }]);
+    expect(graph).toEqual(before);
   });
 
   it("recovers contaminated legacy prompt-role metadata from the retained graph", () => {

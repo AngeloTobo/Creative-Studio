@@ -147,4 +147,48 @@ describe("Local Runner standalone Gemma cleanup", () => {
 
     expect(events).toEqual(["complete", "free"]);
   });
+
+  it.each(cases.slice(0, 2))("cancels and drains an exact Comfy prompt before reporting a failed $name", async ({ releaseReason, run }) => {
+    const promptId = `comfy-failed-${releaseReason.replace(/[^a-z0-9]+/gi, "-")}`;
+    const events: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === `${config.comfyUrl}/prompt`) return json({ prompt_id: promptId });
+      if (url === `${config.comfyUrl}/history/${encodeURIComponent(promptId)}`) {
+        return json({
+          [promptId]: {
+            status: {
+              status_str: "error",
+              messages: [["execution_error", { exception_message: "test Gemma failure" }]],
+            },
+          },
+        });
+      }
+      if (url.startsWith(config.apiBase) && url.endsWith("/fail")) {
+        events.push("fail");
+        return json({ ok: true });
+      }
+      if (url.startsWith(config.apiBase)) return json({ ok: true, continue: true });
+      throw new Error(`unexpected_fetch:${url}`);
+    }));
+
+    await run({
+      cancelPrompt: async (_config: unknown, cancelledPromptId: string) => {
+        expect(cancelledPromptId).toBe(promptId);
+        events.push("cancel");
+      },
+      drainPrompt: async (_config: unknown, drainedPromptId: string) => {
+        expect(drainedPromptId).toBe(promptId);
+        events.push("drain");
+        return { promptId: drainedPromptId, drainedAt: "2026-08-29T18:00:00.000Z" };
+      },
+      freeMemory: async () => {
+        events.push("free");
+        return { released: true };
+      },
+      machineHeartbeat: async () => undefined,
+    });
+
+    expect(events).toEqual(["cancel", "drain", "fail", "free"]);
+  });
 });

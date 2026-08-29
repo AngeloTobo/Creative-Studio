@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { musicWorkflowLyricsParameter, type WorkflowDefinition, type WorkflowParameter } from "../../shared/contracts";
-import { preferredQuickWorkflow, quickAnimationDirection, quickGenerationSourceUsage, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
+import { musicWorkflowLyricsParameter, type Job, type WorkflowDefinition, type WorkflowParameter } from "../../shared/contracts";
+import { failedQuickWorkflowRecipeSignatures, preferredQuickWorkflow, quickAnimationDirection, quickGenerationSourceUsage, quickInputBindings, quickParameterValue, quickWorkflowRecipeSignature, workflowCreateIntent } from "../../src/features/generation/quickCreate";
 
 function workflow(id: string, modality: WorkflowDefinition["modality"], mediaKind: WorkflowParameter["mediaKind"] = null): WorkflowDefinition {
   return {
@@ -12,6 +12,26 @@ function workflow(id: string, modality: WorkflowDefinition["modality"], mediaKin
       parameters: mediaKind ? [{ id: `${id}_media`, label: "Source", kind: "media", value: "source.png", mediaKind, binding: { format: "comfyui-api", nodeId: "1", inputName: mediaKind } }] : [],
     },
   };
+}
+
+function workflowAttempt(
+  workflowId: string,
+  status: Job["status"],
+  updatedAt: string,
+  options: { durationSeconds?: number; megapixels?: number; error?: string | null } = {},
+) {
+  return {
+    status,
+    createdAt: updatedAt,
+    updatedAt,
+    completedAt: status === "queued" || status === "running" ? null : updatedAt,
+    error: options.error ?? null,
+    settingsStamp: {
+      workflow: { workflowId, revisionId: `${workflowId}_revision` },
+      videoDurationSeconds: options.durationSeconds ?? 5,
+      videoPerformance: { workload: { durationSeconds: options.durationSeconds ?? 5, megapixels: options.megapixels ?? 0.2 } },
+    },
+  } as Pick<Job, "status" | "createdAt" | "updatedAt" | "completedAt" | "error" | "settingsStamp">;
 }
 
 describe("quick Create routing", () => {
@@ -40,6 +60,56 @@ describe("quick Create routing", () => {
       "image",
       { "slower-image-video": 240_000, "faster-image-video": 90_000 },
     )?.id).toBe("faster-image-video");
+  });
+
+  it("does not give MiniMax H3 an unsupported bonus over faster measured LTX", () => {
+    const ltx = workflow("LTX 2.5 Image to Video", "video", "image");
+    const h3 = workflow("MiniMax Video H3", "video", "image");
+    expect(preferredQuickWorkflow(
+      [ltx, h3],
+      "video",
+      "image",
+      { [ltx.id]: 60_000, [h3.id]: 100_000 },
+    )?.id).toBe(ltx.id);
+  });
+
+  it("suppresses only an exact repeatedly failing recipe and never treats timeouts as model evidence", () => {
+    const h3 = workflow("MiniMax Video H3", "video", "image");
+    const ltx = workflow("LTX 2.5 Image to Video", "video", "image");
+    const h3Fast = quickWorkflowRecipeSignature({ workflowId: h3.id, revisionId: h3.currentRevision.id, durationSeconds: 5, megapixels: 0.2 });
+    const h3Heavy = quickWorkflowRecipeSignature({ workflowId: h3.id, revisionId: h3.currentRevision.id, durationSeconds: 5, megapixels: 0.5 });
+    const ltxTrusted = quickWorkflowRecipeSignature({ workflowId: ltx.id, revisionId: ltx.currentRevision.id, durationSeconds: 30, megapixels: 0.2 });
+    const failures = [
+      workflowAttempt(h3.id, "completed", "2026-08-29T10:00:00.000Z"),
+      workflowAttempt(h3.id, "failed", "2026-08-29T12:00:00.000Z", { error: "invalid_video_variant" }),
+      workflowAttempt(h3.id, "failed", "2026-08-29T13:00:00.000Z", { error: "invalid_video_variant" }),
+      workflowAttempt(ltx.id, "failed", "2026-08-29T12:10:00.000Z", { durationSeconds: 30, error: "comfyui_prompt_timeout" }),
+      workflowAttempt(ltx.id, "failed", "2026-08-29T13:10:00.000Z", { durationSeconds: 30, error: "job_timed_out" }),
+    ];
+    const failedRecipes = failedQuickWorkflowRecipeSignatures(failures);
+    expect(failedRecipes.has(h3Fast)).toBe(true);
+    expect(failedRecipes.has(h3Heavy)).toBe(false);
+    expect(failedRecipes.has(ltxTrusted)).toBe(false);
+    expect(preferredQuickWorkflow(
+      [h3, ltx],
+      "video",
+      "image",
+      { [h3.id]: 50_000, [ltx.id]: 100_000 },
+      { failedRecipeSignatures: failedRecipes, recipeSignatureByWorkflowId: { [h3.id]: h3Fast, [ltx.id]: ltxTrusted } },
+    )?.id).toBe(ltx.id);
+    expect(preferredQuickWorkflow(
+      [h3, ltx],
+      "video",
+      "image",
+      { [h3.id]: 50_000, [ltx.id]: 100_000 },
+      { failedRecipeSignatures: failedRecipes, recipeSignatureByWorkflowId: { [h3.id]: h3Heavy, [ltx.id]: ltxTrusted } },
+    )?.id).toBe(h3.id);
+
+    const recovered = failedQuickWorkflowRecipeSignatures([
+      ...failures,
+      workflowAttempt(h3.id, "completed", "2026-08-29T14:00:00.000Z"),
+    ]);
+    expect(recovered.has(h3Fast)).toBe(false);
   });
 
   it("uses retained source evidence for a truthful animation brief without an imported demo prompt", () => {

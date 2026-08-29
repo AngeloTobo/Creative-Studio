@@ -528,6 +528,34 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
 });
 
+test("Mobile video creation keeps the direct composer ahead of secondary controls", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installVideoBackend(page, false);
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  const composerOrder = await page.locator(".quick-create-card").evaluate((card) => {
+    const order = (selector: string) => Number.parseInt(getComputedStyle(card.querySelector(selector)!).order, 10);
+    return {
+      source: order(".quick-compose-source"),
+      prompt: order(".quick-direction"),
+      setup: order(".quick-video-essentials"),
+      generate: order(".quick-generate-dock"),
+      dialogue: order(".quick-video-speech"),
+      model: order(".quick-compose-model"),
+    };
+  });
+  expect(composerOrder.source).toBeLessThan(composerOrder.prompt);
+  expect(composerOrder.prompt).toBeLessThan(composerOrder.setup);
+  expect(composerOrder.setup).toBeLessThan(composerOrder.generate);
+  expect(composerOrder.generate).toBeLessThan(composerOrder.dialogue);
+  expect(composerOrder.generate).toBeLessThan(composerOrder.model);
+  await expect(page.getByRole("group", { name: "Video duration" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Canvas shape" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Number of video outputs" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 test("Longer video settings require an explicit workload confirmation", async ({ page }) => {
   const backend = await installVideoBackend(page, false);
   await page.goto(`${HTTP_STUDIO}/#/dna`);
@@ -536,7 +564,6 @@ test("Longer video settings require an explicit workload confirmation", async ({
   await page.locator(".quick-compose-source > summary").click();
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   await page.getByLabel("Describe the video").fill("The figure turns toward the moving skyline as rain rises around them.");
-  await page.locator(".quick-duration-panel > summary").click();
   await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
 
   await page.locator(".quick-primary").click();
@@ -557,19 +584,19 @@ test("Longer video settings require an explicit workload confirmation", async ({
   expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
 });
 
-test("Trusted 30s applies the measured single-pass recipe and queues it without a second heavy-workload dialog", async ({ page }) => {
+test("Retained-image Automatic 30s applies trusted LTX without a preset click and queues one proven render", async ({ page }) => {
   const backend = await installVideoBackend(page, false);
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
   await page.getByRole("button", { name: "Video", exact: true }).click();
+  await page.locator(".quick-compose-source > summary").click();
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   const authoredDirection = "A glass-robed figure turns toward a luminous storm gathering above the city.";
   await page.getByLabel("Describe the video").fill(authoredDirection);
 
-  // Bind media directly through the current workflow and choose an unsaved seed
-  // before applying the trusted performance controls. Neither is a preset value.
+  // Choose an unsaved seed before choosing 30s. Automatic routing must retain
+  // the authored source, direction, and seed while applying the measured recipe.
   await page.locator("details.quick-create-advanced > summary").click();
-  const workflowImageInput = page.getByLabel("Load First Frame");
-  await workflowImageInput.selectOption(SOURCE_ID);
   await page.locator("details.quick-render-panel > summary").click();
   await page.locator("details.quick-render-more > summary").click();
   const newSeed = page.locator(".quick-seed-control button");
@@ -586,21 +613,25 @@ test("Trusted 30s applies the measured single-pass recipe and queues it without 
   await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("2m 3s");
   await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("8 measured samples");
 
-  await trustedPreset.getByRole("button", { name: "Use trusted 30s" }).click();
+  await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "30s" }).click();
   await expect(trustedPreset.getByRole("button", { name: "Trusted 30s selected" })).toBeVisible();
+  await expect(page.locator(".quick-video-essentials > header")).toContainText("AUTO MODEL");
+  await expect(page.locator(".quick-video-essentials > header")).toContainText("LTX 2.5 Image to Video");
+  await expect(page.getByRole("group", { name: "Canvas shape" }).getByRole("button", { name: "9:16 Portrait" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("group", { name: "Number of video outputs" }).getByRole("button", { name: "1", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Describe the video")).toHaveValue(authoredDirection);
   await expect(newSeed.locator("small")).toHaveText(String(preservedSeed));
   await expect.poll(() => page.evaluate((presetId) => (
     window.localStorage.getItem("creative-studio:create-sessions")?.includes(presetId) ?? false
   ), TRUSTED_LTX_25_I2V_PORTRAIT_30S.id)).toBe(true);
-  const savedGraphicalSettings = await page.evaluate(() => {
+  const savedSession = await page.evaluate(() => {
     const stored = JSON.parse(window.localStorage.getItem("creative-studio:create-sessions") ?? "{}") as {
-      sessions?: Array<{ graphicalSettings?: Record<string, string | number | boolean | null> }>;
+      sessions?: Array<{ sourceAssetIds?: string[]; graphicalSettings?: Record<string, string | number | boolean | null> }>;
     };
-    return stored.sessions?.[0]?.graphicalSettings ?? {};
+    return stored.sessions?.[0] ?? null;
   });
-  expect(savedGraphicalSettings[`binding:${IMAGE_PARAMETER_ID}`]).toBe(SOURCE_ID);
-  expect(savedGraphicalSettings[`value:${SEED_PARAMETER_ID}`]).toBe(preservedSeed);
+  expect(savedSession?.sourceAssetIds).toContain(SOURCE_ID);
+  expect(savedSession?.graphicalSettings?.[`value:${SEED_PARAMETER_ID}`]).toBe(preservedSeed);
   await page.reload();
   await expect(page.getByRole("region", { name: "Trusted 30 second video preset" })
     .getByRole("button", { name: "Trusted 30s selected" })).toBeVisible();
@@ -611,6 +642,7 @@ test("Trusted 30s applies the measured single-pass recipe and queues it without 
   await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(1);
 
   const [request] = backend.jobs;
+  expect(backend.enhancementRequests).toHaveLength(0);
   expect(request).toMatchObject({
     modality: "video",
     videoDurationSeconds: 30,

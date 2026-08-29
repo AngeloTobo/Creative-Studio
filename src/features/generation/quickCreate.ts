@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowParameter, WorkflowScalar } from "../../../shared/contracts";
+import type { Job, WorkflowDefinition, WorkflowParameter, WorkflowScalar } from "../../../shared/contracts";
 
 export type CreateIntent = "image" | "video" | "music" | "train";
 export type QuickSourceKind = "image" | "audio" | "video";
@@ -16,15 +16,104 @@ function workflowScore(workflow: WorkflowDefinition, sourceKind: QuickSourceKind
   return media.length ? -4 : 2;
 }
 
+export type PreferredQuickWorkflowOptions = {
+  failedRecipeSignatures?: ReadonlySet<string>;
+  recipeSignatureByWorkflowId?: Readonly<Record<string, string>>;
+};
+
+type QuickWorkflowAttempt = Pick<Job, "status" | "createdAt" | "updatedAt" | "completedAt" | "error" | "settingsStamp">;
+
+export type QuickWorkflowRecipe = Readonly<{
+  workflowId: string;
+  revisionId: string | null;
+  durationSeconds: number | null;
+  megapixels: number | null;
+}>;
+
+const TERMINAL_JOB_STATUSES = new Set<Job["status"]>(["completed", "failed", "cancelled"]);
+
+function attemptTime(attempt: QuickWorkflowAttempt) {
+  const value = attempt.completedAt ?? attempt.updatedAt ?? attempt.createdAt;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function normalizedRecipeNumber(value: number | null) {
+  return value === null || !Number.isFinite(value) ? "auto" : String(Math.round(value * 1_000) / 1_000);
+}
+
+export function quickWorkflowRecipeSignature(recipe: QuickWorkflowRecipe) {
+  return [
+    recipe.workflowId,
+    recipe.revisionId ?? "current",
+    normalizedRecipeNumber(recipe.durationSeconds),
+    normalizedRecipeNumber(recipe.megapixels),
+  ].join("::");
+}
+
+function attemptRecipeSignature(attempt: QuickWorkflowAttempt) {
+  const workflow = attempt.settingsStamp.workflow;
+  if (!workflow) return null;
+  return quickWorkflowRecipeSignature({
+    workflowId: workflow.workflowId,
+    revisionId: workflow.revisionId,
+    durationSeconds: attempt.settingsStamp.videoDurationSeconds
+      ?? attempt.settingsStamp.videoPerformance?.workload.durationSeconds
+      ?? null,
+    megapixels: attempt.settingsStamp.videoPerformance?.workload.megapixels ?? null,
+  });
+}
+
+/** Runner/queue timeouts say nothing about whether a model recipe is valid. */
+function isTransientQuickWorkflowFailure(error: string | null) {
+  return /time(?:d)?[ _-]?out|deadline|comfyui.*(?:unreachable|unresponsive)|prompt[_ -]drain|runner.*(?:offline|unavailable|heartbeat)/i.test(error ?? "");
+}
+
+/**
+ * Suppresses only an exact recipe after two consecutive non-transient failures.
+ * A timeout never condemns the workflow, and changing duration or megapixels
+ * produces a different recipe signature. Explicit owner choices remain valid.
+ */
+export function failedQuickWorkflowRecipeSignatures(attempts: QuickWorkflowAttempt[]) {
+  const attemptsByRecipe = new Map<string, QuickWorkflowAttempt[]>();
+  for (const attempt of attempts) {
+    if (!TERMINAL_JOB_STATUSES.has(attempt.status)) continue;
+    const signature = attemptRecipeSignature(attempt);
+    if (!signature) continue;
+    const current = attemptsByRecipe.get(signature) ?? [];
+    current.push(attempt);
+    attemptsByRecipe.set(signature, current);
+  }
+
+  const failedRecipes = new Set<string>();
+  for (const [signature, recipeAttempts] of attemptsByRecipe) {
+    const newest = recipeAttempts.sort((left, right) => attemptTime(right) - attemptTime(left)).slice(0, 2);
+    if (newest.length === 2 && newest.every((attempt) => attempt.status === "failed" && !isTransientQuickWorkflowFailure(attempt.error))) {
+      failedRecipes.add(signature);
+    }
+  }
+  return failedRecipes;
+}
+
 export function preferredQuickWorkflow(
   workflows: WorkflowDefinition[],
   intent: Exclude<CreateIntent, "train">,
   sourceKind: QuickSourceKind | null,
   runtimeMsByWorkflowId: Record<string, number | null> = {},
+  options: PreferredQuickWorkflowOptions = {},
 ) {
   return workflows
-    .filter((workflow) => workflowCreateIntent(workflow.modality) === intent)
-    .map((workflow, index) => ({ workflow, index, score: workflowScore(workflow, sourceKind), runtime: runtimeMsByWorkflowId[workflow.id] ?? null }))
+    .filter((workflow) => {
+      if (workflowCreateIntent(workflow.modality) !== intent) return false;
+      const signature = options.recipeSignatureByWorkflowId?.[workflow.id];
+      return !signature || !options.failedRecipeSignatures?.has(signature);
+    })
+    .map((workflow, index) => ({
+      workflow,
+      index,
+      score: workflowScore(workflow, sourceKind),
+      runtime: runtimeMsByWorkflowId[workflow.id] ?? null,
+    }))
     .sort((a, b) => {
       const runtimeOrder = a.runtime === null && b.runtime === null ? 0
         : a.runtime === null ? 1

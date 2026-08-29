@@ -137,6 +137,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
 });
 
 test("creation keeps image speed safe and never reuses an imported video prompt", async ({ page }) => {
+  test.slow();
   const createdAt = "2026-08-23T14:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
@@ -218,7 +219,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("spinbutton", { name: "Seed" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
-  await page.locator(".quick-duration-panel > summary").click();
+  await page.getByRole("button", { name: "Use Newest retained source upload" }).click();
   await page.locator(".quick-compose-model > summary").click();
   const videoDuration = page.getByRole("group", { name: "Video duration" });
   await expect(videoDuration.getByRole("button", { name: "5s", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -237,7 +238,41 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await videoDuration.getByRole("button", { name: "30s", exact: true }).click();
   await expect(page.getByRole("button", { name: /LTX 2.5 Image to Video/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /MiniMax Video H3/ })).toBeDisabled();
-  await expect(page.getByLabel("Video length")).toContainText("30s is an LTX long render");
+  await expect(page.getByLabel("Video length")).toContainText("30s is a longer local render");
+  await videoDuration.getByRole("button", { name: "5s", exact: true }).click();
+  await expect(page.getByRole("button", { name: /MiniMax Video H3/ })).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(750);
+  const automaticDraft = await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("creative-studio:create-sessions") ?? "{}") as {
+      sessions?: Array<{ workflowId?: string | null; graphicalSettings?: Record<string, unknown> }>;
+    };
+    return stored.sessions?.[0] ?? null;
+  });
+  expect(automaticDraft?.workflowId).toBeNull();
+  expect(automaticDraft?.graphicalSettings).toMatchObject({
+    workflowSelectionMode: "automatic",
+    automaticWorkflowId: "workflow_minimax",
+  });
+  await page.reload();
+  await expect(page.locator(".quick-video-essentials > header")).toContainText("AUTO MODEL");
+  await expect(page.locator(".quick-video-essentials > header")).toContainText("MiniMax Video H3");
+  await page.locator(".quick-compose-model > summary").click();
+  await page.getByRole("button", { name: /LTX 2.5 Image to Video/ }).click();
+  await videoDuration.getByRole("button", { name: "10s", exact: true }).click();
+  await expect(page.getByRole("button", { name: /LTX 2.5 Image to Video/ })).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(750);
+  const explicitDraft = await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("creative-studio:create-sessions") ?? "{}") as {
+      sessions?: Array<{ workflowId?: string | null; graphicalSettings?: Record<string, unknown> }>;
+    };
+    return stored.sessions?.[0] ?? null;
+  });
+  expect(explicitDraft?.workflowId).toBe("workflow_ltx");
+  expect(explicitDraft?.graphicalSettings).toMatchObject({ workflowSelectionMode: "explicit" });
+  await page.reload();
+  await expect(page.locator(".quick-video-essentials > header")).toContainText("YOUR MODEL");
+  await expect(page.locator(".quick-video-essentials > header")).toContainText("LTX 2.5 Image to Video");
+  await page.locator(".quick-render-panel > summary").click();
   await page.getByRole("region", { name: "Canvas and render settings" }).getByText("Fine tune", { exact: true }).click();
   await expect(page.getByRole("group", { name: "Frames per second" }).getByRole("button", { name: /24/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "LTX Positive Prompt" })).toHaveCount(0);

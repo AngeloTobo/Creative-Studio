@@ -305,7 +305,7 @@ async function loveLoopFixture(options: { heavyVideo?: boolean } = {}) {
     method: "POST",
     headers: runnerHeaders,
     body: JSON.stringify({
-      version: "1.15.0",
+      version: "1.16.0",
       comfyUrl: "http://127.0.0.1:8188",
       comfyReady: true,
       comfyVersion: "0.33.0",
@@ -1574,6 +1574,108 @@ describe("Creative Studio Worker API", () => {
         },
       },
     });
+  });
+
+  it("repairs a copied LTX negative prompt into an immutable execution revision before queueing", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "LTX prompt safety repair");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Safe motion direction",
+      directive: "A reflective figure turns through violet light while the camera follows with deliberate calm.",
+      targetModality: "image",
+    });
+    const { bucket } = memoryBucket();
+    const local = workerEnv("development", undefined, bucket);
+    const sourceBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("ltx-source.png"),
+        "x-cs-file-size": String(sourceBytes.byteLength),
+        "x-cs-training-eligible": "false",
+      },
+      body: sourceBytes,
+    }), local)) as { asset: { id: string } };
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5 Image to Video", inputMode: "image-to-video" });
+    const compiled = compileVideoPromptWithSpeech(
+      "The figure turns once toward a violet reflection while the camera makes one restrained lateral move.",
+      undefined,
+      profile,
+    );
+    const originalNegative = "pc game, console game, video game, cartoon, childish, ugly";
+    const graph = structuredClone(TRUSTED_LTX_25_I2V_GRAPH_FIXTURE) as Record<string, { inputs: Record<string, unknown> }>;
+    graph["398:376"].inputs.value = compiled.prompt;
+    graph["398:373"].inputs.text = originalNegative;
+    const raw = JSON.stringify(graph);
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("ltx-safe-base.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(raw).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("LTX 2.5 Image to Video"),
+      },
+      body: raw,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+
+    const contaminatedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevisionId: imported.workflow.currentRevision.id,
+        values: {
+          "398:376::value": compiled.prompt,
+          "398:373::text": compiled.prompt,
+        },
+      }),
+    }), local);
+    expect(contaminatedResponse.status).toBe(201);
+    const contaminated = await result(contaminatedResponse) as { workflow: { currentRevision: { id: string } } };
+
+    const createdResponse = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 30,
+        idempotencyKey: "ltx_negative_prompt_repair_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: contaminated.workflow.currentRevision.id,
+          inputBindings: { "395::image": uploaded.asset.id },
+          expectedPrompt: compiled.prompt,
+        },
+        videoSpeech: compiled.speech,
+      }),
+    }), local);
+    expect(createdResponse.status).toBe(202);
+    const created = await result(createdResponse) as {
+      job: { settingsStamp: { workflow: { revisionId: string }; parameters: Record<string, unknown> } };
+    };
+    expect(created.job.settingsStamp.workflow.revisionId).not.toBe(contaminated.workflow.currentRevision.id);
+    expect(created.job.settingsStamp.parameters["398:376::value"]).toBe(compiled.prompt);
+    expect(created.job.settingsStamp.parameters["398:373::text"]).toBe(originalNegative);
+
+    const exported = await routeCreativeStudioApi(request(
+      `/api/creative-studio/workflows/${imported.workflow.id}/content?revision=${created.job.settingsStamp.workflow.revisionId}`,
+    ), local);
+    expect(exported.status).toBe(200);
+    expect(await exported.json()).toMatchObject({
+      "398:376": { inputs: { value: compiled.prompt } },
+      "398:373": { inputs: { text: originalNegative } },
+    });
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows"), local)) as {
+      workflows: Array<{ id: string; currentRevision: { id: string } }>;
+    };
+    expect(listed.workflows.find((workflow) => workflow.id === imported.workflow.id)?.currentRevision.id)
+      .toBe(contaminated.workflow.currentRevision.id);
   });
 
   it("persists reusable generation recipes with exact workflow settings and observed job evidence", async () => {
@@ -3183,7 +3285,11 @@ describe("Creative Studio Worker API", () => {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission(exact.workflow, "trusted_exact_valid_001")),
     }), local);
     expect(valid.status).toBe(202);
-    const validPayload = await result(valid) as { job: { id: string; settingsStamp: Record<string, unknown> & { videoPerformance: { trustedPreset: Record<string, unknown> } } } };
+    const validPayload = await result(valid) as { job: { id: string; settingsStamp: Record<string, unknown> & {
+      workflow: { revisionId: string };
+      outputBatch: { count: number };
+      videoPerformance: { trustedPreset: Record<string, unknown> & { id: string } };
+    } } };
     expect(validPayload.job.settingsStamp).toMatchObject({
       videoDurationSeconds: 30,
       outputBatch: { count: 1 },
@@ -3220,11 +3326,15 @@ describe("Creative Studio Worker API", () => {
     expect(reused.status).toBe(202);
     expect(await result(reused)).toMatchObject({ job: { settingsStamp: { videoPerformance: { trustedPreset: { id: TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID } } } } });
 
-    const exactGraphJson = JSON.stringify(trustedGraph());
-    const graphTamper = trustedGraph();
+    const executedRevisionId = validPayload.job.settingsStamp.workflow.revisionId;
+    const executedGraphRow = await env.DB.prepare("select graph_json as graphJson from creative_workflow_revisions where id = ?")
+      .bind(executedRevisionId).first<{ graphJson: string }>();
+    expect(executedGraphRow).toBeTruthy();
+    const exactGraphJson = executedGraphRow!.graphJson;
+    const graphTamper = JSON.parse(exactGraphJson) as ReturnType<typeof trustedGraph>;
     graphTamper["398:374"].inputs.tile_size = 1024;
     await env.DB.prepare("update creative_workflow_revisions set graph_json = ? where id = ?")
-      .bind(JSON.stringify(graphTamper), exact.workflow.currentRevision.id).run();
+      .bind(JSON.stringify(graphTamper), executedRevisionId).run();
     const graphDriftRetry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/retry`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_graph_retry_001" }),
     }), local);
@@ -3236,10 +3346,10 @@ describe("Creative Studio Worker API", () => {
     expect(graphDriftReuse.status).toBe(409);
     expect(await result(graphDriftReuse)).toMatchObject({ error: "trusted_video_preset_mismatch" });
     await env.DB.prepare("update creative_workflow_revisions set graph_json = ? where id = ?")
-      .bind(exactGraphJson, exact.workflow.currentRevision.id).run();
+      .bind(exactGraphJson, executedRevisionId).run();
 
     const parameterRow = await env.DB.prepare("select parameters_json as parametersJson from creative_workflow_revisions where id = ?")
-      .bind(exact.workflow.currentRevision.id).first<{ parametersJson: string }>();
+      .bind(executedRevisionId).first<{ parametersJson: string }>();
     expect(parameterRow).toBeTruthy();
     const exactParametersJson = parameterRow!.parametersJson;
     const tamperedParameters = JSON.parse(exactParametersJson) as Array<{ id: string; value: unknown }>;
@@ -3248,7 +3358,7 @@ describe("Creative Studio Worker API", () => {
       if (parameter.id === "398:349::strength") parameter.value = 0.7;
     }
     await env.DB.prepare("update creative_workflow_revisions set parameters_json = ? where id = ?")
-      .bind(JSON.stringify(tamperedParameters), exact.workflow.currentRevision.id).run();
+      .bind(JSON.stringify(tamperedParameters), executedRevisionId).run();
     const parameterDriftRetry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/retry`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_parameter_retry_001" }),
     }), local);
@@ -3260,7 +3370,7 @@ describe("Creative Studio Worker API", () => {
     expect(parameterDriftReuse.status).toBe(409);
     expect(await result(parameterDriftReuse)).toMatchObject({ error: "trusted_video_preset_mismatch" });
     await env.DB.prepare("update creative_workflow_revisions set parameters_json = ? where id = ?")
-      .bind(exactParametersJson, exact.workflow.currentRevision.id).run();
+      .bind(exactParametersJson, executedRevisionId).run();
 
     const forgedStamp = structuredClone(validPayload.job.settingsStamp) as Record<string, unknown> & {
       outputBatch: { count: number };

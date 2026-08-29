@@ -133,8 +133,14 @@ import {
 } from "../worlds";
 import { retainCompletedArtifact } from "../retention";
 import type { Env, OwnerSession } from "../types";
-import { createWorkflowRevision, importWorkflow, listWorkflows, workflowContent } from "../workflows";
-import { workflowExecutionPlan } from "../workflows";
+import {
+  createWorkflowRevision,
+  importWorkflow,
+  listWorkflows,
+  promptSafeWorkflowExecutionPlan,
+  workflowContent,
+  workflowExecutionPlan,
+} from "../workflows";
 import {
   authenticateLocalRunner,
   claimLocalRunnerJob,
@@ -1096,7 +1102,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         if (!input.workflow.workflowId || !input.workflow.revisionId || !input.workflow.inputBindings || typeof input.workflow.inputBindings !== "object") {
           throw new Error("invalid_workflow_job_request");
         }
-        const plan = await workflowExecutionPlan(env, session.userId, boundedText(input.workflow.workflowId, 100), boundedText(input.workflow.revisionId, 100));
+        let plan = await workflowExecutionPlan(env, session.userId, boundedText(input.workflow.workflowId, 100), boundedText(input.workflow.revisionId, 100));
         const expectedModality = workflowJobModality(plan.workflow.modality);
         if (expectedModality !== modality) throw new Error("workflow_modality_mismatch");
         if (videoDurationSeconds !== undefined) {
@@ -1144,6 +1150,16 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           source: resolvedInput!.source,
           kind: resolvedInput!.kind,
         }));
+        // Older LTX revisions could contain the authored positive direction in
+        // their negative encoder because the browser was given contaminated
+        // prompt-role metadata. Repair only that exact conflict into a new,
+        // immutable execution revision before performance and prompt checks.
+        plan = await promptSafeWorkflowExecutionPlan(
+          env,
+          session.userId,
+          plan.workflow.id,
+          plan.workflow.currentRevision.id,
+        );
         const parameterValues = Object.fromEntries(plan.workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
         const performanceMode = modality === "image" ? input.performanceMode ?? "fast-default" : undefined;
         if (modality === "image" && assessImagePerformance(parameterValues).requiresExplicitCustom && performanceMode !== "explicit-custom") {

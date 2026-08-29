@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The Local Runner is intentionally plain ESM so Windows can launch it directly with Node.
 // @ts-expect-error TypeScript does not emit declarations for the runtime-only runner module.
-import { assertPromptSchedulesMediaOutput, EXPLICIT_HEAVY_VIDEO_EXECUTION_TIMEOUT_MS, freeComfyMemory, generationExecutionTimeoutMs, observeComfyPrompt, STANDARD_MEDIA_EXECUTION_TIMEOUT_MS, waitForOutput } from "../../runner/index.mjs";
+import { assertPromptSchedulesMediaOutput, cancelAndDrainComfyPrompt, EXPLICIT_HEAVY_VIDEO_EXECUTION_TIMEOUT_MS, freeComfyMemory, generationExecutionTimeoutMs, observeComfyPrompt, STANDARD_MEDIA_EXECUTION_TIMEOUT_MS, STANDARD_VIDEO_EXECUTION_TIMEOUT_MS, waitForComfyPromptDrain, waitForOutput } from "../../runner/index.mjs";
 
 const promptId = "prompt-ltx-observation-001";
 const graph = { "75": { class_type: "SaveVideo", inputs: { video: ["74", 0] } } };
@@ -59,6 +59,7 @@ describe("Local Runner Comfy prompt observation", () => {
     let clock = 0;
     const heartbeats: Array<Record<string, unknown>> = [];
     const cancelled: string[] = [];
+    const drained: string[] = [];
     const releases: string[] = [];
     const lastObserved = "2026-08-29T07:27:05.743Z";
 
@@ -72,6 +73,10 @@ describe("Local Runner Comfy prompt observation", () => {
       executionTimeoutMs: 250,
       initialObservationAt: lastObserved,
       cancelPrompt: async (_config: unknown, cancelledPromptId: string) => { cancelled.push(cancelledPromptId); },
+      drainPrompt: async (_config: unknown, drainedPromptId: string) => {
+        drained.push(drainedPromptId);
+        return { promptId: drainedPromptId, drainedAt: "2026-08-29T07:28:00.000Z" };
+      },
       freeMemory: async (_config: unknown, reason: string) => {
         releases.push(reason);
         return { released: true };
@@ -85,6 +90,7 @@ describe("Local Runner Comfy prompt observation", () => {
       comfyObservationAt: lastObserved,
     })));
     expect(cancelled).toEqual([promptId]);
+    expect(drained).toEqual([promptId]);
     expect(releases).toEqual([`watchdog timeout for ${bundle.job.id}`]);
   });
 
@@ -116,16 +122,17 @@ describe("Local Runner Comfy prompt observation", () => {
     });
   });
 
-  it("defers an initially unreachable scheduling check and recovers without detaching the render", async () => {
+  it("hands an initially unreachable scheduling check to the durable render observer", async () => {
     let clock = 0;
     const initial = await assertPromptSchedulesMediaOutput(config, promptId, graph, "video", {
       now: () => clock,
+      sleep: async (milliseconds: number) => { clock += milliseconds; },
+      pollIntervalMs: 100,
       observe: async () => ({ state: "unreachable", observedAt: null, entry: null, error: "comfyui_api_unreachable" }),
     });
     expect(initial).toMatchObject({ state: "unreachable", observedAt: null });
 
     const states = [
-      { state: "unreachable", observedAt: null, entry: null, error: "comfyui_api_unreachable" },
       { state: "queue", observedAt: "2026-08-29T08:05:01.000Z", entry: null, error: null },
       { state: "history", observedAt: "2026-08-29T08:05:02.000Z", entry: saveVideoHistory("video/recovered.mp4"), error: null },
     ];
@@ -141,6 +148,18 @@ describe("Local Runner Comfy prompt observation", () => {
     });
 
     expect(output).toMatchObject({ filename: "video/recovered.mp4", nodeId: "75" });
+  });
+
+  it("fails the scheduling assertion when responsive Comfy never makes the submitted prompt observable", async () => {
+    let clock = 0;
+    await expect(assertPromptSchedulesMediaOutput(config, promptId, graph, "video", {
+      now: () => clock,
+      sleep: async (milliseconds: number) => { clock += milliseconds; },
+      pollIntervalMs: 50,
+      absentGraceMs: 150,
+      observe: async () => ({ state: "absent", observedAt: new Date(clock).toISOString(), entry: null, error: null }),
+    })).rejects.toThrow("comfyui_prompt_not_observable");
+    expect(clock).toBe(150);
   });
 
   it("recognizes completed SaveVideo history as an observable successful output", async () => {
@@ -166,6 +185,7 @@ describe("Local Runner Comfy prompt observation", () => {
   it("cancels the exact Comfy prompt when Creative Studio cancels during an unresponsive poll", async () => {
     let clock = 0;
     let heartbeatCount = 0;
+    let cancelRequested = false;
     const cancelledUrls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -175,8 +195,10 @@ describe("Local Runner Comfy prompt observation", () => {
       }
       if (url === `${config.comfyUrl}/api/jobs/${promptId}/cancel`) {
         cancelledUrls.push(url);
+        cancelRequested = true;
         return json({ ok: true });
       }
+      if (url.endsWith("/queue") && cancelRequested) return json({ queue_running: [], queue_pending: [] });
       if (url.endsWith("/queue") || url.includes("/history/")) {
         throw new DOMException("Comfy did not answer", "TimeoutError");
       }
@@ -191,20 +213,71 @@ describe("Local Runner Comfy prompt observation", () => {
       executionTimeoutMs: 1_000,
       initialObservationAt: "2026-08-29T08:20:00.000Z",
       timeoutMs: 1,
+      drainAbsentGraceMs: 0,
     })).rejects.toThrow("creative_studio_job_cancelled");
 
     expect(cancelledUrls).toEqual([`${config.comfyUrl}/api/jobs/${promptId}/cancel`]);
   });
+
+  it("does not finish a targeted cancellation until that exact prompt leaves running and pending queues", async () => {
+    let clock = 0;
+    const otherPromptId = "prompt-other-002";
+    const queueStates = [
+      { queue_running: [[1, promptId]], queue_pending: [[2, otherPromptId]] },
+      { queue_running: [[2, otherPromptId]], queue_pending: [[1, promptId]] },
+      { queue_running: [[2, otherPromptId]], queue_pending: [] },
+      { queue_running: [[2, otherPromptId]], queue_pending: [] },
+    ];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === `${config.comfyUrl}/api/jobs/${promptId}/cancel`) return json({ ok: true });
+      if (url.endsWith("/queue")) return json(queueStates.shift() ?? { queue_running: [[2, otherPromptId]], queue_pending: [] });
+      throw new Error(`unexpected_fetch:${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await cancelAndDrainComfyPrompt(config, promptId, {
+      now: () => clock,
+      sleep: async (milliseconds: number) => { clock += milliseconds; },
+      drainPollIntervalMs: 50,
+      drainAbsentGraceMs: 50,
+      timeoutMs: 1,
+    });
+
+    expect(result).toMatchObject({ promptId, cancelError: null });
+    expect(clock).toBe(150);
+    expect(fetchMock).toHaveBeenCalledWith(`${config.comfyUrl}/api/jobs/${promptId}/cancel`, expect.objectContaining({ method: "POST" }));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/queue"))).toHaveLength(4);
+  });
+
+  it("ends an unconfirmable cancellation drain at a finite deadline with an actionable error", async () => {
+    let clock = 0;
+    const observe = vi.fn(async () => ({ state: "unreachable", error: "comfyui_queue_unreachable" }));
+
+    await expect(waitForComfyPromptDrain(config, promptId, {
+      now: () => clock,
+      sleep: async (milliseconds: number) => { clock += milliseconds; },
+      drainPollIntervalMs: 100,
+      drainTimeoutMs: 250,
+      drainObserve: observe,
+    })).rejects.toMatchObject({
+      code: "comfyui_prompt_drain_unconfirmed",
+      message: "comfyui_prompt_drain_unconfirmed:comfyui_queue_unreachable",
+    });
+
+    expect(clock).toBe(250);
+    expect(observe).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("Local Runner Comfy resource boundaries", () => {
-  it("keeps image and ordinary video runs at 20 minutes while reserving 24 hours for explicit-heavy video", () => {
+  it("keeps images at 20 minutes, gives ordinary video two hours, and reserves 24 hours for explicit-heavy video", () => {
     expect(generationExecutionTimeoutMs({ modality: "image", settingsStamp: {} })).toBe(STANDARD_MEDIA_EXECUTION_TIMEOUT_MS);
     expect(generationExecutionTimeoutMs({
       modality: "video",
       settingsStamp: { videoPerformance: { mode: "fast-default" } },
-    })).toBe(STANDARD_MEDIA_EXECUTION_TIMEOUT_MS);
-    expect(generationExecutionTimeoutMs({ modality: "video", settingsStamp: {} })).toBe(STANDARD_MEDIA_EXECUTION_TIMEOUT_MS);
+    })).toBe(STANDARD_VIDEO_EXECUTION_TIMEOUT_MS);
+    expect(generationExecutionTimeoutMs({ modality: "video", settingsStamp: {} })).toBe(STANDARD_VIDEO_EXECUTION_TIMEOUT_MS);
     expect(generationExecutionTimeoutMs({
       modality: "video",
       settingsStamp: { videoPerformance: { mode: "explicit-heavy" } },

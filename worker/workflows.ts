@@ -1,5 +1,6 @@
 import {
   applyWorkflowValues,
+  detectExactWorkflowPromptContamination,
   inspectWorkflowGraph,
   recoverWorkflowPromptRoles,
   type SaveWorkflowRevisionRequest,
@@ -275,6 +276,70 @@ export async function createAutomationWorkflowRevision(
     }
   }
   throw lastError;
+}
+
+const SAFE_NEGATIVE_PROMPT_FALLBACK = "low quality, blurry, distorted anatomy, duplicate subjects, text, captions, logos, watermarks, black frames";
+
+type PromptSafetyRepair = {
+  parameterId: string;
+  restoredFromRevisionId: string | null;
+};
+
+/**
+ * Repairs the legacy positive-to-negative prompt copy defect by creating an
+ * immutable execution revision. The earliest clean owner revision is the
+ * authority for each negative prompt; the bounded fallback is used only when
+ * no clean historical value exists. The owner's visible current revision is
+ * deliberately left unchanged.
+ */
+export async function promptSafeWorkflowExecutionPlan(
+  env: Env,
+  ownerId: string,
+  workflowId: string,
+  revisionId: string,
+) {
+  const plan = await workflowExecutionPlan(env, ownerId, workflowId, revisionId);
+  const contamination = detectExactWorkflowPromptContamination(plan.graph);
+  if (!contamination.length) return { ...plan, promptSafetyRepairs: [] as PromptSafetyRepair[] };
+
+  const history = await env.DB.prepare(`select ${REVISION_COLUMNS} from creative_workflow_revisions
+    where workflow_id = ? and owner_id = ? order by version asc limit 100`)
+    .bind(workflowId, ownerId).all<RevisionRow>();
+  const historical = (history.results ?? []).flatMap((row) => {
+    try {
+      const graph = JSON.parse(row.graphJson);
+      if (detectExactWorkflowPromptContamination(graph).length) return [];
+      return [{ row, parameters: inspectWorkflowGraph(graph).parameters }];
+    } catch {
+      return [];
+    }
+  });
+  const values: Record<string, string> = {};
+  const repairs: PromptSafetyRepair[] = [];
+  for (const issue of contamination) {
+    const source = historical.find(({ parameters }) => parameters.some((parameter) =>
+      parameter.id === issue.negativeParameterId
+      && parameter.kind === "text"
+      && parameter.promptRole === "negative"
+      && typeof parameter.value === "string"
+      && Boolean(parameter.value.trim())
+      && parameter.value !== issue.sharedValue));
+    const restored = source?.parameters.find((parameter) => parameter.id === issue.negativeParameterId)?.value;
+    values[issue.negativeParameterId] = typeof restored === "string" && restored.trim()
+      ? restored
+      : SAFE_NEGATIVE_PROMPT_FALLBACK;
+    repairs.push({
+      parameterId: issue.negativeParameterId,
+      restoredFromRevisionId: source?.row.id ?? null,
+    });
+  }
+  const repaired = await createAutomationWorkflowRevision(env, ownerId, workflowId, {
+    baseRevisionId: revisionId,
+    values,
+  });
+  const repairedPlan = await workflowExecutionPlan(env, ownerId, workflowId, repaired.currentRevision.id);
+  if (detectExactWorkflowPromptContamination(repairedPlan.graph).length) throw new Error("workflow_prompt_safety_repair_failed");
+  return { ...repairedPlan, promptSafetyRepairs: repairs };
 }
 
 export async function workflowContent(env: Env, ownerId: string, workflowId: string, requestedRevisionId: string | null) {
