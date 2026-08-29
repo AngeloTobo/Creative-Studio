@@ -52,6 +52,8 @@ import type {
   VideoScriptDraft,
   CreateOvernightSessionRequest,
   OvernightSession,
+  ConfigureLoveLoopRequest,
+  LoveLoop,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -107,4 +109,8 @@ export interface StudioAdapter {
   pauseOvernightSession(sessionId: string): Promise<OvernightSession>;
   resumeOvernightSession(sessionId: string): Promise<OvernightSession>;
   cancelOvernightSession(sessionId: string): Promise<OvernightSession>;
+  configureLoveLoop(input: ConfigureLoveLoopRequest): Promise<LoveLoop>;
+  pauseLoveLoop(): Promise<LoveLoop>;
+  resumeLoveLoop(): Promise<LoveLoop>;
+  disableLoveLoop(): Promise<LoveLoop>;
 }

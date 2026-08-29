@@ -206,6 +206,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     canonReferences: [...state.canonReferences].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     canonPromotions: [...state.canonPromotions].sort((a, b) => b.promotedAt.localeCompare(a.promotedAt)),
     overnightSessions: [],
+    loveLoop: null,
     tasteMemory: compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts: state.dnaArtifacts }),
     evolutionStudies: deriveEvolutionStudies(state.jobs, artifacts),
     refreshedAt: now,
@@ -856,6 +857,18 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async cancelOvernightSession() {
       throw new Error("overnight_studio_requires_creative_studio_worker");
+    },
+    async configureLoveLoop() {
+      throw new Error("love_loop_requires_creative_studio_worker");
+    },
+    async pauseLoveLoop() {
+      throw new Error("love_loop_requires_creative_studio_worker");
+    },
+    async resumeLoveLoop() {
+      throw new Error("love_loop_requires_creative_studio_worker");
+    },
+    async disableLoveLoop() {
+      throw new Error("love_loop_requires_creative_studio_worker");
     },
   };
 }

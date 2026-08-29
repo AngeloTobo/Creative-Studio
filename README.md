@@ -12,7 +12,7 @@ Creative Studio owns its interface, projects, typed contracts, jobs, media, arti
 
 | Surface | Purpose | Direct actions |
 | --- | --- | --- |
-| **Home** | Start from the newest or selected image, audio file, or video and see its real CreativeDNA profile. | Upload, analyze, create an image, animate, make a song, train, or arm Overnight Studio. |
+| **Home** | Start from the newest or selected image, audio file, or video and see its real CreativeDNA profile. | Upload, analyze, create an image, animate, make a song, train, enable the daily Love Loop, or arm Overnight Studio. |
 | **Create** | Run the complete media workflow without moving between pages. | Choose Image, Video, Song, or Train; select a model and source; edit the direction and graphical settings; submit. |
 | **Work** | Follow the durable production lifecycle for the active project. | Resolve owner actions, inspect running jobs, cancel or retry, review retained results, extend, animate, reuse, or evolve. |
 | **Studio** | Manage the workspace behind creation. | Create and switch projects, browse media and CreativeDNA memory, import models, and inspect or pair local systems. |
@@ -71,6 +71,10 @@ The separate music-model path performs real local ACE-Step 1.5 LoRA training:
 The proof, balanced, and deep recipes remain visible, and the checkpoint hash, size, dataset, recipe, progress, evaluation notes, and activation decisions stay durable. The runner advertises this capability only when the official runtime and real Base, VAE, and Qwen encoder weights are installed. An active adapter binds only to a compatible ACE-Step workflow with detected LoRA file and strength controls.
 
 ### Keep a durable production record
+
+**Angelo, adored** is an opt-in local Autopilot ritual that creates three private visual love letters per day: two fast images and one fast five-second video, shuffled across stable morning, afternoon, and evening windows. One Home action selects the best eligible prompt-only image and video workflows for the active project. The exact times, modality order, concepts, seeds, CreativeDNA dimensions, workflow revisions, recipes, and privacy policy are deterministic and stamped so every result is explainable and repeatable.
+
+The provider prompt uses only symbolic roles—`the artist` and `his husband`—plus bounded numeric CreativeDNA direction. It never sends Angelo's name, account metadata, project text, filenames, source descriptions, or an unconsented likeness to ComfyUI. Dialogue, fake quotations, captions, and identifiable unreferenced people are prohibited while ambience, tactile sound, and restrained original music remain available in video. Manual jobs retain higher priority. The Local Runner materializes at most one due creation when ComfyUI is healthy, so the browser may close and no new Cloudflare cron, Queue poll, browser timer, or AFDFW request is introduced. Pause or turn off stops future work without deleting history; every completion remains retained and undecided until Angelo explicitly reviews it.
 
 **Overnight Studio** turns an approved CreativeDNA, an optional Creative World, and the owner's prompt-only ComfyUI workflows into a bounded night of new work. A default run asks local Gemma for one coherent story, three fast scene images, and one soundtrack; video is explicitly opt-in. The durable session pins its story seed, workflow revisions, recipes, model prompt profiles, DNA/World context, cutoff, failure ceiling, storage ceiling, and deterministic task seeds. The authenticated Local Runner plans only after ComfyUI reports healthy, gives normal owner-created jobs priority, and materializes only one overnight render at a time. No browser, Cloudflare Queue message, new cron, or AFDFW call is needed.
 

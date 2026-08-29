@@ -199,6 +199,10 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
         select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
           and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
       ))
+      and (json_extract(settings_stamp_json, '$.loveLoop.loopId') is null or exists (
+        select 1 from creative_love_loops l where l.id = json_extract(creative_jobs.settings_stamp_json, '$.loveLoop.loopId')
+          and l.owner_id = creative_jobs.owner_id and l.status = 'active'
+      ))
     order by case when status = 'running' and runner_id = ? then 0 when status = 'running' then 1 else 2 end,
       priority desc, created_at limit 1`)
     .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, runner.id, nowValue, runner.id, nowValue, nowValue, nowValue, runner.id).first<{ id: string }>();
@@ -215,6 +219,10 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
       and (automation_session_id is null or exists (
         select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
           and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
+      ))
+      and (json_extract(settings_stamp_json, '$.loveLoop.loopId') is null or exists (
+        select 1 from creative_love_loops l where l.id = json_extract(creative_jobs.settings_stamp_json, '$.loveLoop.loopId')
+          and l.owner_id = creative_jobs.owner_id and l.status = 'active'
       ))`)
     .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, runner.id, nowValue, runner.id,
       nowValue, nowValue, nowValue).run();

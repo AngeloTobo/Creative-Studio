@@ -67,6 +67,8 @@ import type {
   VideoScriptUse,
   CreateOvernightSessionRequest,
   OvernightSession,
+  ConfigureLoveLoopRequest,
+  LoveLoop,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -130,6 +132,10 @@ type StudioContextValue = {
   pauseOvernightSession: (sessionId: string) => Promise<OvernightSession>;
   resumeOvernightSession: (sessionId: string) => Promise<OvernightSession>;
   cancelOvernightSession: (sessionId: string) => Promise<OvernightSession>;
+  configureLoveLoop: (input: Omit<ConfigureLoveLoopRequest, "projectId" | "dnaArtifactId">) => Promise<LoveLoop>;
+  pauseLoveLoop: () => Promise<LoveLoop>;
+  resumeLoveLoop: () => Promise<LoveLoop>;
+  disableLoveLoop: () => Promise<LoveLoop>;
   refresh: () => Promise<void>;
 };
 
@@ -219,6 +225,12 @@ function message(error: unknown) {
   if (error.message === "overnight_image_fast_workflow_required") return "The selected image workflow is outside the fast overnight limits. Save a proven fast image recipe first.";
   if (error.message === "overnight_window_ended") return "That overnight window has ended. Create a new run with a later stop time.";
   if (error.message === "overnight_workflow_selection_required" || error.message === "overnight_recipe_mismatch") return "Choose an available proven workflow for every selected media type.";
+  if (error.message === "love_loop_requires_creative_studio_worker") return "The Angelo love ritual needs the real Creative Studio Worker and Local Runner. Development previews cannot schedule real work.";
+  if (error.message === "love_loop_workflows_required" || error.message === "love_loop_prompt_only_workflow_required") return "Love Loop needs one prompt-only image workflow and one prompt-only video workflow.";
+  if (error.message === "love_loop_fast_image_required") return "Love Loop needs a fast image workflow at or below the proven image limits.";
+  if (error.message === "love_loop_fast_video_required") return "Love Loop needs a fast five-second text-to-video workflow at or below 0.20 MP.";
+  if (error.message === "love_loop_recipe_mismatch" || error.message === "love_loop_recipe_changed" || error.message === "love_loop_workflow_changed") return "A Love Loop workflow or recipe changed. Use Repair & resume to bind the current fast model.";
+  if (error.message === "love_loop_failure_limit_reached") return "Three recent Love Loop renders failed. Inspect their errors, then use Repair & resume.";
   return error.message.replaceAll("_", " ");
 }
 
@@ -690,6 +702,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     transact(() => adapter.cancelOvernightSession(sessionId))
   ), [adapter, transact]);
 
+  const configureLoveLoop = useCallback((input: Omit<ConfigureLoveLoopRequest, "projectId" | "dnaArtifactId">) => {
+    if (!activeProjectId) throw new Error("project_required");
+    if (!activeDnaArtifactId) throw new Error("creative_dna_required");
+    return transact(() => adapter.configureLoveLoop({ ...input, projectId: activeProjectId, dnaArtifactId: activeDnaArtifactId }));
+  }, [activeDnaArtifactId, activeProjectId, adapter, transact]);
+
+  const pauseLoveLoop = useCallback(() => transact(() => adapter.pauseLoveLoop()), [adapter, transact]);
+  const resumeLoveLoop = useCallback(() => transact(() => adapter.resumeLoveLoop()), [adapter, transact]);
+  const disableLoveLoop = useCallback(() => transact(() => adapter.disableLoveLoop()), [adapter, transact]);
+
   const createProject = useCallback(async (input: CreateProjectRequest) => {
     const project = await transact(() => adapter.createProject(input));
     setActiveProjectId(project.id);
@@ -772,8 +794,12 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     pauseOvernightSession,
     resumeOvernightSession,
     cancelOvernightSession,
+    configureLoveLoop,
+    pauseLoveLoop,
+    resumeLoveLoop,
+    disableLoveLoop,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, configureLoveLoop, pauseLoveLoop, resumeLoveLoop, disableLoveLoop, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

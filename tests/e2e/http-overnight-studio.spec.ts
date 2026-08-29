@@ -3,12 +3,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import {
   deriveProductionCockpit,
+  loveLoopDailyBlueprints,
+  loveLoopLocalDate,
   type Acceptance,
   type Artifact,
+  type ConfigureLoveLoopRequest,
   type CreateOvernightSessionRequest,
   type CreativeDnaArtifact,
   type GenerationModality,
   type Job,
+  type LoveLoop,
   type OvernightSession,
   type OvernightSessionStatus,
   type OvernightTask,
@@ -99,7 +103,12 @@ function workflow(modality: GenerationModality): WorkflowDefinition {
     );
   }
   if (modality === "video") {
-    parameters.push({ id: "video:duration", label: "Video duration", kind: "number", value: 5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "video:duration", inputName: "duration" } });
+    parameters.push(
+      { id: "video:duration", label: "Video duration", kind: "number", value: 5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "video:duration", inputName: "duration" } },
+      { id: "video:megapixels", label: "Megapixels", kind: "number", value: 0.2, mediaKind: null, binding: { format: "comfyui-api", nodeId: "video:megapixels", inputName: "megapixels" } },
+      { id: "video:fps", label: "Frame rate", kind: "number", value: 24, mediaKind: null, binding: { format: "comfyui-api", nodeId: "video:fps", inputName: "fps" } },
+      { id: "video:frames", label: "Frames", kind: "number", value: 121, mediaKind: null, binding: { format: "comfyui-api", nodeId: "video:frames", inputName: "frames" } },
+    );
   }
   return {
     id: `workflow_${workflowKey}`,
@@ -377,18 +386,60 @@ function artifact(index: number): Artifact {
   };
 }
 
+function dailyLoveLoop(status: LoveLoop["status"] = "active"): LoveLoop {
+  const timezone = "America/Chicago";
+  const localDate = loveLoopLocalDate(new Date(), timezone);
+  const createdAt = now(-60_000);
+  return {
+    schemaVersion: "creative-studio-love-loop/1.0",
+    id: "love_e2e",
+    projectId: PROJECT_ID,
+    dnaArtifactId: DNA_ID,
+    timezone,
+    dailyCount: 3,
+    status,
+    workflowSelections: [workflowSelection("image"), workflowSelection("video")],
+    drops: loveLoopDailyBlueprints("love_e2e", localDate, timezone, creativeDna().shared).map((drop) => ({
+      ...drop,
+      id: `lovedrop_e2e_${drop.ordinal}`,
+      loopId: "love_e2e",
+      status: "planned",
+      jobId: null,
+      artifactId: null,
+      error: null,
+      createdAt,
+      updatedAt: createdAt,
+    })),
+    lastError: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 type BackendInput = {
   sessions?: OvernightSession[];
   jobs?: Job[];
   artifacts?: Artifact[];
+  loveLoop?: LoveLoop | null;
+  runnerOnline?: boolean;
+};
+
+type BackendState = {
+  sessions: OvernightSession[];
+  jobs: Job[];
+  artifacts: Artifact[];
+  loveLoop: LoveLoop | null;
+  runnerOnline: boolean;
 };
 
 type MockOvernightBackend = {
   createRequests: CreateOvernightSessionRequest[];
   reviewRequests: Array<{ artifactId: string; decision: "accepted" | "rejected"; note: string }>;
+  loveLoopRequests: ConfigureLoveLoopRequest[];
+  loveLoopControls: string[];
 };
 
-function snapshot(input: Required<BackendInput>, acceptances: Acceptance[]): StudioSnapshot {
+function snapshot(input: BackendState, acceptances: Acceptance[]): StudioSnapshot {
   const project: StudioSnapshot["projects"][number] = {
     id: PROJECT_ID,
     activeDnaArtifactId: DNA_ID,
@@ -402,7 +453,7 @@ function snapshot(input: Required<BackendInput>, acceptances: Acceptance[]): Stu
     createdAt: now(-86_400_000),
     updatedAt: now(-60_000),
   };
-  const localRunner = runner();
+  const localRunner = input.runnerOnline ? runner() : null;
   const productionCockpit = deriveProductionCockpit({
     projects: [project],
     dnaArtifacts: [creativeDna()],
@@ -412,7 +463,7 @@ function snapshot(input: Required<BackendInput>, acceptances: Acceptance[]): Stu
     acceptances,
     trainingJobs: [],
     trainingReviews: [],
-    runners: [localRunner],
+    runners: localRunner ? [localRunner] : [],
     computedAt: now(),
   });
   return {
@@ -433,6 +484,7 @@ function snapshot(input: Required<BackendInput>, acceptances: Acceptance[]): Stu
     workflows: WORKFLOWS,
     recipes: [],
     overnightSessions: input.sessions,
+    loveLoop: input.loveLoop,
     trainingExamples: [],
     trainingJobs: [],
     trainingReviews: [],
@@ -441,7 +493,7 @@ function snapshot(input: Required<BackendInput>, acceptances: Acceptance[]): Stu
     modelAdapterReviews: [],
     productionLoops: [],
     productionCockpit,
-    runners: [localRunner],
+    runners: localRunner ? [localRunner] : [],
     capabilities: [],
     acceptances,
     refreshedAt: now(),
@@ -453,13 +505,17 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 async function installOvernightBackend(page: Page, initial: BackendInput = {}): Promise<MockOvernightBackend> {
-  const state: Required<BackendInput> = {
+  const state: BackendState = {
     sessions: [...(initial.sessions ?? [])],
     jobs: [...(initial.jobs ?? [])],
     artifacts: [...(initial.artifacts ?? [])],
+    loveLoop: initial.loveLoop ?? null,
+    runnerOnline: initial.runnerOnline ?? true,
   };
   const createRequests: CreateOvernightSessionRequest[] = [];
   const reviewRequests: MockOvernightBackend["reviewRequests"] = [];
+  const loveLoopRequests: ConfigureLoveLoopRequest[] = [];
+  const loveLoopControls: string[] = [];
   const acceptances: Acceptance[] = [];
 
   await page.route(`${HTTP_STUDIO}/api/creative-studio/**`, async (route) => {
@@ -483,6 +539,22 @@ async function installOvernightBackend(page: Page, initial: BackendInput = {}): 
           total: state.artifacts.length,
         },
       });
+      return;
+    }
+
+    if (request.method() === "PUT" && pathname === "/api/creative-studio/love-loop") {
+      loveLoopRequests.push(request.postDataJSON() as ConfigureLoveLoopRequest);
+      state.loveLoop = dailyLoveLoop("active");
+      await json(route, { loveLoop: state.loveLoop }, 201);
+      return;
+    }
+
+    const loveLoopControl = pathname.match(/^\/api\/creative-studio\/love-loop\/(pause|resume|disable)$/);
+    if (request.method() === "POST" && loveLoopControl) {
+      const action = loveLoopControl[1];
+      loveLoopControls.push(action);
+      state.loveLoop = { ...(state.loveLoop ?? dailyLoveLoop()), status: action === "pause" ? "paused" : action === "disable" ? "disabled" : "active", updatedAt: now() };
+      await json(route, { loveLoop: state.loveLoop });
       return;
     }
 
@@ -548,8 +620,42 @@ async function installOvernightBackend(page: Page, initial: BackendInput = {}): 
     await json(route, { error: `unhandled_overnight_e2e_route:${request.method()}:${pathname}` }, 500);
   });
 
-  return { createRequests, reviewRequests };
+  return { createRequests, reviewRequests, loveLoopRequests, loveLoopControls };
 }
+
+test("Home enables three private daily creations in one click and preserves visible controls", async ({ page }) => {
+  const backend = await installOvernightBackend(page, { runnerOnline: false });
+  await page.goto(`${HTTP_STUDIO}/#/portal`);
+
+  const autopilot = page.getByRole("region", { name: "Home Autopilot" });
+  await expect(autopilot).toBeVisible();
+  await expect(autopilot.getByText("Angelo, adored", { exact: true })).toBeVisible();
+  await expect(autopilot.getByText(/Local Runner offline - schedule will wait/)).toBeVisible();
+  await expect(autopilot.getByRole("button", { name: "Enable 3/day" })).toBeEnabled();
+  await autopilot.getByRole("button", { name: "Enable 3/day" }).click();
+
+  await expect.poll(() => backend.loveLoopRequests.length).toBe(1);
+  expect(backend.loveLoopRequests[0]).toMatchObject({
+    projectId: PROJECT_ID,
+    dnaArtifactId: DNA_ID,
+    timezone: expect.any(String),
+    workflowSelections: [
+      expect.objectContaining({ modality: "image", workflowId: "workflow_z_image_turbo" }),
+      expect.objectContaining({ modality: "video", workflowId: "workflow_ltx_2_5" }),
+    ],
+  });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(autopilot.getByRole("list", { name: "Three daily Love Loop windows" }).getByRole("listitem")).toHaveCount(3);
+  await expect(autopilot.getByRole("button", { name: "Pause" })).toBeVisible();
+  await expect(autopilot.getByRole("button", { name: "Turn off" })).toBeVisible();
+  await expect(autopilot.getByRole("button", { name: "History" })).toBeVisible();
+
+  await autopilot.getByRole("button", { name: "Pause" }).click();
+  await expect.poll(() => backend.loveLoopControls).toEqual(["pause"]);
+  await expect(autopilot.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+  const overflow = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.width);
+});
 
 test("Overnight setup explains its effective media allocation and arms a bounded durable run", async ({ page }) => {
   const backend = await installOvernightBackend(page);

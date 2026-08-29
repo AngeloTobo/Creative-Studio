@@ -59,6 +59,8 @@ import {
   type UpdateVideoScriptDraftResponse,
   type CreateOvernightSessionRequest,
   type OvernightSessionResponse,
+  type ConfigureLoveLoopRequest,
+  type LoveLoopResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -421,6 +423,38 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify({}),
       });
       return result.overnightSession;
+    },
+    async configureLoveLoop(input: ConfigureLoveLoopRequest) {
+      const result = await request<LoveLoopResponse>(CREATIVE_STUDIO_ROUTES.loveLoop, {
+        method: "PUT",
+        body: JSON.stringify(input),
+      });
+      if (!result.loveLoop) throw new Error("love_loop_not_found");
+      return result.loveLoop;
+    },
+    async pauseLoveLoop() {
+      const result = await request<LoveLoopResponse>(`${CREATIVE_STUDIO_ROUTES.loveLoop}/pause`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!result.loveLoop) throw new Error("love_loop_not_found");
+      return result.loveLoop;
+    },
+    async resumeLoveLoop() {
+      const result = await request<LoveLoopResponse>(`${CREATIVE_STUDIO_ROUTES.loveLoop}/resume`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!result.loveLoop) throw new Error("love_loop_not_found");
+      return result.loveLoop;
+    },
+    async disableLoveLoop() {
+      const result = await request<LoveLoopResponse>(`${CREATIVE_STUDIO_ROUTES.loveLoop}/disable`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!result.loveLoop) throw new Error("love_loop_not_found");
+      return result.loveLoop;
     },
   };
 }

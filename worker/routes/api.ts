@@ -28,6 +28,7 @@ import {
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaTrainingJobRequest,
   type CreateOvernightSessionRequest,
+  type ConfigureLoveLoopRequest,
   type CompleteOvernightPlanRequest,
   type FailOvernightPlanRequest,
   type GenerationModality,
@@ -213,6 +214,14 @@ import {
   reconcileOvernightSessions,
   resumeOvernightSession,
 } from "../overnight";
+import {
+  configureLoveLoop,
+  disableLoveLoop,
+  loveLoopForOwner,
+  pauseLoveLoop,
+  reconcileLoveLoops,
+  resumeLoveLoop,
+} from "../loveLoop";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -259,6 +268,8 @@ function statusFor(error: string) {
   if (error === "overnight_session_already_active" || error === "overnight_session_not_pauseable"
     || error === "overnight_session_not_resumable" || error === "overnight_window_ended"
     || error === "overnight_plan_not_completable" || error === "overnight_plan_conflict") return 409;
+  if (error === "love_loop_already_configured" || error === "love_loop_not_pauseable"
+    || error === "love_loop_not_resumable" || error === "love_loop_not_active") return 409;
   if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
     || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
     || error === "artifact_already_canonical") return 409;
@@ -568,7 +579,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, overnightSessions, runners, worldRecords] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, overnightSessions, loveLoop, runners, worldRecords] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -587,6 +598,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listVideoPromptEnhancements(env, session.userId),
     listVideoScriptDrafts(env, session.userId),
     listOvernightSessions(env, session.userId),
+    loveLoopForOwner(env, session.userId),
     listLocalRunners(env, session.userId),
     listWorldRecords(env, session.userId),
   ]);
@@ -612,6 +624,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     promptEnhancements,
     videoScriptDrafts,
     overnightSessions,
+    loveLoop,
     artifacts,
     mediaAssets,
     workflows,
@@ -645,6 +658,7 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const heartbeat = await heartbeatLocalRunner(env, runner, input);
     const currentRunner = { ...runner, version: heartbeat.version };
     if (input.comfyReady !== true) return json({ ok: true, kind: null, bundle: null });
+    await reconcileLoveLoops(env, currentRunner.ownerId);
     await reconcileOvernightSessions(env, currentRunner.ownerId);
     const promptEnhancement = await claimVideoPromptEnhancement(env, currentRunner);
     if (promptEnhancement) return json({ ok: true, kind: "prompt-enhancement", bundle: promptEnhancement });
@@ -953,6 +967,22 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           ? await resumeOvernightSession(env, session.userId, match[1])
           : await cancelOvernightSession(env, session.userId, match[1]);
       return json({ ok: true, overnightSession });
+    }
+    if (route === "love-loop-get") {
+      return json({ ok: true, loveLoop: await loveLoopForOwner(env, session.userId) });
+    }
+    if (route === "love-loop-configure") {
+      const input = await body<ConfigureLoveLoopRequest>(request);
+      if (!input) throw new Error("invalid_love_loop");
+      return json({ ok: true, loveLoop: await configureLoveLoop(env, session.userId, input) }, { status: 201 });
+    }
+    if (route === "love-loop-pause" || route === "love-loop-resume" || route === "love-loop-disable") {
+      const loveLoop = route === "love-loop-pause"
+        ? await pauseLoveLoop(env, session.userId)
+        : route === "love-loop-resume"
+          ? await resumeLoveLoop(env, session.userId)
+          : await disableLoveLoop(env, session.userId);
+      return json({ ok: true, loveLoop });
     }
     if (route === "prompt-enhancement-create") {
       const input = await body<CreateVideoPromptEnhancementRequest>(request);
@@ -1350,6 +1380,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           reusedFromJobId: original.id,
           provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
           evolution: undefined,
+          loveLoop: undefined,
           videoPerformance: videoPerformance?.stamp,
           videoDurationSeconds: videoPerformance?.effectiveDuration ?? original.settingsStamp.videoDurationSeconds,
         },
@@ -1398,6 +1429,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           ...original.settingsStamp,
           createdAt,
           reusedFromJobId: original.id,
+          loveLoop: undefined,
           videoPerformance: videoPerformance?.stamp,
           videoDurationSeconds: videoPerformance?.effectiveDuration ?? original.settingsStamp.videoDurationSeconds,
         },

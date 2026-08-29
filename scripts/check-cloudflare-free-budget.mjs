@@ -8,10 +8,12 @@ const provider = readFileSync(new URL("src/app/StudioProvider.tsx", root), "utf8
 const adapter = readFileSync(new URL("src/adapters/httpAdapter.ts", root), "utf8");
 const runtime = readFileSync(new URL("src/config/runtime.ts", root), "utf8");
 const jobs = readFileSync(new URL("worker/jobs.ts", root), "utf8");
+const workerEntry = readFileSync(new URL("worker/index.ts", root), "utf8");
 const issues = [];
 
 const consumer = production.queues?.consumers?.find((item) => item.queue === "creative-studio-jobs");
-if (!production.triggers?.crons?.includes("0 * * * *")) issues.push("Recovery cron must run no more than hourly.");
+const crons = production.triggers?.crons ?? [];
+if (crons.length !== 1 || crons[0] !== "0 * * * *") issues.push("Production must keep exactly one hourly recovery cron.");
 if (Number(consumer?.max_retries ?? 99) > 3) issues.push("Queue retries must stay capped at three.");
 if (!runner.includes("MIN_IDLE_POLL_INTERVAL_MS = 60_000")) issues.push("Runner idle polling must stay at one minute or slower.");
 if (!runner.includes('resolveRunnerPollInterval("https://runner.cs.angelotoborg.com", 5_000)')) issues.push("The runner must self-test the remote polling floor.");
@@ -21,6 +23,7 @@ if (!runtime.includes('hostname !== "127.0.0.1" && hostname !== "localhost"')) i
 if (!provider.includes('document.visibilityState === "visible"')) issues.push("Background tabs must not poll the Worker.");
 if (!adapter.includes("CREATIVE_STUDIO_ROUTES.snapshot")) issues.push("Browser reads must use the consolidated snapshot route.");
 if (!jobs.includes("enqueueJob(env, job.id, 60)")) issues.push("AFDFW Queue reconciliation must wait at least 60 seconds.");
+if (workerEntry.includes("reconcileLoveLoops")) issues.push("Love Loop must reuse Local Runner claims instead of the scheduled Worker trigger.");
 for (const binding of ["durable_objects", "workflows", "containers", "browser"]) {
   if (production[binding]) issues.push(`Paid-only binding must not be configured: ${binding}.`);
 }

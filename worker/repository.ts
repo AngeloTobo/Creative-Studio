@@ -52,6 +52,7 @@ function projectInitials(name: string) {
 
 function generationArtifactName(name: string, settingsStamp: GenerationSettingsStamp) {
   if (settingsStamp.overnight?.taskTitle) return settingsStamp.overnight.taskTitle;
+  if (settingsStamp.loveLoop?.title) return settingsStamp.loveLoop.title;
   return settingsStamp.videoVariant ? `${name} · ${videoGenerationVariantLabel(settingsStamp.videoVariant.role)}` : name;
 }
 

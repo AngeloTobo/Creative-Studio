@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { StudioSnapshot } from "../../shared/contracts";
+import type { LoveLoop, StudioSnapshot } from "../../shared/contracts";
 import { createHttpAdapter } from "../../src/adapters/httpAdapter";
 
 const now = "2026-08-17T12:00:00.000Z";
@@ -62,6 +62,7 @@ const emptySnapshot: StudioSnapshot = {
   canonReferences: [],
   canonPromotions: [],
   overnightSessions: [],
+  loveLoop: null,
   refreshedAt: now,
 };
 
@@ -83,6 +84,54 @@ describe("HTTP adapter request budget", () => {
 
     await expect(createHttpAdapter().load()).rejects.toThrow("cloudflare_free_tier_temporarily_limited");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the exact Love Loop controls without adding snapshot polls", async () => {
+    const loveLoop: LoveLoop = {
+      schemaVersion: "creative-studio-love-loop/1.0",
+      id: "love_owner_1",
+      projectId: "project_1",
+      dnaArtifactId: "dna_1",
+      timezone: "America/Chicago",
+      dailyCount: 3,
+      status: "active",
+      workflowSelections: [],
+      drops: [],
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json({ ok: true, loveLoop });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = createHttpAdapter();
+    const input = {
+      projectId: "project_1",
+      dnaArtifactId: "dna_1",
+      timezone: "America/Chicago",
+      workflowSelections: [
+        { modality: "image" as const, workflowId: "workflow_image", workflowRevisionId: "revision_image", recipeId: null },
+        { modality: "video" as const, workflowId: "workflow_video", workflowRevisionId: "revision_video", recipeId: "recipe_video" },
+      ],
+    };
+
+    await adapter.configureLoveLoop(input);
+    await adapter.pauseLoveLoop();
+    await adapter.resumeLoveLoop();
+    await adapter.disableLoveLoop();
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/creative-studio/love-loop",
+      "/api/creative-studio/love-loop/pause",
+      "/api/creative-studio/love-loop/resume",
+      "/api/creative-studio/love-loop/disable",
+    ]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["PUT", "POST", "POST", "POST"]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual(input);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/snapshot"))).toBe(false);
   });
 
   it("creates and checks one explicit durable video-prompt enhancement", async () => {

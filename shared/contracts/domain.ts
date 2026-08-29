@@ -141,6 +141,7 @@ export type GenerationSettingsStamp = {
   modelAdapters?: import("./modelTraining").GenerationModelAdapterBinding[];
   continuity?: import("./worlds").GenerationContinuityStamp;
   overnight?: import("./overnight").OvernightGenerationStamp;
+  loveLoop?: import("./loveLoop").LoveLoopGenerationStamp;
 };
 
 export type GenerationPromptReferenceSelection = {

@@ -8,6 +8,7 @@ export * from "./trustedVideoPresets";
 export * from "./generationRecipes";
 export * from "./modelTraining";
 export * from "./overnight";
+export * from "./loveLoop";
 export * from "./productionLoop";
 export * from "./productionCockpit";
 export * from "./promptEnhancements";

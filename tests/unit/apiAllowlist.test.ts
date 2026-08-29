@@ -50,6 +50,11 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/production-cockpit")).toBe("production-cockpit");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/claim")).toBe("runner-training-claim");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/work/claim")).toBe("runner-work-claim");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/love-loop")).toBe("love-loop-get");
+    expect(matchCreativeStudioRoute("PUT", "/api/creative-studio/love-loop")).toBe("love-loop-configure");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/love-loop/pause")).toBe("love-loop-pause");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/love-loop/resume")).toBe("love-loop-resume");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/love-loop/disable")).toBe("love-loop-disable");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/jobs/job_123/thumbnail")).toBe("runner-job-thumbnail");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/heartbeat")).toBe("runner-training-heartbeat");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/dnatraining_123/complete")).toBe("runner-training-complete");
@@ -68,6 +73,7 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/worlds/world_123/entities/entity_123/promote")) .toBeNull();
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/worlds/world-123/promote-artifact")) .toBeNull();
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/artifacts/artifact_123/promote-to-canon")) .toBeNull();
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/love-loop/run-arbitrary")) .toBeNull();
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/worlds/world_123/references/reference_123")) .toBeNull();
   });
 });

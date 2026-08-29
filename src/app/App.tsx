@@ -194,6 +194,7 @@ export function App() {
         onAnimate={(sourceId) => openHomeCreate("video", sourceId, true)}
         onAnimateFourWay={openFourWayAnimation}
         onReviewOvernight={setOvernightReviewSessionId}
+        onManageLoveLoop={() => navigate("portal")}
       />;
       case "studio":
       case "media":

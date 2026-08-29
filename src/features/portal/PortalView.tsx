@@ -14,7 +14,7 @@ import { ArtifactThumb, StatusDot } from "../../components/Visuals";
 import type { VideoCreateEntryMode } from "../generation/createEntry";
 import type { CreateIntent } from "../generation/quickCreate";
 import { useCreativeSessions } from "../sessions";
-import { OvernightHomeTile } from "../overnight";
+import { LoveLoopHomeCard } from "../loveLoop";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   energy: "Energy",
@@ -124,7 +124,7 @@ export function PortalView({
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)), [activeProjectId, snapshot?.mediaAssets]);
   const selectedSource = sourceAssets.find((asset) => asset.id === selectedSourceId) ?? sourceAssets[0] ?? null;
   const analysisMatch = selectedSource && snapshot ? sourceAnalysis(snapshot.dnaArtifacts, selectedSource.id) : null;
-  const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && !job.settingsStamp.overnight && (job.status === "queued" || job.status === "running")) ?? [];
+  const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && !job.settingsStamp.overnight && !job.settingsStamp.loveLoop && (job.status === "queued" || job.status === "running")) ?? [];
   const productionRunsById = new Map((snapshot?.productionCockpit.runs ?? []).map((run) => [run.id, run]));
   const recentArtifacts = (snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && !artifact.settingsStamp.overnight) ?? [])
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
@@ -215,7 +215,12 @@ export function PortalView({
             return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, autoAnimate, "standard")}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
           })}
         </div>
-        <OvernightHomeTile onOpen={onOvernight} onManage={() => navigate("work")} onReview={onOvernightReview} />
+        <LoveLoopHomeCard
+          onHistory={() => navigate("gallery")}
+          onOpenOvernight={onOvernight}
+          onManageOvernight={() => navigate("work")}
+          onReviewOvernight={onOvernightReview}
+        />
         <div className="home-action-footer">
           {selectedSource?.kind === "image" ? <button onClick={() => onCreate("video", selectedSource.id, true, "four-way")} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="star" size={14} /> Animate 4 ways</button> : null}
           <button disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><Icon name="dna" size={14} /> {selectedSource ? analysisMatch ? "Train DNA again" : "Analyze this work" : "Train DNA"}</button>

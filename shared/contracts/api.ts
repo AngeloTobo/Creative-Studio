@@ -67,6 +67,7 @@ import type {
   OvernightPlannerBundle,
   OvernightSession,
 } from "./overnight";
+import type { ConfigureLoveLoopRequest, LoveLoop } from "./loveLoop";
 import type { VideoDurationSeconds } from "./videoDuration";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
 import type {
@@ -118,6 +119,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   productionLoops: `${CREATIVE_STUDIO_API_PREFIX}/production-loops`,
   productionCockpit: `${CREATIVE_STUDIO_API_PREFIX}/production-cockpit`,
   overnight: `${CREATIVE_STUDIO_API_PREFIX}/overnight`,
+  loveLoop: `${CREATIVE_STUDIO_API_PREFIX}/love-loop`,
   runners: `${CREATIVE_STUDIO_API_PREFIX}/runners`,
   runner: `${CREATIVE_STUDIO_API_PREFIX}/runner`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
@@ -136,6 +138,7 @@ export type CreativeStudioRoute =
   | "recipes-list" | "recipe-get" | "recipe-create" | "recipe-update" | "recipe-delete" | "recipe-evidence-create"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
   | "overnight-list" | "overnight-create" | "overnight-pause" | "overnight-resume" | "overnight-cancel"
+  | "love-loop-get" | "love-loop-configure" | "love-loop-pause" | "love-loop-resume" | "love-loop-disable"
   | "model-training-jobs-list" | "model-training-job-create" | "model-training-job-cancel" | "model-training-dataset-review" | "model-adapter-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
@@ -213,6 +216,11 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/overnight\/[a-z0-9_]+\/pause$/i.test(pathname)) return "overnight-pause";
   if (method === "POST" && /^\/api\/creative-studio\/overnight\/[a-z0-9_]+\/resume$/i.test(pathname)) return "overnight-resume";
   if (method === "POST" && /^\/api\/creative-studio\/overnight\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "overnight-cancel";
+  if (method === "GET" && pathname === "/api/creative-studio/love-loop") return "love-loop-get";
+  if (method === "PUT" && pathname === "/api/creative-studio/love-loop") return "love-loop-configure";
+  if (method === "POST" && pathname === "/api/creative-studio/love-loop/pause") return "love-loop-pause";
+  if (method === "POST" && pathname === "/api/creative-studio/love-loop/resume") return "love-loop-resume";
+  if (method === "POST" && pathname === "/api/creative-studio/love-loop/disable") return "love-loop-disable";
   if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
   if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
   if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
@@ -263,6 +271,7 @@ export type StudioSnapshot = {
   workflows: WorkflowDefinition[];
   recipes: GenerationRecipe[];
   overnightSessions: OvernightSession[];
+  loveLoop: LoveLoop | null;
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
@@ -427,6 +436,7 @@ export type GenerationRecipeResponse = { recipe: GenerationRecipe };
 export type RecipeEvidenceResponse = { recipe: GenerationRecipe; evidence: RecipeEvidence };
 export type OvernightSessionsResponse = { overnightSessions: OvernightSession[] };
 export type OvernightSessionResponse = { overnightSession: OvernightSession };
+export type LoveLoopResponse = { loveLoop: LoveLoop | null };
 export type EnrollLocalRunnerRequest = { name: string };
 export type EnrollLocalRunnerResponse = { runner: LocalRunner; token: string; apiBase: string };
 export type RevokeLocalRunnerResponse = { runner: LocalRunner };
@@ -496,6 +506,7 @@ export type { CreateModelTrainingJobRequest, ModelAdapterReviewDecision, ReviewM
 export type { SaveWorkflowRevisionRequest };
 export type { CreateGenerationRecipeRequest, RecordRecipeEvidenceRequest, UpdateGenerationRecipeRequest };
 export type { CreateOvernightSessionRequest, CompleteOvernightPlanRequest, FailOvernightPlanRequest, OvernightPlanHeartbeatRequest };
+export type { ConfigureLoveLoopRequest };
 export type {
   CreateCanonReferenceRequest,
   CreateContinuityRuleRequest,

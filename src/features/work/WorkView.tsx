@@ -4,6 +4,7 @@ import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ArtifactsView, type ArtifactsViewProps } from "../artifacts/ArtifactsView";
 import { CockpitView } from "../cockpit/CockpitView";
+import { LoveLoopWorkStatus } from "../loveLoop";
 import { OvernightRunGroup, newestOvernightSessions } from "../overnight";
 import "./work.css";
 
@@ -15,6 +16,7 @@ export type WorkViewProps = Pick<ArtifactsViewProps, "onQueued" | "onContinueLoo
   focusArtifactId?: string;
   initialSegment?: WorkSegment;
   onReviewOvernight: (sessionId: string) => void;
+  onManageLoveLoop: () => void;
 };
 
 function isRunning(run: ProductionCockpitRun) {
@@ -39,6 +41,7 @@ export function WorkView({
   focusArtifactId,
   initialSegment,
   onReviewOvernight,
+  onManageLoveLoop,
 }: WorkViewProps) {
   const { snapshot, activeProjectId, refresh, busy } = useStudio();
   const project = snapshot?.projects.find((item) => item.id === activeProjectId);
@@ -124,6 +127,8 @@ export function WorkView({
           <button type="button" className="btn btn-primary work-create" onClick={onContinueLoop}><Icon name="star" size={15} /><span>Create</span></button>
         </div>
       </header>
+
+      <LoveLoopWorkStatus onResults={() => setSegment("results")} onNeedsAction={() => setSegment("needs-action")} onRepair={onManageLoveLoop} />
 
       <nav className="work-segments glass" aria-label="Work lifecycle">
         {tabs.map((tab) => (

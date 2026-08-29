@@ -5,6 +5,7 @@ import {
   compileContinuityDirective,
   createFourWayVideoGenerationVersions,
   createVideoGenerationVersions,
+  loveLoopLocalDate,
   TRUSTED_LTX_25_I2V_PORTRAIT_30S,
   TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID,
   videoPromptProfileForIdentity,
@@ -21,6 +22,7 @@ import { processJobMessage } from "../../worker/jobs";
 import { attachAfdfwGeneration, cancelOwnedJob, createAfdfwJob, createDevelopmentJob, createLocalDna, createProject, createQueuedJob, reconcileDevelopmentJobs } from "../../worker/repository";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
 import { claimLocalRunnerJob } from "../../worker/runner";
+import { reconcileLoveLoops } from "../../worker/loveLoop";
 import { generationContinuityStamp, promoteArtifactToCanon } from "../../worker/worlds";
 import type { Env } from "../../worker/types";
 import { TRUSTED_LTX_25_I2V_GRAPH_FIXTURE } from "./fixtures/trustedLtx25I2vGraph";
@@ -95,6 +97,8 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_love_loop_drops"),
+    env.DB.prepare("delete from creative_love_loops"),
     env.DB.prepare("delete from creative_overnight_tasks"),
     env.DB.prepare("delete from creative_overnight_sessions"),
     env.DB.prepare("delete from creative_canon_promotions"),
@@ -236,6 +240,82 @@ async function startOvernightLifecycleGeneration(fixture: Awaited<ReturnType<typ
   const generation = await result(await fixture.claimWork()) as { kind: string; bundle: { job: { id: string } } };
   expect(generation.kind).toBe("generation");
   return { sessionId: plannerClaim.bundle.session.id, plan, generation };
+}
+
+async function loveLoopFixture(options: { heavyVideo?: boolean } = {}) {
+  const ownerId = "development-angelo";
+  const project = await testProject(ownerId, options.heavyVideo ? "Heavy Love Loop" : "Love Loop");
+  const dna = await createLocalDna(env, ownerId, {
+    projectId: project.id,
+    name: "Private symbolic love DNA",
+    directive: "A private owner direction that must never be copied into the scheduled provider prompt.",
+    targetModality: "image",
+    dimensions: { warmth: 78, spaciousness: 71, contrast: 74, organicity: 42, polish: 77 },
+  });
+  const local = workerEnv("development");
+  const importGraph = async (name: string, graph: string) => result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-cs-project-id": project.id,
+      "x-cs-file-name": encodeURIComponent(`${name}.json`),
+      "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+      "x-cs-workflow-name": encodeURIComponent(name),
+    },
+    body: graph,
+  }), local)) as Promise<{ workflow: { id: string; currentRevision: { id: string } } }>;
+  const imageGraph = JSON.stringify({
+    "1": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" }, _meta: { title: "Load model" } },
+    "2": { class_type: "PrimitiveStringMultiline", inputs: { value: "A private image direction" }, _meta: { title: "Positive Prompt" } },
+    "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] }, _meta: { title: "Sampler" } },
+    "4": { class_type: "SaveImage", inputs: { filename_prefix: "love-loop", images: ["3", 0] }, _meta: { title: "Save image" } },
+    "5": { class_type: "EmptySD3LatentImage", inputs: { width: 512, height: 512, batch_size: 1 }, _meta: { title: "Fast image" } },
+  });
+  const videoGraph = JSON.stringify({
+    "1": { class_type: "PrimitiveStringMultiline", inputs: { value: "A private video direction" }, _meta: { title: "Positive Prompt" } },
+    "2": { class_type: "LTXVideo", inputs: { prompt: ["1", 0], seed: 44 } },
+    "3": { class_type: "PrimitiveInt", inputs: { value: options.heavyVideo ? 30 : 5 }, _meta: { title: "Video Duration" } },
+    "4": { class_type: "PrimitiveFloat", inputs: { value: options.heavyVideo ? 0.5 : 0.2 }, _meta: { title: "Megapixels" } },
+    "5": { class_type: "PrimitiveInt", inputs: { value: 24 }, _meta: { title: "Frame Rate" } },
+    "6": { class_type: "PrimitiveInt", inputs: { value: options.heavyVideo ? 721 : 121 }, _meta: { title: "Frames" } },
+    "7": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+  });
+  const image = await importGraph("Love Loop Fast Image", imageGraph);
+  const video = await importGraph(options.heavyVideo ? "Love Loop Heavy Video" : "Love Loop Fast Video", videoGraph);
+  const configure = () => routeCreativeStudioApi(request("/api/creative-studio/love-loop", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: project.id,
+      dnaArtifactId: dna.artifactId,
+      timezone: "America/Chicago",
+      workflowSelections: [
+        { modality: "image", workflowId: image.workflow.id, workflowRevisionId: image.workflow.currentRevision.id },
+        { modality: "video", workflowId: video.workflow.id, workflowRevisionId: video.workflow.currentRevision.id },
+      ],
+    }),
+  }), local);
+  const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Love Loop runner" }),
+  }), local)) as { runner: { id: string }; token: string };
+  const runnerHeaders = { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" };
+  const claimWork = () => routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+    method: "POST",
+    headers: runnerHeaders,
+    body: JSON.stringify({
+      version: "1.15.0",
+      comfyUrl: "http://127.0.0.1:8188",
+      comfyReady: true,
+      comfyVersion: "0.33.0",
+      device: "RTX 3090",
+      activeJobId: null,
+      error: null,
+      modelTrainingProviders: [],
+    }),
+  }), local);
+  return { ownerId, project, dna, local, image, video, configure, enrollment, runnerHeaders, claimWork };
 }
 
 describe("Creative Studio Worker API", () => {
@@ -4423,6 +4503,245 @@ describe("Creative Studio Worker API", () => {
       }),
     }), fixture.local);
     expect(response.status).toBe(201);
+  });
+
+  it("configures exactly three private daily Love Loop drops and materializes a due slot once", async () => {
+    const fixture = await loveLoopFixture();
+    const configuredResponse = await fixture.configure();
+    expect(configuredResponse.status).toBe(201);
+    const configured = await result(configuredResponse) as { loveLoop: {
+      id: string;
+      status: string;
+      dailyCount: number;
+      drops: Array<{ id: string; localDate: string; ordinal: number; scheduledFor: string; modality: string; prompt: string; seed: number; status: string }>;
+    } };
+    expect(configured.loveLoop).toMatchObject({ status: "active", dailyCount: 3 });
+    expect(configured.loveLoop.drops).toHaveLength(3);
+    expect(configured.loveLoop.drops.filter((drop) => drop.modality === "image")).toHaveLength(2);
+    expect(configured.loveLoop.drops.filter((drop) => drop.modality === "video")).toHaveLength(1);
+    expect(new Set(configured.loveLoop.drops.map((drop) => drop.scheduledFor)).size).toBe(3);
+    expect(new Set(configured.loveLoop.drops.map((drop) => drop.seed)).size).toBe(3);
+    for (const drop of configured.loveLoop.drops) {
+      expect(drop.prompt).toMatch(/artist/i);
+      expect(drop.prompt).toMatch(/husband/i);
+      expect(drop.prompt).not.toMatch(/Angelo|private owner direction|ComfyUI|Gemma|workflow/i);
+    }
+
+    const duplicate = await fixture.configure();
+    expect(duplicate.status).toBe(409);
+    expect(await result(duplicate)).toMatchObject({ error: "love_loop_already_configured" });
+
+    const localDate = loveLoopLocalDate(new Date(), "America/Chicago");
+    const dueDrop = configured.loveLoop.drops.find((drop) => drop.modality === "video");
+    expect(dueDrop).toBeTruthy();
+    const dueId = dueDrop!.id;
+    await env.DB.batch([
+      env.DB.prepare("update creative_love_loop_drops set status = 'planned', job_id = null, artifact_id = null, error = null, local_date = ?, scheduled_for = ?, updated_at = ? where owner_id = ? and loop_id = ? and id = ?")
+        .bind(localDate, new Date(Date.now() - 30_000).toISOString(), new Date().toISOString(), fixture.ownerId, configured.loveLoop.id, dueId),
+      env.DB.prepare("update creative_love_loop_drops set status = 'planned', job_id = null, artifact_id = null, error = null, local_date = ?, scheduled_for = ?, updated_at = ? where owner_id = ? and loop_id = ? and id != ?")
+        .bind(localDate, new Date(Date.now() + 6 * 60 * 60_000).toISOString(), new Date().toISOString(), fixture.ownerId, configured.loveLoop.id, dueId),
+    ]);
+    await env.DB.prepare("delete from creative_jobs where owner_id = ? and json_extract(settings_stamp_json, '$.loveLoop.loopId') = ?")
+      .bind(fixture.ownerId, configured.loveLoop.id).run();
+
+    const claims = await Promise.all([fixture.claimWork(), fixture.claimWork()]);
+    const payloads = await Promise.all(claims.map(result)) as Array<{ kind: string | null; bundle: null | { job: { id: string; prompt: string; settingsStamp: Record<string, unknown> } } }>;
+    const generation = payloads.find((payload) => payload.kind === "generation" && payload.bundle)?.bundle?.job;
+    expect(generation).toBeTruthy();
+    expect(generation?.prompt).not.toMatch(/Angelo|private owner direction|ComfyUI|Gemma|workflow/i);
+    expect(generation?.settingsStamp).toMatchObject({
+      provider: "local-comfyui",
+      videoDurationSeconds: 5,
+      videoPerformance: { mode: "fast-default", workload: { requiresExplicitHeavy: false } },
+      videoSpeech: { mode: "no-speech" },
+      inputAssetIds: [],
+      inputArtifactIds: [],
+      loveLoop: {
+        schemaVersion: "creative-studio-love-loop-generation/1.0",
+        loopId: configured.loveLoop.id,
+        dropId: dueId,
+        privacyMode: "symbolic-roles",
+        subjectRole: "owner-artist",
+        relationshipRole: "husband",
+        likenessMode: "none",
+      },
+    });
+    const counts = await env.DB.prepare(`select count(*) as jobs,
+      min(priority) as minimumPriority, max(priority) as maximumPriority from creative_jobs
+      where owner_id = ? and json_extract(settings_stamp_json, '$.loveLoop.loopId') = ?`)
+      .bind(fixture.ownerId, configured.loveLoop.id).first<{ jobs: number; minimumPriority: number; maximumPriority: number }>();
+    expect(Number(counts?.jobs)).toBe(1);
+    expect(Number(counts?.minimumPriority)).toBe(5);
+    expect(Number(counts?.maximumPriority)).toBe(5);
+    const linked = await env.DB.prepare("select count(*) as count from creative_love_loop_drops where owner_id = ? and loop_id = ? and job_id is not null")
+      .bind(fixture.ownerId, configured.loveLoop.id).first<{ count: number }>();
+    expect(Number(linked?.count)).toBe(1);
+
+    const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), fixture.local)) as {
+      snapshot: { loveLoop: { id: string; drops: Array<{ jobId: string | null }> }; productionCockpit: { runs: Array<{ id: string }> } };
+    };
+    expect(snapshot.snapshot.loveLoop.id).toBe(configured.loveLoop.id);
+    expect(snapshot.snapshot.productionCockpit.runs.some((run) => run.id === generation?.id)).toBe(false);
+
+    await env.DB.prepare(`update creative_jobs set status = 'failed', progress = 100, error = 'comfyui_model_missing',
+      execution_stage = 'failed', completed_at = ?, updated_at = ? where id = ? and owner_id = ?`)
+      .bind(new Date().toISOString(), new Date().toISOString(), generation!.id, fixture.ownerId).run();
+    const failedSnapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), fixture.local)) as {
+      snapshot: { productionCockpit: { runs: Array<{ id: string; status: string }>; actions: Array<{ entityId: string; kind: string }> } };
+    };
+    expect(failedSnapshot.snapshot.productionCockpit.runs).toContainEqual(expect.objectContaining({ id: generation!.id, status: "failed" }));
+    expect(failedSnapshot.snapshot.productionCockpit.actions).toContainEqual(expect.objectContaining({ entityId: generation!.id, kind: "retry-generation" }));
+
+    const retriedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${generation!.id}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "love_loop_manual_retry_001" }),
+    }), fixture.local);
+    expect(retriedResponse.status).toBe(202);
+    const retried = await result(retriedResponse) as { job: {
+      id: string;
+      status: string;
+      retryOfJobId: string | null;
+      settingsStamp: { loveLoop?: unknown; reusedFromJobId: string | null };
+    } };
+    expect(retried.job).toMatchObject({
+      status: "queued",
+      retryOfJobId: generation!.id,
+      settingsStamp: { reusedFromJobId: generation!.id },
+    });
+    expect(retried.job.settingsStamp.loveLoop).toBeUndefined();
+    const retriedSnapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), fixture.local)) as {
+      snapshot: { productionCockpit: { runs: Array<{ id: string; status: string }> } };
+    };
+    expect(retriedSnapshot.snapshot.productionCockpit.runs)
+      .toContainEqual(expect.objectContaining({ id: retried.job.id, status: "queued" }));
+    expect((await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), fixture.local)) as {
+      snapshot: { productionCockpit: { actions: Array<{ entityId: string; kind: string }> } };
+    }).snapshot.productionCockpit.actions)
+      .not.toContainEqual(expect.objectContaining({ entityId: generation!.id, kind: "retry-generation" }));
+    await cancelOwnedJob(env, fixture.ownerId, retried.job.id);
+
+    await env.DB.prepare(`update creative_love_loop_drops set status = 'failed', error = 'comfyui_model_missing', updated_at = ?
+      where owner_id = ? and loop_id = ? and job_id is null`)
+      .bind(new Date().toISOString(), fixture.ownerId, configured.loveLoop.id).run();
+    await fixture.claimWork();
+    expect(await result(await routeCreativeStudioApi(request("/api/creative-studio/love-loop"), fixture.local)))
+      .toMatchObject({ loveLoop: { status: "needs-attention", lastError: "love_loop_failure_limit_reached" } });
+    const repaired = await fixture.configure();
+    expect(repaired.status).toBe(201);
+    expect(await result(repaired)).toMatchObject({ loveLoop: { id: configured.loveLoop.id, status: "active", lastError: null } });
+    await fixture.claimWork();
+    expect(await result(await routeCreativeStudioApi(request("/api/creative-studio/love-loop"), fixture.local)))
+      .toMatchObject({ loveLoop: { status: "active", lastError: null } });
+  });
+
+  it("pauses future Love Loop work, resumes safely, and disables without deleting history", async () => {
+    const fixture = await loveLoopFixture();
+    const configured = await result(await fixture.configure()) as { loveLoop: { id: string; drops: Array<{ id: string }> } };
+    const localDate = loveLoopLocalDate(new Date(), "America/Chicago");
+    await env.DB.prepare("update creative_love_loop_drops set local_date = ?, scheduled_for = ?, status = 'planned', job_id = null, error = null")
+      .bind(localDate, new Date(Date.now() + 60 * 60_000).toISOString()).run();
+    await env.DB.prepare("delete from creative_jobs where owner_id = ? and json_extract(settings_stamp_json, '$.loveLoop.loopId') = ?")
+      .bind(fixture.ownerId, configured.loveLoop.id).run();
+
+    const paused = await routeCreativeStudioApi(request("/api/creative-studio/love-loop/pause", { method: "POST" }), fixture.local);
+    expect(await result(paused)).toMatchObject({ loveLoop: { id: configured.loveLoop.id, status: "paused" } });
+    expect(await result(await fixture.claimWork())).toMatchObject({ kind: null, bundle: null });
+    expect(Number((await env.DB.prepare("select count(*) as count from creative_jobs where owner_id = ?").bind(fixture.ownerId).first<{ count: number }>())?.count)).toBe(0);
+
+    const resumed = await routeCreativeStudioApi(request("/api/creative-studio/love-loop/resume", { method: "POST" }), fixture.local);
+    expect(await result(resumed)).toMatchObject({ loveLoop: { id: configured.loveLoop.id, status: "active" } });
+    const disabled = await routeCreativeStudioApi(request("/api/creative-studio/love-loop/disable", { method: "POST" }), fixture.local);
+    const disabledState = await result(disabled) as { loveLoop: { id: string; status: string; drops: Array<{ id: string; status: string }> } };
+    expect(disabledState.loveLoop).toMatchObject({ id: configured.loveLoop.id, status: "disabled" });
+    expect(disabledState.loveLoop.drops).toHaveLength(3);
+    expect(disabledState.loveLoop.drops.every((drop) => drop.status === "skipped")).toBe(true);
+    expect(await result(await fixture.claimWork())).toMatchObject({ kind: null, bundle: null });
+
+    const invalidResume = await routeCreativeStudioApi(request("/api/creative-studio/love-loop/resume", { method: "POST" }), fixture.local);
+    expect(invalidResume.status).toBe(409);
+    expect(await result(invalidResume)).toMatchObject({ error: "love_loop_not_resumable" });
+    const repairTarget = await env.DB.prepare("select id from creative_love_loop_drops where owner_id = ? and loop_id = ? and modality = 'image' limit 1")
+      .bind(fixture.ownerId, configured.loveLoop.id).first<{ id: string }>();
+    expect(repairTarget?.id).toBeTruthy();
+    await env.DB.prepare("update creative_love_loop_drops set workflow_id = ?, workflow_revision_id = ? where id = ? and owner_id = ?")
+      .bind(fixture.video.workflow.id, fixture.video.workflow.currentRevision.id, repairTarget!.id, fixture.ownerId).run();
+    const reconfigurationRace = await Promise.all([fixture.configure(), fixture.configure()]);
+    expect(reconfigurationRace.map((response) => response.status).sort()).toEqual([201, 409]);
+    const reconfigured = reconfigurationRace.find((response) => response.status === 201)!;
+    const reconfiguredState = await result(reconfigured) as { loveLoop: { id: string; status: string; drops: Array<{ status: string }> } };
+    expect(reconfiguredState.loveLoop).toMatchObject({ id: configured.loveLoop.id, status: "active" });
+    expect(reconfiguredState.loveLoop.drops).toHaveLength(3);
+    expect(reconfiguredState.loveLoop.drops.every((drop) => drop.status === "planned")).toBe(true);
+    expect(await env.DB.prepare("select workflow_id as workflowId, workflow_revision_id as workflowRevisionId from creative_love_loop_drops where id = ? and owner_id = ?")
+      .bind(repairTarget!.id, fixture.ownerId).first<{ workflowId: string; workflowRevisionId: string }>())
+      .toMatchObject({ workflowId: fixture.image.workflow.id, workflowRevisionId: fixture.image.workflow.currentRevision.id });
+  });
+
+  it("cancels a Love Loop job orphaned before drop linkage and will not claim it while paused", async () => {
+    const fixture = await loveLoopFixture();
+    const configured = await result(await fixture.configure()) as { loveLoop: { id: string; drops: Array<{ id: string }> } };
+    const dueId = configured.loveLoop.drops[0].id;
+    const localDate = loveLoopLocalDate(new Date(), "America/Chicago");
+    await env.DB.batch([
+      env.DB.prepare("update creative_love_loop_drops set local_date = ?, scheduled_for = ?, status = 'planned', job_id = null, artifact_id = null, error = null where id = ? and owner_id = ?")
+        .bind(localDate, new Date(Date.now() - 30_000).toISOString(), dueId, fixture.ownerId),
+      env.DB.prepare("update creative_love_loop_drops set local_date = ?, scheduled_for = ?, status = 'planned', job_id = null, artifact_id = null, error = null where id != ? and owner_id = ? and loop_id = ?")
+        .bind(localDate, new Date(Date.now() + 6 * 60 * 60_000).toISOString(), dueId, fixture.ownerId, configured.loveLoop.id),
+    ]);
+
+    await reconcileLoveLoops(fixture.local, fixture.ownerId);
+    const materialized = await env.DB.prepare(`select id from creative_jobs where owner_id = ? and status = 'queued'
+      and json_extract(settings_stamp_json, '$.loveLoop.loopId') = ?`).bind(fixture.ownerId, configured.loveLoop.id).first<{ id: string }>();
+    expect(materialized?.id).toBeTruthy();
+    await env.DB.prepare("update creative_love_loop_drops set job_id = null where id = ? and owner_id = ?")
+      .bind(dueId, fixture.ownerId).run();
+
+    await env.DB.prepare("update creative_love_loop_drops set updated_at = ? where id = ? and owner_id = ?")
+      .bind(new Date(Date.now() - 3 * 60_000).toISOString(), dueId, fixture.ownerId).run();
+    await reconcileLoveLoops(fixture.local, fixture.ownerId);
+    expect(await env.DB.prepare("select job_id as jobId from creative_love_loop_drops where id = ? and owner_id = ?")
+      .bind(dueId, fixture.ownerId).first<{ jobId: string | null }>())
+      .toMatchObject({ jobId: materialized!.id });
+    const recoveredCount = await env.DB.prepare(`select count(*) as count from creative_jobs where owner_id = ?
+      and json_extract(settings_stamp_json, '$.loveLoop.dropId') = ?`).bind(fixture.ownerId, dueId).first<{ count: number }>();
+    expect(Number(recoveredCount?.count)).toBe(1);
+    await env.DB.prepare("update creative_love_loop_drops set job_id = null where id = ? and owner_id = ?")
+      .bind(dueId, fixture.ownerId).run();
+
+    const paused = await routeCreativeStudioApi(request("/api/creative-studio/love-loop/pause", { method: "POST" }), fixture.local);
+    expect(await result(paused)).toMatchObject({ loveLoop: { status: "paused" } });
+    expect(await env.DB.prepare("select status, error from creative_jobs where id = ? and owner_id = ?")
+      .bind(materialized!.id, fixture.ownerId).first<{ status: string; error: string }>() )
+      .toMatchObject({ status: "cancelled", error: "love_loop_paused" });
+
+    await env.DB.prepare(`update creative_jobs set status = 'queued', error = null, execution_stage = 'queued',
+      cancelled_at = null, completed_at = null, runner_id = null, runner_lease_until = null where id = ? and owner_id = ?`)
+      .bind(materialized!.id, fixture.ownerId).run();
+    expect(await result(await fixture.claimWork())).toMatchObject({ kind: null, bundle: null });
+    expect(await env.DB.prepare("select status from creative_jobs where id = ? and owner_id = ?")
+      .bind(materialized!.id, fixture.ownerId).first<{ status: string }>() )
+      .toMatchObject({ status: "queued" });
+
+    await routeCreativeStudioApi(request("/api/creative-studio/love-loop/disable", { method: "POST" }), fixture.local);
+    await env.DB.prepare(`update creative_jobs set status = 'queued', error = null, execution_stage = 'queued',
+      cancelled_at = null, completed_at = null where id = ? and owner_id = ?`)
+      .bind(materialized!.id, fixture.ownerId).run();
+    const reconfigured = await fixture.configure();
+    expect(reconfigured.status).toBe(201);
+    expect(await env.DB.prepare("select status, error from creative_jobs where id = ? and owner_id = ?")
+      .bind(materialized!.id, fixture.ownerId).first<{ status: string; error: string }>())
+      .toMatchObject({ status: "cancelled", error: "love_loop_reconfigured" });
+  });
+
+  it("rejects heavy video workflows before enabling Love Loop", async () => {
+    const fixture = await loveLoopFixture({ heavyVideo: true });
+    const response = await fixture.configure();
+    expect(response.status).toBe(400);
+    expect(await result(response)).toMatchObject({ error: "love_loop_fast_video_required" });
+    const stored = await env.DB.prepare("select count(*) as count from creative_love_loops where owner_id = ?")
+      .bind(fixture.ownerId).first<{ count: number }>();
+    expect(Number(stored?.count)).toBe(0);
   });
 
   it("does not expose a generic proxy route", async () => {

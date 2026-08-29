@@ -139,10 +139,11 @@ function newest<T extends { createdAt: string }>(values: T[]) {
 }
 
 export function deriveProductionCockpit(input: ProductionCockpitInput): ProductionCockpit {
-  // Overnight child jobs/artifacts are presented as one durable session in Work and Home.
-  // Keeping them out of the ordinary cockpit prevents a night of outputs from flooding
-  // notifications and run rows while preserving every file in artifact history.
-  const standaloneJobs = input.jobs.filter((job) => !job.settingsStamp.overnight);
+  // Automation child jobs/artifacts are presented as compact groups in Work and Home.
+  // Failed Love Loop work stays in the ordinary action inbox so its full error and
+  // explicit retry remain reachable without flooding active or completed run rows.
+  const standaloneJobs = input.jobs.filter((job) => !job.settingsStamp.overnight
+    && (!job.settingsStamp.loveLoop || job.status === "failed"));
   const standaloneArtifacts = input.artifacts.filter((artifact) => !artifact.settingsStamp.overnight);
   const projects = new Map(input.projects.map((project) => [project.id, project]));
   const dna = new Map(input.dnaArtifacts.map((artifact) => [artifact.artifactId, artifact]));

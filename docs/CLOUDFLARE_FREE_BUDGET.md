@@ -26,6 +26,7 @@ The current Cloudflare limits used by this budget are documented in the official
 - R2 retains uploads and every completed result. Acceptance and rejection do not create another media copy.
 - Queue retries are capped at three. Active AFDFW reconciliation waits at least one minute, while an empty push consumer performs no empty polling.
 - The recovery trigger runs hourly. It repairs missed durable work; it is not the primary job loop.
+- The opt-in daily Love Loop reuses the Local Runner's existing one-minute work claim. It adds no invocation source, browser polling, Queue polling, cron, or AFDFW call. While enabled, one indexed D1 read checks whether today's three rows already exist; at most three local generation jobs are materialized per day, one at a time, only while ComfyUI is healthy.
 - No Durable Objects, Cloudflare Workflows, Containers, or Browser Rendering binding is configured.
 
 ## Rate-limit response

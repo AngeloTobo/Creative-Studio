@@ -33,8 +33,8 @@ This runs the complete local verification suite, validates the production contra
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
 6. `runner.cs.angelotoborg.com/` returns `404`; its unauthenticated claim route returns `401`; the main product root still redirects through Cloudflare Access.
-7. An authenticated Runtime-page check reports Local Runner, video generation, multimodal CreativeDNA descriptions, Full Video Script v2, Overnight Studio, and trusted 30-second video generation available while a recent Local Runner 1.15 heartbeat is healthy.
-8. Remote D1 has no pending migration after `0020_overnight_studio.sql`; runner registration exists and deployment verification adds no job, artifact, training-review, overnight-session, or overnight-task fixtures.
+7. An authenticated product check reports Local Runner, video generation, multimodal CreativeDNA descriptions, Full Video Script v2, Overnight Studio, the opt-in Angelo daily Love Loop, and trusted 30-second video generation available while a recent Local Runner 1.15 heartbeat is healthy.
+8. Remote D1 has no pending migration after `0021_love_loop.sql`; runner registration exists and deployment verification adds no job, artifact, training-review, overnight-session, overnight-task, Love Loop, or Love Loop drop fixtures.
 9. Windows Scheduled Task `Creative Studio Local Runner` is running with sign-in and daily recovery triggers, StartWhenAvailable, WakeToRun, and 12 restart attempts; its config ACL permits only the current user and SYSTEM, and D1 reports no runner error.
 10. `npm run check:cloudflare-free` reports no more than 2,904 baseline Worker invocations per day, and deployment output confirms the hourly schedule with Queue retries capped at three.
 
