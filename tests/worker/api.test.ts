@@ -5,6 +5,8 @@ import {
   compileContinuityDirective,
   createFourWayVideoGenerationVersions,
   createVideoGenerationVersions,
+  TRUSTED_LTX_25_I2V_PORTRAIT_30S,
+  TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID,
   videoPromptProfileForIdentity,
   type CanonReference,
   type ContinuityRule,
@@ -21,6 +23,7 @@ import { routeCreativeStudioApi } from "../../worker/routes/api";
 import { claimLocalRunnerJob } from "../../worker/runner";
 import { generationContinuityStamp, promoteArtifactToCanon } from "../../worker/worlds";
 import type { Env } from "../../worker/types";
+import { TRUSTED_LTX_25_I2V_GRAPH_FIXTURE } from "./fixtures/trustedLtx25I2vGraph";
 
 const BASE = "https://creative-studio.test";
 
@@ -2934,6 +2937,273 @@ describe("Creative Studio Worker API", () => {
     }), local);
     expect(legacyReuse.status).toBe(409);
     expect(await result(legacyReuse)).toMatchObject({ error: "video_heavy_mode_required" });
+  });
+
+  it("stamps only the exact runtime-trusted LTX 2.5 30s execution and revalidates reuse", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Trusted 30 second video");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Trusted motion direction",
+      directive: "A reflective figure turns through violet light while the camera moves with deliberate calm.",
+      targetModality: "image",
+    });
+    const storage = memoryBucket();
+    const local = workerEnv("development", undefined, storage.bucket);
+    const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("trusted-source.png"),
+        "x-cs-file-size": "4",
+        "x-cs-training-eligible": "true",
+      },
+      body: new Uint8Array([137, 80, 78, 71]),
+    }), local)) as { asset: { id: string } };
+    const compiled = compileVideoPromptWithSpeech(
+      "A reflective figure turns through violet light while the camera moves with deliberate calm.",
+      undefined,
+      videoPromptProfileForIdentity({ name: "LTX 2.5 Image to Video" }),
+    );
+
+    type TrustedGraphOptions = {
+      duration?: number;
+      aspectRatio?: string;
+      megapixels?: number;
+      fps?: number;
+      models?: readonly string[];
+    };
+    const trustedGraph = (options: TrustedGraphOptions = {}) => {
+      const graph = structuredClone(TRUSTED_LTX_25_I2V_GRAPH_FIXTURE) as Record<string, { inputs: Record<string, unknown> }>;
+      graph["395"].inputs.image = "trusted-source.png";
+      graph["403"].inputs.aspect_ratio = options.aspectRatio ?? "9:16 (Portrait Widescreen)";
+      graph["403"].inputs.megapixels = options.megapixels ?? 0.2;
+      graph["398:376"].inputs.value = compiled.prompt;
+      graph["398:373"].inputs.text = compiled.prompt;
+      graph["398:362"].inputs.value = options.duration ?? 30;
+      graph["398:361"].inputs.value = options.fps ?? 24;
+      if (options.models) {
+        const modelBindings = [
+          ["398:387", "clip_name"],
+          ["398:393", "clip_name"],
+          ["398:384", "unet_name"],
+          ["398:386", "vae_name"],
+          ["398:371", "model_name"],
+          ["398:385", "vae_name"],
+        ] as const;
+        modelBindings.forEach(([nodeId, inputName], index) => { graph[nodeId].inputs[inputName] = options.models![index]; });
+      }
+      return graph;
+    };
+    const importGraph = async (suffix: string, graph: ReturnType<typeof trustedGraph>) => {
+      const serialized = JSON.stringify(graph);
+      return result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-cs-project-id": project.id,
+          "x-cs-file-name": encodeURIComponent(`ltx-2.5-trusted-${suffix}.json`),
+          "x-cs-file-size": String(new TextEncoder().encode(serialized).byteLength),
+          "x-cs-workflow-name": encodeURIComponent(`LTX 2.5 Image to Video ${suffix}`),
+        },
+        body: serialized,
+      }), local)) as Promise<{ workflow: { id: string; currentRevision: { id: string } } }>;
+    };
+    const exact = await importGraph("exact", trustedGraph());
+    const submission = (
+      workflow: { id: string; currentRevision: { id: string } },
+      key: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      projectId: project.id,
+      dnaArtifactId: dna.artifactId,
+      modality: "video",
+      idempotencyKey: key,
+      videoDurationSeconds: 30,
+      videoPerformanceMode: "explicit-heavy",
+      trustedVideoPresetId: TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID,
+      videoSpeech: compiled.speech,
+      outputBatch: {
+        schemaVersion: "creative-studio-output-batch/1.0",
+        batchId: `trusted_${key.slice(-12)}`,
+        index: 1,
+        count: 1,
+      },
+      workflow: {
+        workflowId: workflow.id,
+        revisionId: workflow.currentRevision.id,
+        inputBindings: { "395::image": uploaded.asset.id },
+        expectedPrompt: compiled.prompt,
+      },
+      ...overrides,
+    });
+
+    const forged = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission(exact.workflow, "trusted_forged_id_001", {
+        trustedVideoPresetId: "forged-trusted-video-preset",
+      })),
+    }), local);
+    expect(forged.status).toBe(400);
+    expect(await result(forged)).toMatchObject({ error: "invalid_trusted_video_preset" });
+
+    const nonVideo = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        idempotencyKey: "trusted_non_video_001",
+        provider: "development-preview",
+        trustedVideoPresetId: TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID,
+      }),
+    }), local);
+    expect(nonVideo.status).toBe(400);
+    expect(await result(nonVideo)).toMatchObject({ error: "invalid_trusted_video_preset" });
+
+    const modeMismatch = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission(exact.workflow, "trusted_wrong_mode_001", {
+        videoPerformanceMode: "fast-default",
+      })),
+    }), local);
+    expect(modeMismatch.status).toBe(409);
+    expect(await result(modeMismatch)).toMatchObject({ error: "trusted_video_preset_mode_required" });
+
+    const disconnectedGraph = trustedGraph();
+    disconnectedGraph["75"].inputs.video = ["398:356", 0];
+    const driftCases: Array<{ label: string; graph: ReturnType<typeof trustedGraph>; request?: Record<string, unknown> }> = [
+      { label: "duration", graph: trustedGraph({ duration: 15 }), request: { videoDurationSeconds: 15 } },
+      { label: "aspect", graph: trustedGraph({ aspectRatio: "16:9 (Widescreen)" }) },
+      { label: "megapixels", graph: trustedGraph({ megapixels: 0.5 }) },
+      { label: "fps", graph: trustedGraph({ fps: 30 }) },
+      { label: "models", graph: trustedGraph({ models: [...TRUSTED_LTX_25_I2V_PORTRAIT_30S.requiredModels.slice(0, -1), "unmeasured-video-vae.safetensors"] }) },
+      { label: "disconnected", graph: disconnectedGraph },
+    ];
+    for (const [index, drift] of driftCases.entries()) {
+      const imported = await importGraph(drift.label, drift.graph);
+      const response = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission(
+          imported.workflow,
+          `trusted_drift_${drift.label}_${String(index).padStart(3, "0")}`,
+          drift.request,
+        )),
+      }), local);
+      expect(response.status, drift.label).toBe(409);
+      expect(await result(response), drift.label).toMatchObject({ error: "trusted_video_preset_mismatch" });
+    }
+
+    const twoOutputs = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission(exact.workflow, "trusted_two_outputs_001", {
+        outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId: "trusted_two_outputs", index: 1, count: 2 },
+      })),
+    }), local);
+    expect(twoOutputs.status).toBe(409);
+    expect(await result(twoOutputs)).toMatchObject({ error: "trusted_video_preset_mismatch" });
+
+    const valid = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission(exact.workflow, "trusted_exact_valid_001")),
+    }), local);
+    expect(valid.status).toBe(202);
+    const validPayload = await result(valid) as { job: { id: string; settingsStamp: Record<string, unknown> & { videoPerformance: { trustedPreset: Record<string, unknown> } } } };
+    expect(validPayload.job.settingsStamp).toMatchObject({
+      videoDurationSeconds: 30,
+      outputBatch: { count: 1 },
+      videoPerformance: {
+        mode: "explicit-heavy",
+        workload: { durationSeconds: 30, megapixels: 0.2, frames: 721, fps: 24 },
+        trustedPreset: {
+          schemaVersion: "creative-studio-trusted-video-preset/1.0",
+          id: TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID,
+          strategy: "native-single-pass",
+          hardware: "NVIDIA GeForce RTX 3090 24 GB",
+          graphFamily: {
+            sha256: TRUSTED_LTX_25_I2V_PORTRAIT_30S.graphFamily.sha256,
+            nodeCount: 50,
+            firstPassSteps: 8,
+            refinePassSteps: 3,
+            latentUpscale: "2x",
+            decode: "tiled-vae",
+          },
+          evidence: { qualityStatus: "unreviewed" },
+        },
+      },
+    });
+
+    await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/cancel`, { method: "POST" }), local);
+    const retried = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_exact_retry_001" }),
+    }), local);
+    expect(retried.status).toBe(202);
+    expect(await result(retried)).toMatchObject({ job: { settingsStamp: { videoPerformance: { trustedPreset: { id: TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID } } } } });
+    const reused = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/reuse`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_exact_reuse_001" }),
+    }), local);
+    expect(reused.status).toBe(202);
+    expect(await result(reused)).toMatchObject({ job: { settingsStamp: { videoPerformance: { trustedPreset: { id: TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID } } } } });
+
+    const exactGraphJson = JSON.stringify(trustedGraph());
+    const graphTamper = trustedGraph();
+    graphTamper["398:374"].inputs.tile_size = 1024;
+    await env.DB.prepare("update creative_workflow_revisions set graph_json = ? where id = ?")
+      .bind(JSON.stringify(graphTamper), exact.workflow.currentRevision.id).run();
+    const graphDriftRetry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_graph_retry_001" }),
+    }), local);
+    expect(graphDriftRetry.status).toBe(409);
+    expect(await result(graphDriftRetry)).toMatchObject({ error: "trusted_video_preset_mismatch" });
+    const graphDriftReuse = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/reuse`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_graph_reuse_001" }),
+    }), local);
+    expect(graphDriftReuse.status).toBe(409);
+    expect(await result(graphDriftReuse)).toMatchObject({ error: "trusted_video_preset_mismatch" });
+    await env.DB.prepare("update creative_workflow_revisions set graph_json = ? where id = ?")
+      .bind(exactGraphJson, exact.workflow.currentRevision.id).run();
+
+    const parameterRow = await env.DB.prepare("select parameters_json as parametersJson from creative_workflow_revisions where id = ?")
+      .bind(exact.workflow.currentRevision.id).first<{ parametersJson: string }>();
+    expect(parameterRow).toBeTruthy();
+    const exactParametersJson = parameterRow!.parametersJson;
+    const tamperedParameters = JSON.parse(exactParametersJson) as Array<{ id: string; value: unknown }>;
+    for (const parameter of tamperedParameters) {
+      if (parameter.id === "398:357::strength") parameter.value = 1;
+      if (parameter.id === "398:349::strength") parameter.value = 0.7;
+    }
+    await env.DB.prepare("update creative_workflow_revisions set parameters_json = ? where id = ?")
+      .bind(JSON.stringify(tamperedParameters), exact.workflow.currentRevision.id).run();
+    const parameterDriftRetry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_parameter_retry_001" }),
+    }), local);
+    expect(parameterDriftRetry.status).toBe(409);
+    expect(await result(parameterDriftRetry)).toMatchObject({ error: "trusted_video_preset_mismatch" });
+    const parameterDriftReuse = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/reuse`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_parameter_reuse_001" }),
+    }), local);
+    expect(parameterDriftReuse.status).toBe(409);
+    expect(await result(parameterDriftReuse)).toMatchObject({ error: "trusted_video_preset_mismatch" });
+    await env.DB.prepare("update creative_workflow_revisions set parameters_json = ? where id = ?")
+      .bind(exactParametersJson, exact.workflow.currentRevision.id).run();
+
+    const forgedStamp = structuredClone(validPayload.job.settingsStamp) as Record<string, unknown> & {
+      outputBatch: { count: number };
+      videoPerformance: { trustedPreset: { id: string } };
+    };
+    forgedStamp.outputBatch.count = 2;
+    await env.DB.prepare("update creative_jobs set settings_stamp_json = ? where id = ?")
+      .bind(JSON.stringify(forgedStamp), validPayload.job.id).run();
+    const driftedReuse = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/reuse`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_drift_reuse_001" }),
+    }), local);
+    expect(driftedReuse.status).toBe(409);
+    expect(await result(driftedReuse)).toMatchObject({ error: "trusted_video_preset_mismatch" });
+
+    forgedStamp.outputBatch.count = 1;
+    forgedStamp.videoPerformance.trustedPreset.id = "forged-trusted-video-preset";
+    await env.DB.prepare("update creative_jobs set settings_stamp_json = ? where id = ?")
+      .bind(JSON.stringify(forgedStamp), validPayload.job.id).run();
+    const forgedRetry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${validPayload.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "trusted_forged_retry_001" }),
+    }), local);
+    expect(forgedRetry.status).toBe(400);
+    expect(await result(forgedRetry)).toMatchObject({ error: "invalid_trusted_video_preset" });
   });
 
   it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {

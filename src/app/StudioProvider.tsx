@@ -23,6 +23,7 @@ import type {
   VideoGenerationOperation,
   ImagePerformanceMode,
   VideoPerformanceMode,
+  TrustedVideoPresetId,
   VideoGenerationVariant,
   VideoDurationSeconds,
   EvolutionJobContext,
@@ -140,6 +141,7 @@ export type SubmitWorkflowJobInput = {
   videoOperation?: VideoGenerationOperation;
   performanceMode?: ImagePerformanceMode;
   videoPerformanceMode?: VideoPerformanceMode;
+  trustedVideoPresetId?: TrustedVideoPresetId;
   videoVariant?: VideoGenerationVariant;
   videoSpeech?: VideoSpeechStamp;
   evolution?: EvolutionJobContext;
@@ -167,6 +169,10 @@ function message(error: unknown) {
   }
   if (error.message === "video_heavy_mode_not_required" || error.message === "video_performance_revision_mismatch") {
     return "The video workload changed after confirmation. Review the current settings and queue it again.";
+  }
+  if (error.message === "invalid_trusted_video_preset") return "That trusted video recipe is no longer recognized. Refresh Creative Studio before generating.";
+  if (error.message === "trusted_video_preset_mode_required" || error.message === "trusted_video_preset_mismatch") {
+    return "The measured 30-second recipe changed before it could be queued. Apply Trusted 30s again so every verified setting is restored.";
   }
   if (error.message === "video_duration_not_supported_by_model") return "That model cannot create the selected length. Choose a shorter length or an available LTX model.";
   if (error.message === "video_duration_control_missing") return "This workflow does not expose a duration control. Update its model workflow before generating.";
@@ -462,7 +468,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, mergeVideoScriptDraft]);
 
   const submitWorkflowJob = useCallback(async (input: SubmitWorkflowJobInput) => {
-    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoPerformanceMode, videoVariant, videoSpeech, evolution, outputBatch, promptReference, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript } = input;
+    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoPerformanceMode, trustedVideoPresetId, videoVariant, videoSpeech, evolution, outputBatch, promptReference, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript } = input;
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -481,6 +487,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings, expectedPrompt },
       performanceMode,
       videoPerformanceMode,
+      trustedVideoPresetId,
       videoDurationSeconds,
       videoVariant,
       videoSpeech,

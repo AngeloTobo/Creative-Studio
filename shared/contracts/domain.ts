@@ -44,6 +44,7 @@ export type VideoPerformanceStamp = Readonly<{
   schemaVersion: "creative-studio-video-performance/1.0";
   mode: VideoPerformanceMode;
   workflowRevisionId: string;
+  trustedPreset?: import("./trustedVideoPresets").TrustedVideoPresetStamp;
   workload: Readonly<{
     durationSeconds: number | null;
     width: number | null;

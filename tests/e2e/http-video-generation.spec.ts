@@ -12,14 +12,19 @@ import type {
   WorkflowDefinition,
   WorkflowScalar,
 } from "../../shared/contracts";
+import {
+  TRUSTED_LTX_25_I2V_PORTRAIT_30S,
+  inspectWorkflowGraph,
+  trustedVideoPresetStamp,
+} from "../../shared/contracts";
+import { TRUSTED_LTX_25_I2V_GRAPH_FIXTURE } from "../worker/fixtures/trustedLtx25I2vGraph";
 
 const HTTP_STUDIO = "http://127.0.0.1:4174";
 const NOW = "2026-08-28T22:00:00.000Z";
 const SOURCE_ID = "media_retained_frame";
-const IMAGE_PARAMETER_ID = "398:350::image";
-const PROMPT_PARAMETER_ID = "398:376::prompt";
-const SEED_PARAMETER_ID = "398:365::seed";
-const MEGAPIXELS_PARAMETER_ID = "398:364::megapixels";
+const IMAGE_PARAMETER_ID = "395::image";
+const SEED_PARAMETER_ID = "398:339::noise_seed";
+const MEGAPIXELS_PARAMETER_ID = "403::megapixels";
 
 let httpAdapterServer: ChildProcess | null = null;
 
@@ -101,6 +106,7 @@ const EMPTY_COCKPIT: StudioSnapshot["productionCockpit"] = {
 };
 
 function initialWorkflow(): WorkflowDefinition {
+  const inspection = inspectWorkflowGraph(structuredClone(TRUSTED_LTX_25_I2V_GRAPH_FIXTURE));
   return {
     id: "workflow_ltx_i2v_e2e",
     projectId: "project_video_e2e",
@@ -116,17 +122,12 @@ function initialWorkflow(): WorkflowDefinition {
       parentRevisionId: null,
       format: "comfyui-api",
       contentHash: "e2e-ltx-revision-1",
-      nodeCount: 5,
-      models: ["ltx-2.5-22b.safetensors"],
+      nodeCount: inspection.nodeCount,
+      models: inspection.models,
       createdAt: NOW,
-      parameters: [
-        { id: IMAGE_PARAMETER_ID, label: "Load Image", kind: "media", value: "source.png", mediaKind: "image", binding: { format: "comfyui-api", nodeId: "398:350", inputName: "image" } },
-        { id: PROMPT_PARAMETER_ID, label: "LTX Positive Prompt", kind: "text", promptRole: "positive", value: "Initial prompt", mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:376", inputName: "prompt" } },
-        { id: "398:362::value", label: "Duration", kind: "number", value: 5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:362", inputName: "value" } },
-        { id: "398:361::value", label: "Frame Rate", kind: "number", value: 24, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:361", inputName: "value" } },
-        { id: MEGAPIXELS_PARAMETER_ID, label: "Megapixels", kind: "number", value: 0.5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:364", inputName: "megapixels" } },
-        { id: SEED_PARAMETER_ID, label: "Noise Seed", kind: "number", value: 42, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:365", inputName: "seed" } },
-      ],
+      parameters: inspection.parameters.map((parameter) => (
+        parameter.id === MEGAPIXELS_PARAMETER_ID ? { ...parameter, value: 0.5 } : parameter
+      )),
     },
     createdAt: NOW,
     updatedAt: NOW,
@@ -222,6 +223,7 @@ type MockVideoBackend = {
   jobs: SubmitJobRequest[];
   enhancementRequests: CreateVideoPromptEnhancementRequest[];
   revisionRequests: Array<{ baseRevisionId: string; values: Record<string, WorkflowScalar> }>;
+  workflow: () => WorkflowDefinition;
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -334,6 +336,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
             schemaVersion: "creative-studio-video-performance/1.0",
             mode: input.videoPerformanceMode,
             workflowRevisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
+            trustedPreset: input.trustedVideoPresetId ? trustedVideoPresetStamp() : undefined,
             workload: {
               durationSeconds: input.videoDurationSeconds ?? null,
               width: null,
@@ -421,7 +424,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     await json(route, { error: `unhandled_e2e_api_route:${request.method()}:${pathname}` }, 500);
   });
 
-  return { jobs: jobRequests, enhancementRequests, revisionRequests };
+  return { jobs: jobRequests, enhancementRequests, revisionRequests, workflow: () => workflow };
 }
 
 async function openRetainedMedia(page: Page) {
@@ -552,4 +555,88 @@ test("Longer video settings require an explicit workload confirmation", async ({
   expect(backend.jobs.every((job) => job.videoDurationSeconds === 10)).toBe(true);
   expect(backend.jobs.every((job) => job.videoPerformanceMode === "explicit-heavy")).toBe(true);
   expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
+});
+
+test("Trusted 30s applies the measured single-pass recipe and queues it without a second heavy-workload dialog", async ({ page }) => {
+  const backend = await installVideoBackend(page, false);
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  const authoredDirection = "A glass-robed figure turns toward a luminous storm gathering above the city.";
+  await page.getByLabel("Describe the video").fill(authoredDirection);
+
+  // Bind media directly through the current workflow and choose an unsaved seed
+  // before applying the trusted performance controls. Neither is a preset value.
+  await page.locator("details.quick-create-advanced > summary").click();
+  const workflowImageInput = page.getByLabel("Load First Frame");
+  await workflowImageInput.selectOption(SOURCE_ID);
+  await page.locator("details.quick-render-panel > summary").click();
+  await page.locator("details.quick-render-more > summary").click();
+  const newSeed = page.locator(".quick-seed-control button");
+  await newSeed.click();
+  const preservedSeed = Number(await newSeed.locator("small").textContent());
+  expect(Number.isInteger(preservedSeed)).toBe(true);
+
+  const trustedPreset = page.getByRole("region", { name: "Trusted 30 second video preset" });
+  await expect(trustedPreset).toBeVisible();
+  await expect(trustedPreset).toContainText("Fastest proven 30-second video");
+  await expect(trustedPreset).toContainText("6/6 portrait");
+  await trustedPreset.locator("details > summary").click();
+  await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("One native 30s render");
+  await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("2m 3s");
+  await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("8 measured samples");
+
+  await trustedPreset.getByRole("button", { name: "Use trusted 30s" }).click();
+  await expect(trustedPreset.getByRole("button", { name: "Trusted 30s selected" })).toBeVisible();
+  await expect(page.getByLabel("Describe the video")).toHaveValue(authoredDirection);
+  await expect(newSeed.locator("small")).toHaveText(String(preservedSeed));
+  await expect.poll(() => page.evaluate((presetId) => (
+    window.localStorage.getItem("creative-studio:create-sessions")?.includes(presetId) ?? false
+  ), TRUSTED_LTX_25_I2V_PORTRAIT_30S.id)).toBe(true);
+  const savedGraphicalSettings = await page.evaluate(() => {
+    const stored = JSON.parse(window.localStorage.getItem("creative-studio:create-sessions") ?? "{}") as {
+      sessions?: Array<{ graphicalSettings?: Record<string, string | number | boolean | null> }>;
+    };
+    return stored.sessions?.[0]?.graphicalSettings ?? {};
+  });
+  expect(savedGraphicalSettings[`binding:${IMAGE_PARAMETER_ID}`]).toBe(SOURCE_ID);
+  expect(savedGraphicalSettings[`value:${SEED_PARAMETER_ID}`]).toBe(preservedSeed);
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Trusted 30 second video preset" })
+    .getByRole("button", { name: "Trusted 30s selected" })).toBeVisible();
+  await expect(page.getByLabel("Describe the video")).toHaveValue(authoredDirection);
+
+  await expect(page.getByRole("alert", { name: "Confirm heavy video render" })).toHaveCount(0);
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(1);
+
+  const [request] = backend.jobs;
+  expect(request).toMatchObject({
+    modality: "video",
+    videoDurationSeconds: 30,
+    videoPerformanceMode: "explicit-heavy",
+    trustedVideoPresetId: TRUSTED_LTX_25_I2V_PORTRAIT_30S.id,
+    outputBatch: { index: 1, count: 1 },
+    workflow: { inputBindings: { [IMAGE_PARAMETER_ID]: SOURCE_ID } },
+  });
+  expect(request.workflow?.expectedPrompt).toContain(authoredDirection);
+  const submittedParameters = Object.fromEntries(backend.workflow().currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
+  expect(submittedParameters).toMatchObject({
+    "398:362::value": 30,
+    "398:361::value": 24,
+    [MEGAPIXELS_PARAMETER_ID]: 0.2,
+    "403::aspect_ratio": "9:16 (Portrait Widescreen)",
+    "398:352::sampler_name": "euler_ancestral",
+    "398:341::sampler_name": "euler_ancestral",
+    "398:388::video_cfg": 1,
+    "398:391::video_cfg": 1,
+    "398:388::audio_cfg": 1,
+    "398:391::audio_cfg": 1,
+    "398:366::batch_size": 1,
+    "398:356::batch_size": 1,
+    [SEED_PARAMETER_ID]: preservedSeed,
+  });
+  expect(submittedParameters["398:357::strength"]).toBe(0.7);
+  expect(submittedParameters["398:349::strength"]).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

@@ -29,6 +29,12 @@ import {
   generationControlSet,
   inferGenerationAspectRatio,
   generationProviderWorkloadProfile,
+  assessTrustedVideoPresetExecution,
+  assessTrustedVideoPresetSupport,
+  THIRTY_SECOND_VIDEO_STRATEGY_SIMULATION,
+  TRUSTED_LTX_25_I2V_PORTRAIT_30S,
+  trustedVideoPresetById,
+  trustedVideoPresetParameterOverrides,
   generationWorkflowPromptParameters,
   compileContinuityDirective,
   GENERATION_CONTINUITY_SELECTION_SCHEMA_VERSION,
@@ -62,6 +68,7 @@ import {
   type VideoSpeechMode,
   type VideoSpeechStamp,
   type VideoScriptUse,
+  type TrustedVideoPresetId,
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
@@ -341,6 +348,7 @@ export function GenerationView({
   const [outputCount, setOutputCount] = useState<GenerationOutputCount>(initialVideoSettings?.outputCount ?? (autoFourWay ? 4 : initialIntent === "video" ? 2 : 1));
   const [canvasAspectRatio, setCanvasAspectRatio] = useState<GenerationAspectRatio | null>(null);
   const [canvasMegapixels, setCanvasMegapixels] = useState<number | null>(initialVideoSettings?.megapixels ?? null);
+  const [selectedTrustedVideoPresetId, setSelectedTrustedVideoPresetId] = useState<TrustedVideoPresetId | null>(null);
   const [heavyRenderConfirmationOpen, setHeavyRenderConfirmationOpen] = useState(false);
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
@@ -418,6 +426,7 @@ export function GenerationView({
       setOutputCount(1);
       setCanvasAspectRatio(null);
       setCanvasMegapixels(null);
+      setSelectedTrustedVideoPresetId(null);
       setSourceGalleryExpanded(false);
       setNotice("");
       setVideoOperation(null);
@@ -525,6 +534,7 @@ export function GenerationView({
           : latestSession.mediaKind === "video" ? 2 : 1);
         setCanvasAspectRatio(restoredAspect);
         setCanvasMegapixels(typeof settings.canvasMegapixels === "number" && Number.isFinite(settings.canvasMegapixels) ? settings.canvasMegapixels : null);
+        setSelectedTrustedVideoPresetId(trustedVideoPresetById(settings.trustedVideoPresetId)?.id ?? null);
         const restoredTransition = settings.videoOperationTransitionSeconds;
         const restoredVideoOperation: VideoGenerationOperation | null = settings.videoOperationKind === "extend"
           && typeof settings.videoOperationSourceId === "string"
@@ -707,6 +717,9 @@ export function GenerationView({
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
+  const trustedVideoWorkflow = generationIntent === "video"
+    ? intentWorkflows.find((item) => assessTrustedVideoPresetSupport(item, TRUSTED_LTX_25_I2V_PORTRAIT_30S).supported) ?? null
+    : null;
   const durationCompatibleWorkflows = generationIntent === "video"
     ? intentWorkflows.filter((item) => workflowSupportsVideoDuration(item, videoDurationSeconds))
     : intentWorkflows;
@@ -1036,6 +1049,24 @@ export function GenerationView({
     prompt: providerDirection,
     videoDurationSeconds,
   }) : null;
+  const selectedTrustedVideoPreset = trustedVideoPresetById(selectedTrustedVideoPresetId);
+  const trustedCurrentWorkflow = generationIntent === "video" && workflow ? {
+    ...workflow,
+    currentRevision: {
+      ...workflow.currentRevision,
+      parameters: [
+        ...mediaParameters,
+        ...displayedScalarParameters,
+      ],
+    },
+  } : null;
+  const trustedVideoPresetAssessment = selectedTrustedVideoPreset && trustedCurrentWorkflow
+    ? assessTrustedVideoPresetExecution(trustedCurrentWorkflow, estimatedOutputCount, selectedTrustedVideoPreset)
+    : null;
+  const trustedVideoPresetActive = Boolean(trustedVideoPresetAssessment?.matches && !evolutionEnabled);
+  // Keep the trusted comparison tied to the versioned simulation evidence.
+  // Arbitrary job-history records must not silently re-rank a trusted recipe.
+  const thirtySecondSimulations = THIRTY_SECOND_VIDEO_STRATEGY_SIMULATION;
   const heavyVideoRender = Boolean(currentVideoPerformance?.requiresExplicitHeavy);
   const videoRenderSignature = generationIntent === "video" ? videoRenderConsentSignature({
     workflowRevisionId: workflow?.currentRevision.id ?? null,
@@ -1086,6 +1117,7 @@ export function GenerationView({
     outputCount,
     canvasAspectRatio,
     canvasMegapixels,
+    selectedTrustedVideoPresetId,
     projectContextEnabled,
     worldContinuityEnabled,
     worldId: selectedWorld?.id ?? null,
@@ -1119,6 +1151,7 @@ export function GenerationView({
     outputCount,
     canvasAspectRatio,
     canvasMegapixels,
+    selectedTrustedVideoPresetId,
     projectContextEnabled,
     worldContinuityEnabled,
     worldId: selectedWorld?.id ?? null,
@@ -1151,6 +1184,7 @@ export function GenerationView({
         outputCount,
         canvasAspectRatio,
         canvasMegapixels,
+        trustedVideoPresetId: selectedTrustedVideoPreset?.id ?? null,
         projectContextEnabled,
         worldContinuityEnabled,
         worldId: selectedWorld?.id ?? null,
@@ -1182,7 +1216,7 @@ export function GenerationView({
         if (saved.id !== sessionId) setSessionId(saved.id);
       }
     };
-  }, [activeProjectId, appliedPromptEnhancementId, appliedVideoScriptDraftId, appliedVideoScriptRevision, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, videoScriptDraftId, videoScriptProposal, videoScriptProposalDirty, videoScriptProposalSpokenText, videoScriptSeedIdeas, videoSpeechMode, videoSpeechText, workflowId, workflowValues, worldContinuityEnabled]);
+  }, [activeProjectId, appliedPromptEnhancementId, appliedVideoScriptDraftId, appliedVideoScriptRevision, canvasAspectRatio, canvasMegapixels, creativeSessionSignature, direction, effectiveSessionRevisionId, effectiveSessionWorkflowId, generationGoal, generationIntent, imagePerformanceMode, inputBindings, intent, lyrics, originalVideoDirection, outputCount, projectContextEnabled, promptEnhancementId, quickSourceId, saveSession, selectedTrustedVideoPreset?.id, selectedWorld?.id, selectedWorldEntities, sessionId, sessionSourceType, videoDurationSeconds, videoOperation, videoScriptDraftId, videoScriptProposal, videoScriptProposalDirty, videoScriptProposalSpokenText, videoScriptSeedIdeas, videoSpeechMode, videoSpeechText, workflowId, workflowValues, worldContinuityEnabled]);
 
   useEffect(() => {
     if (sessionCompletionVersion !== sessionCompletionBaselineRef.current) {
@@ -1257,6 +1291,7 @@ export function GenerationView({
     setImagePerformanceMode("fast-default");
     setCanvasAspectRatio(null);
     setCanvasMegapixels(null);
+    setSelectedTrustedVideoPresetId(null);
     setLyrics("");
     setNotice("");
     armedVideoRenderSignature.current = "";
@@ -1351,6 +1386,7 @@ export function GenerationView({
     setImagePerformanceMode("fast-default");
     setCanvasAspectRatio(null);
     setCanvasMegapixels(generationIntent === "video" ? ONE_CLICK_VIDEO_MEGAPIXELS : null);
+    setSelectedTrustedVideoPresetId(null);
     setLyrics("");
     setNotice("");
     armedVideoRenderSignature.current = "";
@@ -1574,6 +1610,48 @@ export function GenerationView({
     seconds !== videoDurationSeconds && detachAssistedVideoScript()
   );
 
+  const applyTrustedThirtySecondPreset = () => {
+    const target = trustedVideoWorkflow;
+    const preset = TRUSTED_LTX_25_I2V_PORTRAIT_30S;
+    if (!target) {
+      setLocalError("The measured LTX 2.5 image-to-video graph is not ready on this machine.");
+      return;
+    }
+    const detachedAssistedScript = detachAssistedScriptForDuration(preset.settings.durationSeconds);
+    const overrides = trustedVideoPresetParameterOverrides(target.currentRevision.parameters, preset);
+    const preserveCurrentWorkflowState = workflow?.id === target.id;
+    const currentScalarValues = preserveCurrentWorkflowState
+      ? Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameterValue(parameter)]))
+      : {};
+    const scalarValues = Object.fromEntries(target.currentRevision.parameters
+      .filter((parameter) => parameter.kind !== "media")
+      .map((parameter) => [
+        parameter.id,
+        Object.prototype.hasOwnProperty.call(overrides, parameter.id)
+          ? overrides[parameter.id]
+          : Object.prototype.hasOwnProperty.call(currentScalarValues, parameter.id)
+            ? currentScalarValues[parameter.id]
+            : parameter.value,
+      ]));
+    clearVideoPromptEnhancement();
+    setWorkflowId(target.id);
+    setWorkflowRestoreBlocked("");
+    setValuesRevisionId(target.currentRevision.id);
+    setWorkflowValues(scalarValues);
+    setInputBindings(preserveCurrentWorkflowState ? inputBindings : {});
+    setVideoDurationSeconds(preset.settings.durationSeconds);
+    setCanvasAspectRatio(preset.settings.aspectRatio);
+    setCanvasMegapixels(preset.settings.megapixels);
+    setOutputCount(preset.settings.outputCount);
+    setEvolutionEnabled(false);
+    if (generationGoal === "scout") setGenerationGoal("explore");
+    setSelectedTrustedVideoPresetId(preset.id);
+    armedVideoRenderSignature.current = "";
+    setHeavyRenderConfirmationOpen(false);
+    setLocalError("");
+    setNotice(`Trusted 30s applied: one native portrait render at 0.20 MP, 24 fps, and 721 frames.${detachedAssistedScript ? " Your direction remains; write a new full script for 30 seconds if needed." : ""}`);
+  };
+
   const applyGenerationRecipe = (recipe: GenerationRecipe) => {
     if (recipe.worldId) {
       setLocalError(`${recipe.name} uses legacy World text without an exact versioned continuity selection. Build it again from the current World before generating.`);
@@ -1601,6 +1679,7 @@ export function GenerationView({
     setGenerationGoal(recipe.intentTier);
     setEvolutionEnabled(recipe.intentTier === "scout");
     setImagePerformanceMode(recipe.intentTier === "master" ? "explicit-custom" : "fast-default");
+    setSelectedTrustedVideoPresetId(null);
     if (promptParameter && recipe.parameters[promptParameter.id] !== undefined) setDirection(String(recipe.parameters[promptParameter.id]));
     if (lyricsParameter && recipe.parameters[lyricsParameter.id] !== undefined) setLyrics(String(recipe.parameters[lyricsParameter.id]));
     if (recipeDuration) setVideoDurationSeconds(recipeDuration as VideoDurationSeconds);
@@ -1749,6 +1828,7 @@ export function GenerationView({
   };
 
   const requireHeavyRenderConfirmation = () => {
+    if (trustedVideoPresetActive) return false;
     if (!heavyVideoRender || armedVideoRenderSignature.current === videoRenderSignature) return false;
     autoStartRequested.current = false;
     setHeavyRenderConfirmationOpen(true);
@@ -1772,6 +1852,10 @@ export function GenerationView({
     if (JSON.stringify(submittedPerformance.workload) !== JSON.stringify(currentWorkload)) {
       throw new Error("video_performance_revision_mismatch");
     }
+    if (selectedTrustedVideoPreset) {
+      const trustedAssessment = assessTrustedVideoPresetExecution(submittedWorkflow, estimatedOutputCount, selectedTrustedVideoPreset);
+      if (trustedAssessment.matches) return "explicit-heavy";
+    }
     const mode = videoPerformanceModeForArmedConsent({
       requiresExplicitHeavy: submittedPerformance.requiresExplicitHeavy,
       currentSignature: videoRenderSignature,
@@ -1779,6 +1863,12 @@ export function GenerationView({
     });
     if (!mode) throw new Error("video_heavy_mode_required");
     return mode;
+  };
+
+  const trustedVideoPresetIdForSubmission = (submittedWorkflow: WorkflowDefinition) => {
+    if (generationIntent !== "video" || !selectedTrustedVideoPreset) return undefined;
+    const assessment = assessTrustedVideoPresetExecution(submittedWorkflow, estimatedOutputCount, selectedTrustedVideoPreset);
+    return assessment.matches ? selectedTrustedVideoPreset.id : undefined;
   };
 
   const clearHeavyRenderConfirmation = () => {
@@ -1947,6 +2037,7 @@ export function GenerationView({
             videoOperation: effectiveVideoOperation ?? undefined,
             performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
             videoPerformanceMode: videoPerformanceModeForSubmission(branchWorkflow),
+            trustedVideoPresetId: trustedVideoPresetIdForSubmission(branchWorkflow),
             videoVariant: variant,
             videoSpeech: compiledSpeech?.speech,
             videoScript: videoScriptUse,
@@ -2018,6 +2109,7 @@ export function GenerationView({
             dnaArtifactId: dna.artifactId,
             videoOperation: effectiveVideoOperation ?? undefined,
             videoPerformanceMode: videoPerformanceModeForSubmission(outputWorkflow),
+            trustedVideoPresetId: trustedVideoPresetIdForSubmission(outputWorkflow),
             videoVariant: output.variant,
             videoSpeech: compiledSpeech.speech,
             videoScript: videoScriptUse,
@@ -2065,6 +2157,7 @@ export function GenerationView({
           dnaArtifactId: dna.artifactId,
           performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
           videoPerformanceMode: videoPerformanceModeForSubmission(outputWorkflow),
+          trustedVideoPresetId: trustedVideoPresetIdForSubmission(outputWorkflow),
           idempotencyKey: generationBatchIdempotencyKey(attemptOutputBatchId, `output_${index + 1}`),
           outputBatch: generationIntent === "image" ? {
             schemaVersion: "creative-studio-output-batch/1.0",
@@ -2277,17 +2370,24 @@ export function GenerationView({
     : generationIntent === "music" && workflow
       ? `${basePrimaryLabel} · model-tuned`
       : generationIntent === "video" && workflow
-        ? `${basePrimaryLabel} · ${videoDurationLabel(videoDurationSeconds)} each`
+        ? trustedVideoPresetActive
+          ? `${basePrimaryLabel} · trusted 30s`
+          : `${basePrimaryLabel} · ${videoDurationLabel(videoDurationSeconds)}${estimatedOutputCount > 1 ? " each" : ""}`
       : basePrimaryLabel;
   const sourcePickerLabel = videoOperation ? "Video to extend" : intent === "music" ? "Artwork inspiration" : intent === "train" ? "Training source" : "Use retained work";
   const uploadSourceLabel = intent === "train" ? "Upload training media" : videoOperation ? "Upload video" : intent === "music" ? "Upload artwork" : "Upload new";
-  const compactEstimate = runtimeEstimate && runtimeEvidence
+  const trustedPresetEvidence = TRUSTED_LTX_25_I2V_PORTRAIT_30S.evidence;
+  const trustedSimulationWinner = thirtySecondSimulations[0] ?? null;
+  const compactEstimate = trustedVideoPresetActive
+    ? `Median ${formatGenerationDuration(trustedPresetEvidence.medianMs)} · 1 local render`
+    : runtimeEstimate && runtimeEvidence
     ? `${durationRange(runtimeEstimate.perOutputLowMs, runtimeEstimate.perOutputHighMs)}${estimatedOutputCount > 1 ? ` each / ${durationRange(runtimeEstimate.totalLowMs, runtimeEstimate.totalHighMs)} total` : ""}`
     : "Estimate after first run";
   const compactSettings = [
     generationIntent === "video" ? videoDurationLabel(videoDurationSeconds) : null,
     displayedAspectRatio,
     displayedMegapixels ? `${displayedMegapixels.toFixed(displayedMegapixels < 1 ? 2 : 1)} MP` : null,
+    trustedVideoPresetActive ? "Runtime trusted" : null,
     generationIntent === "image" ? imagePerformanceMode === "fast-default" ? "Fast" : "Custom" : null,
   ].filter(Boolean) as string[];
   const videoResolutionSummary = workflowWorkload?.width && workflowWorkload.height
@@ -2296,7 +2396,9 @@ export function GenerationView({
   const videoFrameSummary = videoFrameCount !== null
     ? `${videoFrameCount.toLocaleString()}${exposedVideoFps ? ` @ ${exposedVideoFps} fps` : ""}`
     : exposedVideoFps ? `${exposedVideoFps} fps / frame total not exposed` : "Not exposed by model";
-  const heavyRenderTimeSummary = runtimeEstimate && runtimeEvidence
+  const heavyRenderTimeSummary = trustedVideoPresetActive
+    ? `Measured median ${formatGenerationDuration(trustedPresetEvidence.medianMs)} · observed ${durationRange(trustedPresetEvidence.fastestMs, trustedPresetEvidence.slowestMs)}`
+    : runtimeEstimate && runtimeEvidence
     ? `${durationRange(runtimeEstimate.perOutputLowMs, runtimeEstimate.perOutputHighMs)} each / ${durationRange(runtimeEstimate.totalLowMs, runtimeEstimate.totalHighMs)} total`
     : "No measured estimate yet; the first retained run will teach Creative Studio";
   const consentedAudioCount = projectMedia.filter((asset) => asset.kind === "audio" && asset.trainingEligible).length;
@@ -2410,10 +2512,34 @@ export function GenerationView({
           </section>
         </details> : null}
 
+        {generationIntent === "video" && trustedVideoWorkflow ? <section className={`quick-trusted-video${trustedVideoPresetActive ? " active" : ""}`} aria-label="Trusted 30 second video preset">
+          <header>
+            <span><Icon name="star" size={17} /><span><small>RTX 3090 · RUNTIME VERIFIED</small><strong>Fastest proven 30-second video</strong></span></span>
+            <em>{trustedPresetEvidence.completedRuns}/{trustedPresetEvidence.terminalRuns} portrait</em>
+          </header>
+          <div className="quick-trusted-video-facts" aria-label="Trusted video settings">
+            <span><small>CLIP</small><strong>30s</strong></span>
+            <span><small>SHAPE</small><strong>9:16</strong></span>
+            <span><small>DETAIL</small><strong>0.20 MP</strong></span>
+            <span><small>MOTION</small><strong>24 fps</strong></span>
+            <span><small>FRAMES</small><strong>721</strong></span>
+            <span><small>OUTPUTS</small><strong>1</strong></span>
+          </div>
+          <div className="quick-trusted-video-action">
+            <span><strong>Median {formatGenerationDuration(trustedPresetEvidence.medianMs)}</strong><small>Observed {durationRange(trustedPresetEvidence.fastestMs, trustedPresetEvidence.slowestMs)} · prompt and source stay yours</small></span>
+            <button type="button" className={`btn ${trustedVideoPresetActive ? "btn-ghost" : "btn-primary"}`} aria-pressed={trustedVideoPresetActive} disabled={busy || trustedVideoPresetActive} onClick={applyTrustedThirtySecondPreset}><Icon name={trustedVideoPresetActive ? "check" : "generate"} size={15} />{trustedVideoPresetActive ? "Trusted 30s selected" : "Use trusted 30s"}</button>
+          </div>
+          <details>
+            <summary><span>Why one native render wins</span><small>{trustedSimulationWinner ? `${formatGenerationDuration(trustedSimulationWinner.simulatedMedianMs)} simulated median` : "Measured local evidence"}</small><Icon name="chevronDown" size={13} /></summary>
+            <div className="quick-video-simulations">{thirtySecondSimulations.map((simulation, index) => <span key={simulation.id} className={index === 0 ? "winner" : ""}><b>{simulation.label}</b><strong>{formatGenerationDuration(simulation.simulatedMedianMs)}</strong><small>{simulation.evidence === "interpolated" ? "interpolated" : `${simulation.sampleCount} measured samples`}{simulation.excludesJoinOverhead ? " · before joining" : ""}</small></span>)}</div>
+            <p>Graph {TRUSTED_LTX_25_I2V_PORTRAIT_30S.graphFamily.sha256.slice(0, 8)} is pinned to 8 + 3 sampling steps, Euler ancestral, 2× latent upscale, and tiled VAE decode. The simulated median is about 34% faster than 2×15s and avoids seams and repeated setup. Runtime is verified; visual quality still needs your accept/reject review.</p>
+          </details>
+        </section> : null}
+
         {generationIntent === "video" ? <details className="quick-setting-panel quick-duration-panel">
-          <summary><span><Icon name="video" size={14} /><strong>Length</strong></span><em>{videoDurationLabel(videoDurationSeconds)}</em><small>{evolutionEnabled ? "3 branches" : "2 versions"}</small><Icon name="chevronDown" size={13} /></summary>
+          <summary><span><Icon name="video" size={14} /><strong>Length</strong></span><em>{videoDurationLabel(videoDurationSeconds)}</em><small>{estimatedOutputCount} {estimatedOutputCount === 1 ? "output" : "outputs"}</small><Icon name="chevronDown" size={13} /></summary>
           <div className="quick-video-duration" aria-label="Video length">
-          <header><span><Icon name="video" size={16} /><strong>Length</strong></span><small>{evolutionEnabled ? "Each of 3 branches" : "Each of 2 versions"}</small></header>
+          <header><span><Icon name="video" size={16} /><strong>Length</strong></span><small>{estimatedOutputCount === 1 ? "One retained output" : `Each of ${estimatedOutputCount} outputs`}</small></header>
           <div role="group" aria-label="Video duration">
             {VIDEO_DURATION_OPTIONS.map((seconds) => <button type="button" key={seconds} className={videoDurationSeconds === seconds ? "on" : ""} aria-pressed={videoDurationSeconds === seconds} disabled={busy} onClick={() => chooseVideoDuration(seconds)}>{videoDurationLabel(seconds)}</button>)}
           </div>

@@ -4,6 +4,7 @@ export * from "./domain";
 export * from "./evolution";
 export * from "./generationPerformance";
 export * from "./generationControls";
+export * from "./trustedVideoPresets";
 export * from "./generationRecipes";
 export * from "./modelTraining";
 export * from "./overnight";

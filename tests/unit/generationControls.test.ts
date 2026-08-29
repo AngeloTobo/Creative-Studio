@@ -43,9 +43,24 @@ describe("graphical generation controls", () => {
   });
 
   it("scales historical time by visible workload and shows the cost of multiple outputs", () => {
-    const estimate = estimateGenerationRuntime(4 * 60_000, { ...baseWorkload, megapixels: 0.5, durationSeconds: 10 }, { ...baseWorkload, megapixels: 0.25 }, 2)!;
+    const estimate = estimateGenerationRuntime(
+      4 * 60_000,
+      { ...baseWorkload, megapixels: 0.5, durationSeconds: 10, frames: 240 },
+      { ...baseWorkload, megapixels: 0.25, frames: 120 },
+      2,
+    )!;
     expect(estimate.workloadScale).toBe(4);
     expect(estimate.perOutputLowMs).toBe(12 * 60_000);
     expect(estimate.totalHighMs).toBe(48 * 60_000);
+  });
+
+  it("uses frames as the temporal ratio without multiplying duration a second time", () => {
+    const estimate = estimateGenerationRuntime(
+      2 * 60_000,
+      { ...baseWorkload, durationSeconds: 10, frames: 241 },
+      { ...baseWorkload, durationSeconds: 5, frames: 121 },
+    )!;
+    expect(estimate.workloadScale).toBeCloseTo(241 / 121, 8);
+    expect(estimate.workloadScale).toBeLessThan(2.1);
   });
 });

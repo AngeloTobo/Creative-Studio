@@ -318,6 +318,7 @@ export type SubmitJobRequest = {
   };
   performanceMode?: ImagePerformanceMode;
   videoPerformanceMode?: VideoPerformanceMode;
+  trustedVideoPresetId?: import("./trustedVideoPresets").TrustedVideoPresetId;
   videoDurationSeconds?: VideoDurationSeconds;
   videoVariant?: VideoGenerationVariant;
   videoSpeech?: VideoSpeechStamp;

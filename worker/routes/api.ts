@@ -1,5 +1,7 @@
 import {
   assessImagePerformance,
+  assessTrustedVideoPresetGraph,
+  assessTrustedVideoPresetExecution,
   assessVideoPerformance,
   canonicalGenerationPerformanceParameters,
   compileCreativeTasteMemory,
@@ -10,6 +12,8 @@ import {
   musicWorkflowPromptProfile,
   normalizeVideoGenerationVariant,
   normalizeVideoSpeechStamp,
+  trustedVideoPresetById,
+  trustedVideoPresetStamp,
   type AcceptanceDecision,
   type ArtifactHistoryQuery,
   type Capability,
@@ -243,7 +247,8 @@ function statusFor(error: string) {
     || error === "generation_recipe_archived") return 409;
   if (error === "runner_job_not_completable" || error === "image_custom_mode_required"
     || error === "video_heavy_mode_required" || error === "video_heavy_mode_not_required"
-    || error === "video_performance_revision_mismatch") return 409;
+    || error === "video_performance_revision_mismatch" || error === "trusted_video_preset_mode_required"
+    || error === "trusted_video_preset_mismatch") return 409;
   if (error === "prompt_enhancement_not_completable" || error === "prompt_enhancement_not_ready"
     || error === "prompt_enhancement_idempotency_conflict" || error === "prompt_enhancement_context_mismatch"
     || error === "prompt_enhancement_applied_prompt_mismatch") return 409;
@@ -305,11 +310,27 @@ function workflowJobModality(value: string): GenerationModality {
   throw new Error("workflow_modality_not_supported");
 }
 
-function videoPerformanceForWorkflow(
+async function videoPerformanceForWorkflow(
   workflow: Awaited<ReturnType<typeof workflowExecutionPlan>>["workflow"],
+  graph: Awaited<ReturnType<typeof workflowExecutionPlan>>["graph"],
   requestedDuration: VideoDurationSeconds | undefined,
   requestedMode: VideoPerformanceMode | undefined,
-): { stamp: VideoPerformanceStamp; effectiveDuration: VideoDurationSeconds | undefined } {
+  requestedTrustedPresetId: unknown = undefined,
+  outputCount = 1,
+): Promise<{ stamp: VideoPerformanceStamp; effectiveDuration: VideoDurationSeconds | undefined }> {
+  const trustedPreset = requestedTrustedPresetId === undefined ? null : trustedVideoPresetById(requestedTrustedPresetId);
+  if (requestedTrustedPresetId !== undefined && !trustedPreset) throw new Error("invalid_trusted_video_preset");
+  if (trustedPreset && workflow.modality !== "video") throw new Error("invalid_trusted_video_preset");
+  if (trustedPreset && requestedMode !== "explicit-heavy") throw new Error("trusted_video_preset_mode_required");
+  if (trustedPreset && requestedDuration !== undefined && requestedDuration !== trustedPreset.settings.durationSeconds) {
+    throw new Error("trusted_video_preset_mismatch");
+  }
+  if (trustedPreset) {
+    const trustedAssessment = assessTrustedVideoPresetExecution(workflow, outputCount, trustedPreset);
+    if (!trustedAssessment.supported || !trustedAssessment.matches) throw new Error("trusted_video_preset_mismatch");
+    const graphAssessment = await assessTrustedVideoPresetGraph(graph, trustedPreset);
+    if (!graphAssessment.supported || !graphAssessment.matches) throw new Error("trusted_video_preset_mismatch");
+  }
   const revisionDurationValues = videoWorkflowDurationParameters(workflow.currentRevision.parameters)
     .map((parameter) => Number(parameter.value));
   if (!revisionDurationValues.length || revisionDurationValues.some((value) => normalizeVideoDurationSeconds(value) === null)) {
@@ -338,8 +359,11 @@ function videoPerformanceForWorkflow(
       schemaVersion: "creative-studio-video-performance/1.0",
       mode,
       workflowRevisionId: workflow.currentRevision.id,
+      trustedPreset: trustedPreset ? trustedVideoPresetStamp(trustedPreset) : undefined,
       workload: {
         ...assessment.workload,
+        frames: trustedPreset?.settings.frames ?? assessment.workload.frames,
+        fps: trustedPreset?.settings.fps ?? assessment.workload.fps,
         requiresExplicitHeavy: assessment.requiresExplicitHeavy,
         reasons: [...assessment.reasons],
       },
@@ -358,8 +382,11 @@ async function revalidatedVideoPerformance(env: Env, ownerId: string, job: Job) 
   }
   return videoPerformanceForWorkflow(
     plan.workflow,
+    plan.graph,
     job.settingsStamp.videoDurationSeconds,
     stamped?.mode,
+    stamped?.trustedPreset?.id,
+    job.settingsStamp.outputBatch?.count ?? 1,
   );
 }
 
@@ -1026,6 +1053,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         && input.videoPerformanceMode !== "fast-default"
         && input.videoPerformanceMode !== "explicit-heavy") throw new Error("invalid_video_performance_mode");
       if (input.videoPerformanceMode !== undefined && modality !== "video") throw new Error("invalid_video_performance_mode");
+      if (input.trustedVideoPresetId !== undefined
+        && (modality !== "video" || !trustedVideoPresetById(input.trustedVideoPresetId))) {
+        throw new Error("invalid_trusted_video_preset");
+      }
       if (input.provider !== undefined && input.provider !== "afdfw" && input.provider !== "development-preview") {
         throw new Error("invalid_generation_provider");
       }
@@ -1089,7 +1120,14 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           throw new Error("image_custom_mode_required");
         }
         const videoPerformance = modality === "video"
-          ? videoPerformanceForWorkflow(plan.workflow, videoDurationSeconds, input.videoPerformanceMode)
+          ? await videoPerformanceForWorkflow(
+            plan.workflow,
+            plan.graph,
+            videoDurationSeconds,
+            input.videoPerformanceMode,
+            input.trustedVideoPresetId,
+            outputBatch?.count ?? 1,
+          )
           : undefined;
         const promptParameters = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
         const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);

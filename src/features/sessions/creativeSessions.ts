@@ -3,7 +3,10 @@ export const CREATIVE_SESSION_SCHEMA_VERSION = 2 as const;
 
 const MAX_STORED_SESSIONS = 32;
 const MAX_SOURCE_ASSETS = 32;
-const MAX_SETTING_ENTRIES = 64;
+// A 50-node Comfy graph can expose substantially more than 64 scalar and media
+// bindings once session metadata is included. Keep the byte ceiling as the
+// ultimate storage bound, while retaining enough entries for a complete graph.
+const MAX_SETTING_ENTRIES = 256;
 const MAX_STORAGE_BYTES = 512_000;
 const MAX_SETTING_STRING_CHARACTERS = 2_000;
 const MAX_VIDEO_PROMPT_SETTING_CHARACTERS = 4_000;

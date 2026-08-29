@@ -226,7 +226,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(videoDuration.getByRole("button", { name: "15s", exact: true })).toBeVisible();
   await expect(videoDuration.getByRole("button", { name: "30s", exact: true })).toBeVisible();
   await expect(videoDuration.getByRole("button", { name: "1m", exact: true })).toBeVisible();
-  await expect(page.getByLabel("Video length")).toContainText("Each of 2 versions");
+  await expect(page.getByLabel("Video length")).toContainText("Each of 2 outputs");
   await expect(page.getByLabel("Video length")).toContainText("Aligned follows your direction; Discovery uses 70% random DNA.");
   const videoDirection = page.getByRole("textbox", { name: "Describe the video" });
   await expect(page.getByRole("spinbutton", { name: "Float (duration)" })).toHaveCount(0);

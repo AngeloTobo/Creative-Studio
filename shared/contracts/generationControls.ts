@@ -141,11 +141,15 @@ export function estimateGenerationRuntime(
   outputCount = 1,
 ): GenerationRuntimeEstimate | null {
   if (!historicalMedianMs || !current || !baseline || outputCount < 1) return null;
+  // Frames already encode duration at the selected frame rate. Multiplying both
+  // ratios made a 2x longer video look 4x more expensive before resolution,
+  // steps, or batch size were considered.
+  const temporalRatio = safeRatio(current.frames, baseline.frames)
+    ?? safeRatio(current.durationSeconds, baseline.durationSeconds);
   const ratios = [
     safeRatio(current.megapixels, baseline.megapixels),
     safeRatio(current.steps, baseline.steps),
-    safeRatio(current.durationSeconds, baseline.durationSeconds),
-    safeRatio(current.frames, baseline.frames),
+    temporalRatio,
     safeRatio(current.batchSize, baseline.batchSize),
   ].filter((ratio): ratio is number => ratio !== null);
   const workloadScale = Math.min(20, Math.max(0.15, ratios.reduce((scale, ratio) => scale * ratio, 1)));

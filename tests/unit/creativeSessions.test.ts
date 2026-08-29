@@ -123,6 +123,39 @@ describe("Creative Sessions browser persistence", () => {
     expect(loadCreativeSession("session_long_lyrics", { storage })?.graphicalSettings).toEqual(saved?.graphicalSettings);
   });
 
+  it("retains a complete large Comfy workflow settings stamp", () => {
+    const storage = memoryStorage();
+    const workflowSettings = Object.fromEntries(Array.from({ length: 180 }, (_, index) => [
+      index % 7 === 0 ? `binding:${index}::image` : `value:${index}::setting`,
+      index % 7 === 0 ? `media_${index}` : index,
+    ]));
+    const saved = saveCreativeSession({
+      ...base,
+      graphicalSettings: {
+        ...workflowSettings,
+        trustedVideoPresetId: "ltx-2.5-i2v-portrait-30s-rtx3090-v1",
+        "binding:395::image": "media_trusted_source",
+        "value:398:339::noise_seed": 913_527,
+        "value:398:338::noise_seed": 913_528,
+      },
+    }, {
+      storage,
+      now: () => "2026-08-26T12:00:00.000Z",
+      createId: () => "session_large_comfy_graph",
+    });
+
+    expect(Object.keys(saved?.graphicalSettings ?? {})).toHaveLength(184);
+    expect(saved?.graphicalSettings["binding:175::image"]).toBe("media_175");
+    expect(saved?.graphicalSettings["value:179::setting"]).toBe(179);
+    expect(saved?.graphicalSettings).toMatchObject({
+      trustedVideoPresetId: "ltx-2.5-i2v-portrait-30s-rtx3090-v1",
+      "binding:395::image": "media_trusted_source",
+      "value:398:339::noise_seed": 913_527,
+      "value:398:338::noise_seed": 913_528,
+    });
+    expect(loadCreativeSession("session_large_comfy_graph", { storage })?.graphicalSettings).toEqual(saved?.graphicalSettings);
+  });
+
   it("ignores corrupt records and heals corrupt storage on the next save", () => {
     const storage = memoryStorage("{definitely-not-json");
     expect(listCreativeSessions(undefined, { storage })).toEqual([]);
