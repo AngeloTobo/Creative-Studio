@@ -247,7 +247,7 @@ npm run check:all
 
 `npm run check` runs ESLint, browser-domain Vitest, Workers-runtime tests against isolated D1 migrations, the Local Runner self-test, environment validation, the Cloudflare free-tier guard, TypeScript, the production build, and the source secret scan. `check:all` adds the serial desktop/mobile Playwright matrix.
 
-The production-proven Full Video Script v2 release passes 143 browser-domain tests, 37 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 38 Playwright checks with 32 exercised passes plus six intentional device-specific skips. Migration `0019_full_video_scripts.sql` is applied remotely, Worker version `cf283ab4-510a-4df0-8584-ead9272baf21` is deployed at 100%, and the workstation runner reports `1.12.0` idle with no error; exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
+The production-proven Overnight Studio release passes 157 browser-domain tests, 49 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 50 Playwright checks with 44 exercised passes plus six intentional device-specific skips. Migration `0020_overnight_studio.sql` is applied remotely, Worker version `c4558c34-c816-432e-a8fe-92b86a726fb0` is deployed at 100%, and the workstation runner reports `1.13.0` idle with no error and a daily wake/recovery trigger; exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
 
 Production configuration can be checked without deploying:
 

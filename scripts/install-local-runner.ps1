@@ -28,13 +28,9 @@ $configJson = @{
 } | ConvertTo-Json
 [IO.File]::WriteAllText($configPath, $configJson, (New-Object Text.UTF8Encoding($false)))
 
-$acl = New-Object System.Security.AccessControl.FileSecurity
-$acl.SetAccessRuleProtection($true, $false)
-$userRule = New-Object System.Security.AccessControl.FileSystemAccessRule($env:USERNAME, "FullControl", "Allow")
-$systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")
-$acl.AddAccessRule($userRule)
-$acl.AddAccessRule($systemRule)
-Set-Acl -LiteralPath $configPath -AclObject $acl
+$currentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+& icacls.exe $configPath "/inheritance:r" "/grant:r" "*${currentUserSid}:(F)" "*S-1-5-18:(F)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Could not secure the Creative Studio runner config." }
 
 $startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -ConfigPath `"$configPath`""
