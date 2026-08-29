@@ -61,6 +61,7 @@ const emptySnapshot: StudioSnapshot = {
   continuityRules: [],
   canonReferences: [],
   canonPromotions: [],
+  overnightSessions: [],
   refreshedAt: now,
 };
 

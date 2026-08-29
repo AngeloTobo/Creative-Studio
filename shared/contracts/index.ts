@@ -6,6 +6,7 @@ export * from "./generationPerformance";
 export * from "./generationControls";
 export * from "./generationRecipes";
 export * from "./modelTraining";
+export * from "./overnight";
 export * from "./productionLoop";
 export * from "./productionCockpit";
 export * from "./promptEnhancements";

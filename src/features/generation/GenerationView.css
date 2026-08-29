@@ -996,6 +996,29 @@
   padding-top: 2px;
 }
 
+.quick-generate-error {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0,1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(220,38,38,.28);
+  border-radius: 10px;
+  background: rgba(254,226,226,.82);
+  color: #b91c1c;
+}
+
+.quick-generate-error > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-generate-dock .quick-generate-error strong { font-size: 13px; }
+.quick-generate-dock .quick-generate-error small { color: #991b1b; font-size: 12px; line-height: 1.4; }
+
 .quick-generate-dock > span {
   display: grid;
   min-width: 0;

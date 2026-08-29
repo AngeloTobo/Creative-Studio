@@ -137,20 +137,25 @@ function newest<T extends { createdAt: string }>(values: T[]) {
 }
 
 export function deriveProductionCockpit(input: ProductionCockpitInput): ProductionCockpit {
+  // Overnight child jobs/artifacts are presented as one durable session in Work and Home.
+  // Keeping them out of the ordinary cockpit prevents a night of outputs from flooding
+  // notifications and run rows while preserving every file in artifact history.
+  const standaloneJobs = input.jobs.filter((job) => !job.settingsStamp.overnight);
+  const standaloneArtifacts = input.artifacts.filter((artifact) => !artifact.settingsStamp.overnight);
   const projects = new Map(input.projects.map((project) => [project.id, project]));
   const dna = new Map(input.dnaArtifacts.map((artifact) => [artifact.artifactId, artifact]));
   const artifactsByJob = new Map(input.artifacts.map((artifact) => [artifact.jobId, artifact]));
   const acceptances = newest(input.acceptances);
   const reviews = newest(input.trainingReviews);
-  const retriedJobIds = new Set(input.jobs.flatMap((job) => job.retryOfJobId ? [job.retryOfJobId] : []));
+  const retriedJobIds = new Set(standaloneJobs.flatMap((job) => job.retryOfJobId ? [job.retryOfJobId] : []));
   const runners = new Map(input.runners.map((runner) => [runner.id, runner]));
-  const activeGeneration = newest(input.jobs.filter((job) => job.status === "queued" || job.status === "running"));
+  const activeGeneration = newest(standaloneJobs.filter((job) => job.status === "queued" || job.status === "running"));
   const activeTraining = newest(input.trainingJobs.filter((job) => job.status === "waiting-for-runner" || job.status === "running"));
   const queue = [...activeGeneration.map((job) => ({ id: job.id, createdAt: job.createdAt })), ...activeTraining.map((job) => ({ id: job.id, createdAt: job.createdAt }))]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const queuePosition = new Map(queue.map((item, index) => [item.id, index + 1]));
 
-  const generationRuns: ProductionCockpitRun[] = input.jobs.map((job) => {
+  const generationRuns: ProductionCockpitRun[] = standaloneJobs.map((job) => {
     const artifact = artifactsByJob.get(job.id) ?? null;
     const decision = artifact ? acceptances.find((item) => item.artifactId === artifact.id)?.decision ?? "unreviewed" : "not-applicable";
     const blueprint = dna.get(job.dnaArtifactId) ?? null;
@@ -253,7 +258,7 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       actionLabel: "Inspect and restart", surface: "dna", createdAt: job.completedAt ?? job.updatedAt,
     });
   }
-  for (const artifact of input.artifacts.filter((item) => item.status === "ready")) {
+  for (const artifact of standaloneArtifacts.filter((item) => item.status === "ready")) {
     const project = projects.get(artifact.projectId);
     actions.push({
       id: `review-artifact:${artifact.id}`, kind: "review-artifact", severity: "critical", projectId: artifact.projectId,
@@ -262,7 +267,7 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       actionLabel: "Review output", surface: "gallery", createdAt: artifact.updatedAt,
     });
   }
-  for (const job of input.jobs.filter((item) => (item.status === "failed" || item.status === "cancelled") && !retriedJobIds.has(item.id))) {
+  for (const job of standaloneJobs.filter((item) => (item.status === "failed" || item.status === "cancelled") && !retriedJobIds.has(item.id))) {
     const project = projects.get(job.projectId);
     const cancelled = job.status === "cancelled";
     actions.push({
@@ -304,22 +309,22 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
   for (const acceptance of acceptances) {
     if (!latestAcceptanceByArtifact.has(acceptance.artifactId)) latestAcceptanceByArtifact.set(acceptance.artifactId, acceptance.decision);
   }
-  const allRuns = [...input.jobs, ...input.trainingJobs];
+  const allRuns = [...standaloneJobs, ...input.trainingJobs];
   return {
     summary: {
       actionRequired: actions.length,
       activeRuns: activeGeneration.length + activeTraining.length,
-      queuedRuns: input.jobs.filter((job) => job.status === "queued").length + input.trainingJobs.filter((job) => job.status === "waiting-for-runner").length,
-      runningRuns: input.jobs.filter((job) => job.status === "running").length + input.trainingJobs.filter((job) => job.status === "running").length,
+      queuedRuns: standaloneJobs.filter((job) => job.status === "queued").length + input.trainingJobs.filter((job) => job.status === "waiting-for-runner").length,
+      runningRuns: standaloneJobs.filter((job) => job.status === "running").length + input.trainingJobs.filter((job) => job.status === "running").length,
       completedRuns: allRuns.filter((job) => job.status === "completed").length,
-      generationRuns: input.jobs.length,
+      generationRuns: standaloneJobs.length,
       trainingRuns: input.trainingJobs.length,
-      outputsAwaitingReview: input.artifacts.filter((artifact) => artifact.status === "ready").length,
+      outputsAwaitingReview: standaloneArtifacts.filter((artifact) => artifact.status === "ready").length,
       trainingAwaitingReview: input.trainingJobs.filter((job) => job.status === "completed" && job.resultDnaArtifactId && !reviews.some((review) => review.trainingJobId === job.id)).length,
       retainedOutputs: retainedArtifacts.length,
       acceptedOutputs: input.artifacts.filter((artifact) => latestAcceptanceByArtifact.get(artifact.id) === "accepted").length,
       rejectedOutputs: input.artifacts.filter((artifact) => latestAcceptanceByArtifact.get(artifact.id) === "rejected").length,
-      failedRuns: input.jobs.filter((job) => job.status === "failed").length + input.trainingJobs.filter((job) => job.status === "failed").length,
+      failedRuns: standaloneJobs.filter((job) => job.status === "failed").length + input.trainingJobs.filter((job) => job.status === "failed").length,
       offlineRunners: input.runners.filter((runner) => runner.state === "offline").length,
       storedBytes: input.mediaAssets.reduce((total, asset) => total + asset.size, 0) + retainedArtifacts.reduce((total, artifact) => total + (artifact.retention.size ?? 0), 0),
       retainedFiles: input.mediaAssets.length + retainedArtifacts.length,

@@ -12,7 +12,7 @@ Creative Studio owns its interface, projects, typed contracts, jobs, media, arti
 
 | Surface | Purpose | Direct actions |
 | --- | --- | --- |
-| **Home** | Start from the newest or selected image, audio file, or video and see its real CreativeDNA profile. | Upload, analyze, create an image, animate, make a song, or train. |
+| **Home** | Start from the newest or selected image, audio file, or video and see its real CreativeDNA profile. | Upload, analyze, create an image, animate, make a song, train, or arm Overnight Studio. |
 | **Create** | Run the complete media workflow without moving between pages. | Choose Image, Video, Song, or Train; select a model and source; edit the direction and graphical settings; submit. |
 | **Work** | Follow the durable production lifecycle for the active project. | Resolve owner actions, inspect running jobs, cancel or retry, review retained results, extend, animate, reuse, or evolve. |
 | **Studio** | Manage the workspace behind creation. | Create and switch projects, browse media and CreativeDNA memory, import models, and inspect or pair local systems. |
@@ -72,6 +72,10 @@ The proof, balanced, and deep recipes remain visible, and the checkpoint hash, s
 
 ### Keep a durable production record
 
+**Overnight Studio** turns an approved CreativeDNA, an optional Creative World, and the owner's prompt-only ComfyUI workflows into a bounded night of new work. A default run asks local Gemma for one coherent story, three fast scene images, and one soundtrack; video is explicitly opt-in. The durable session pins its story seed, workflow revisions, recipes, model prompt profiles, DNA/World context, cutoff, failure ceiling, storage ceiling, and deterministic task seeds. The authenticated Local Runner plans only after ComfyUI reports healthy, gives normal owner-created jobs priority, and materializes only one overnight render at a time. No browser, Cloudflare Queue message, new cron, or AFDFW call is needed.
+
+Home and Work present the run as one compact group. Every successful output is retained, and the morning sheet reviews image, video, or audio one at a time with required notes for Keep or Pass and a non-destructive Skip. Overnight output never becomes accepted training evidence or World canon without Angelo's later explicit review.
+
 - Generation and training continue without an open browser.
 - Every completed result is retained and size-verified before a job becomes complete; accept, reject, and archive do not control retention.
 - Work is ordered newest to oldest. Archived artifacts stay collapsed, video cards use lazy first-frame JPEGs, and only an explicitly opened video mounts a player.
@@ -108,7 +112,7 @@ npm ci
 npm run local
 ```
 
-Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.12.0, and starts Vite.
+Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.13.0, and starts Vite.
 
 Then:
 
@@ -153,7 +157,7 @@ The browser still calls only `/api/creative-studio/*`; Vite proxies those reques
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-runner.ps1
 ```
 
-The installer prompts for that bearer credential, stores the configuration at `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers an at-logon task, and starts the runner. Creative Studio stores only its hash, while the installed runner continues using the credential until the machine is revoked from the same Runners panel. ComfyUI remains localhost-only.
+The installer prompts for that bearer credential, stores the configuration at `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers sign-in plus daily 21:45 wake/recovery triggers, and starts the runner. Creative Studio stores only its hash, while the installed runner continues using the credential until the machine is revoked from the same Runners panel. ComfyUI remains localhost-only and must be available before any work is claimed. Override the recovery time with `-OvernightRecoveryTime "22:30"` if needed.
 
 Install the optional pinned ACE-Step 1.5 runtime and Base checkpoints once:
 

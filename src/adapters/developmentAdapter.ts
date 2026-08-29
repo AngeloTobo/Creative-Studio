@@ -205,6 +205,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     continuityRules: [...state.continuityRules].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     canonReferences: [...state.canonReferences].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     canonPromotions: [...state.canonPromotions].sort((a, b) => b.promotedAt.localeCompare(a.promotedAt)),
+    overnightSessions: [],
     tasteMemory: compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts: state.dnaArtifacts }),
     evolutionStudies: deriveEvolutionStudies(state.jobs, artifacts),
     refreshedAt: now,
@@ -843,6 +844,18 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async revokeLocalRunner() {
       throw new Error("runner_enrollment_requires_creative_studio_worker");
+    },
+    async createOvernightSession() {
+      throw new Error("overnight_studio_requires_creative_studio_worker");
+    },
+    async pauseOvernightSession() {
+      throw new Error("overnight_studio_requires_creative_studio_worker");
+    },
+    async resumeOvernightSession() {
+      throw new Error("overnight_studio_requires_creative_studio_worker");
+    },
+    async cancelOvernightSession() {
+      throw new Error("overnight_studio_requires_creative_studio_worker");
     },
   };
 }

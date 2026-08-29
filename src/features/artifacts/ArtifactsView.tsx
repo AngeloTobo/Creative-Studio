@@ -411,6 +411,7 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
             {artifact.settingsStamp.outputBatch ? <span>Output <b>{artifact.settingsStamp.outputBatch.index} of {artifact.settingsStamp.outputBatch.count}</b> · batch <code>{artifact.settingsStamp.outputBatch.batchId}</code></span> : null}
             {artifact.settingsStamp.videoVariant ? <span>Direction <b>{videoRole}</b> · {artifact.settingsStamp.videoVariant.personalStyleWeight}% personal / {artifact.settingsStamp.videoVariant.randomDnaWeight}% random DNA</span> : null}
             {videoSpeech ? <span>Speech <b>{videoSpeechSummary(videoSpeech)}</b></span> : null}
+            {artifact.settingsStamp.promptReference ? <span>Prompt inspiration <b>{artifact.settingsStamp.promptReference.name}</b> · {artifact.settingsStamp.promptReference.source} {artifact.settingsStamp.promptReference.kind}</span> : null}
             {promptEnhancement ? <>
               <span>{videoPromptEnhancement ? "Video prompt" : "Song prompt"} <b>{promptEnhancement.targetModel ?? artifact.settingsStamp.workflow?.name ?? "selected model"}</b> · Gemma 4 · {promptEnhancement.sourceWordCount} → {promptEnhancement.enhancedWordCount} words{videoPromptEnhancement?.editedAfterEnhancement ? " · edited after enhancement" : ""}</span>
               <details className="lineage-prompt" open><summary>{videoPromptEnhancement ? "Exact motion prompt sent to the video model" : "Exact caption sent to the music model"}</summary><pre>{exactEnhancedPrompt}</pre></details>

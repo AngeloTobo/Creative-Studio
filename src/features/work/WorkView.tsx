@@ -4,6 +4,7 @@ import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { ArtifactsView, type ArtifactsViewProps } from "../artifacts/ArtifactsView";
 import { CockpitView } from "../cockpit/CockpitView";
+import { OvernightRunGroup, newestOvernightSessions } from "../overnight";
 import "./work.css";
 
 export type WorkSegment = "needs-action" | "running" | "results";
@@ -13,6 +14,7 @@ export type WorkViewProps = Pick<ArtifactsViewProps, "onQueued" | "onContinueLoo
   focusRunId?: string;
   focusArtifactId?: string;
   initialSegment?: WorkSegment;
+  onReviewOvernight: (sessionId: string) => void;
 };
 
 function isRunning(run: ProductionCockpitRun) {
@@ -36,6 +38,7 @@ export function WorkView({
   focusRunId,
   focusArtifactId,
   initialSegment,
+  onReviewOvernight,
 }: WorkViewProps) {
   const { snapshot, activeProjectId, refresh, busy } = useStudio();
   const project = snapshot?.projects.find((item) => item.id === activeProjectId);
@@ -53,6 +56,14 @@ export function WorkView({
     () => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.status !== "archived").length ?? 0,
     [activeProjectId, snapshot?.artifacts],
   );
+  const overnightSessions = useMemo(
+    () => newestOvernightSessions(snapshot?.overnightSessions ?? [], activeProjectId),
+    [activeProjectId, snapshot?.overnightSessions],
+  );
+  const activeOvernightSessions = overnightSessions.filter((session) => ["armed", "planning", "running", "paused", "needs-attention"].includes(session.status));
+  const resultOvernightSessions = overnightSessions.filter((session) => session.tasks.length > 0 && !activeOvernightSessions.includes(session));
+  const recentOvernightResults = resultOvernightSessions.slice(0, 3);
+  const olderOvernightResults = resultOvernightSessions.slice(3);
   const runningCount = projectRuns.filter(isRunning).length;
   const completedCount = projectRuns.filter((run) => run.status === "completed").length;
   const failedCount = projectRuns.filter((run) => run.status === "failed" || run.status === "cancelled").length;
@@ -60,6 +71,7 @@ export function WorkView({
   const [segment, setSegment] = useState<WorkSegment>(() => {
     const requested = initialWorkSegment({ initialSegment, focusRunId, focusArtifactId });
     if (initialSegment || focusRunId || focusArtifactId) return requested;
+    if (activeOvernightSessions.length) return "running";
     if (projectActions.length) return "needs-action";
     return runningCount ? "running" : "results";
   });
@@ -131,8 +143,16 @@ export function WorkView({
 
       <div className="work-panel">
         {segment === "needs-action" ? <CockpitView embedded mode="needs-action" projectId={activeProjectId} focusRunId={focusRunId} onOpen={openAction} /> : null}
-        {segment === "running" ? <CockpitView embedded mode="running" projectId={activeProjectId} focusRunId={focusRunId} onOpen={openAction} onRunStatusChange={() => setSegment("needs-action")} /> : null}
+        {segment === "running" ? <>
+          {activeOvernightSessions.length ? <section className="work-overnight-groups" aria-label="Overnight runs">{activeOvernightSessions.map((session) => <OvernightRunGroup key={session.id} session={session} onReview={onReviewOvernight} />)}</section> : null}
+          <CockpitView embedded mode="running" projectId={activeProjectId} focusRunId={focusRunId} onOpen={openAction} onRunStatusChange={() => setSegment("needs-action")} />
+        </> : null}
         {segment === "results" ? <>
+          {recentOvernightResults.length ? <section className="work-overnight-groups" aria-label="Recent overnight results">{recentOvernightResults.map((session) => <OvernightRunGroup key={session.id} session={session} onReview={onReviewOvernight} />)}</section> : null}
+          {olderOvernightResults.length ? <details className="work-history work-overnight-history glass">
+            <summary><span><Icon name="moon" size={15} /><strong>Earlier overnight runs</strong></span><small>{olderOvernightResults.length} hidden</small><Icon name="chevronDown" size={14} /></summary>
+            <section className="work-overnight-groups" aria-label="Earlier overnight results">{olderOvernightResults.map((session) => <OvernightRunGroup key={session.id} session={session} onReview={onReviewOvernight} />)}</section>
+          </details> : null}
           <details className="work-history glass">
             <summary><span><Icon name="history" size={15} /><strong>Run history &amp; performance</strong></span><small>{projectRuns.length} durable {projectRuns.length === 1 ? "run" : "runs"}</small><Icon name="chevronDown" size={14} /></summary>
             <div className="work-history-stats"><span><small>All runs</small><strong>{projectRuns.length}</strong></span><span><small>Completed</small><strong>{completedCount}</strong></span><span><small>Failed / cancelled</small><strong>{failedCount}</strong></span><span><small>Retained</small><strong>{retainedBytes >= 1024 * 1024 ? `${(retainedBytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(retainedBytes / 1024)} KB`}</strong></span></div>

@@ -160,3 +160,6 @@
 @media (prefers-reduced-motion: reduce) {
   .work-segments { scroll-behavior: auto; }
 }
+.work-overnight-groups { display: grid; gap: 9px; margin-bottom: 10px; }
+.work-overnight-history { margin-bottom: 10px; }
+.work-overnight-history > .work-overnight-groups { margin: 0; padding: 10px; }

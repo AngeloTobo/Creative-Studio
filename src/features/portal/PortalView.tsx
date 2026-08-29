@@ -14,6 +14,7 @@ import { ArtifactThumb, StatusDot } from "../../components/Visuals";
 import type { VideoCreateEntryMode } from "../generation/createEntry";
 import type { CreateIntent } from "../generation/quickCreate";
 import { useCreativeSessions } from "../sessions";
+import { OvernightHomeTile } from "../overnight";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   energy: "Energy",
@@ -104,10 +105,14 @@ export function PortalView({
   navigate,
   onCreate,
   onTrain,
+  onOvernight,
+  onOvernightReview,
 }: {
   navigate: (view: StudioView) => void;
   onCreate: (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart?: boolean, videoEntryMode?: VideoCreateEntryMode) => void;
   onTrain: (sourceId: string) => void;
+  onOvernight: () => void;
+  onOvernightReview: (sessionId: string) => void;
 }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, busy, error } = useStudio();
   const { latest: latestSession } = useCreativeSessions(activeProjectId);
@@ -119,8 +124,8 @@ export function PortalView({
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)), [activeProjectId, snapshot?.mediaAssets]);
   const selectedSource = sourceAssets.find((asset) => asset.id === selectedSourceId) ?? sourceAssets[0] ?? null;
   const analysisMatch = selectedSource && snapshot ? sourceAnalysis(snapshot.dnaArtifacts, selectedSource.id) : null;
-  const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && (job.status === "queued" || job.status === "running")) ?? [];
-  const recentArtifacts = (snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [])
+  const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && !job.settingsStamp.overnight && (job.status === "queued" || job.status === "running")) ?? [];
+  const recentArtifacts = (snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && !artifact.settingsStamp.overnight) ?? [])
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
     .slice(0, 4);
 
@@ -209,9 +214,12 @@ export function PortalView({
             const label = fourWayVideo ? "Animate 4 ways" : action.label;
             return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, fourWayVideo, fourWayVideo ? "four-way" : "standard")}><span><Icon name={action.icon} size={20} /></span><strong>{label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
           })}
-          <button className="home-action train" disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><span><Icon name="dna" size={20} /></span><strong>Train DNA</strong><small>{selectedSource ? analysisMatch ? "Build another version" : "Analyze this work" : "Select an upload first"}</small><Icon name="arrow" size={15} /></button>
         </div>
-        <button className="home-all-tools" onClick={() => navigate("dna")}>Open Create <Icon name="chevron" size={14} /></button>
+        <OvernightHomeTile onOpen={onOvernight} onManage={() => navigate("work")} onReview={onOvernightReview} />
+        <div className="home-action-footer">
+          <button disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><Icon name="dna" size={14} /> {selectedSource ? analysisMatch ? "Train DNA again" : "Analyze this work" : "Train DNA"}</button>
+          <button onClick={() => navigate("dna")}>Open Create <Icon name="chevron" size={14} /></button>
+        </div>
       </div>
     </section>
 

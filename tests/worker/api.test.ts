@@ -3,11 +3,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   compileVideoPromptWithSpeech,
   compileContinuityDirective,
+  createFourWayVideoGenerationVersions,
+  createVideoGenerationVersions,
   videoPromptProfileForIdentity,
   type CanonReference,
   type ContinuityRule,
   type CreativeDnaArtifact,
   type GenerationContinuitySelection,
+  type VideoGenerationVersion,
   type World,
   type WorldEntity,
 } from "../../shared/contracts";
@@ -89,6 +92,8 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("delete from creative_overnight_tasks"),
+    env.DB.prepare("delete from creative_overnight_sessions"),
     env.DB.prepare("delete from creative_canon_promotions"),
     env.DB.prepare("delete from creative_canon_references"),
     env.DB.prepare("delete from creative_continuity_rules"),
@@ -119,6 +124,115 @@ beforeEach(clearData);
 
 async function testProject(ownerId: string, name = "Test Project") {
   return createProject(env, ownerId, { name, type: "Test System", hue: "#8b5cf6" });
+}
+
+async function overnightLifecycleFixture(idempotencyKey: string) {
+  const ownerId = "development-angelo";
+  const project = await testProject(ownerId, `Overnight lifecycle ${idempotencyKey.slice(-4)}`);
+  const dna = await createLocalDna(env, ownerId, {
+    projectId: project.id,
+    name: "Lifecycle guard DNA",
+    directive: "Tactile nocturnal structures with restrained luminous motion and precise material contrast.",
+    targetModality: "image",
+  });
+  const storage = memoryBucket();
+  const local = workerEnv("development", undefined, storage.bucket);
+  const graph = JSON.stringify({
+    "1": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" }, _meta: { title: "Load model" } },
+    "2": { class_type: "PrimitiveStringMultiline", inputs: { value: "A nocturnal lifecycle study" }, _meta: { title: "Prompt" } },
+    "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] }, _meta: { title: "Sampler" } },
+    "4": { class_type: "SaveImage", inputs: { filename_prefix: "overnight", images: ["3", 0] }, _meta: { title: "Save image" } },
+    "5": { class_type: "EmptySD3LatentImage", inputs: { width: 512, height: 512, batch_size: 1 }, _meta: { title: "Fast image" } },
+  });
+  const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-cs-project-id": project.id,
+      "x-cs-file-name": encodeURIComponent(`${idempotencyKey}.json`),
+      "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+      "x-cs-workflow-name": encodeURIComponent("Overnight Lifecycle Image"),
+    },
+    body: graph,
+  }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+  const sessionInput = (key: string) => ({
+    projectId: project.id,
+    dnaArtifactId: dna.artifactId,
+    name: "Lifecycle guard night",
+    storySeed: "A nocturnal structure tests the limits of one carefully bounded creative window.",
+    storyCount: 1,
+    outputCount: 3,
+    modalities: ["image"],
+    exploration: "exploratory",
+    workflowSelections: [{
+      modality: "image",
+      workflowId: imported.workflow.id,
+      workflowRevisionId: imported.workflow.currentRevision.id,
+    }],
+    scheduledFor: new Date(Date.now() - 1_000).toISOString(),
+    cutoffAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    maxFailures: 2,
+    maxBytes: 512 * 1024 * 1024,
+    idempotencyKey: key,
+  });
+  const createdResponse = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(sessionInput(idempotencyKey)),
+  }), local);
+  expect(createdResponse.status).toBe(201);
+  const created = await result(createdResponse) as { overnightSession: { id: string; status: string } };
+  const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Lifecycle guard runner" }),
+  }), local)) as { runner: { id: string }; token: string };
+  const runnerHeaders = { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" };
+  const runnerState = {
+    version: "1.13.0",
+    comfyUrl: "http://127.0.0.1:8188",
+    comfyReady: true,
+    comfyVersion: "0.33.0",
+    device: "RTX 3090",
+    activeJobId: null,
+    error: null,
+    modelTrainingProviders: [],
+  };
+  const claimWork = () => routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+    method: "POST",
+    headers: runnerHeaders,
+    body: JSON.stringify(runnerState),
+  }), local);
+  return { ownerId, project, dna, local, storage, imported, sessionInput, created, enrollment, runnerHeaders, claimWork };
+}
+
+async function startOvernightLifecycleGeneration(fixture: Awaited<ReturnType<typeof overnightLifecycleFixture>>, label: string) {
+  const plannerClaim = await result(await fixture.claimWork()) as {
+    kind: string;
+    bundle: { session: { id: string }; slots: Array<{ ordinal: number; storyIndex: number; role: "scene-image"; modality: "image" }> };
+  };
+  expect(plannerClaim.kind).toBe("overnight-plan");
+  const plan = {
+    schemaVersion: "creative-studio-overnight-plan/1.0",
+    title: `${label} night`,
+    logline: "A bounded overnight lifecycle produces a small set of precise nocturnal material studies.",
+    stories: [{ index: 1, title: `${label} story`, premise: "One tactile structure changes through three restrained nocturnal states." }],
+    outputs: plannerClaim.bundle.slots.map((slot) => ({
+      ...slot,
+      sceneIndex: slot.ordinal,
+      title: `${label} scene ${slot.ordinal}`,
+      prompt: `A tactile nocturnal structure in ${label} scene ${slot.ordinal}, restrained cyan light, decisive composition, no text.`,
+    })),
+  };
+  const completed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${plannerClaim.bundle.session.id}/complete`, {
+    method: "POST",
+    headers: fixture.runnerHeaders,
+    body: JSON.stringify({ plan, comfyPromptId: `comfy-${label}-plan`, plannerModel: "gemma-4-local" }),
+  }), fixture.local);
+  expect(completed.status).toBe(200);
+  const generation = await result(await fixture.claimWork()) as { kind: string; bundle: { job: { id: string } } };
+  expect(generation.kind).toBe("generation");
+  return { sessionId: plannerClaim.bundle.session.id, plan, generation };
 }
 
 describe("Creative Studio Worker API", () => {
@@ -1038,6 +1152,7 @@ describe("Creative Studio Worker API", () => {
     const claimed = await result(await runnerRequest("/api/creative-studio/runner/work/claim", {
       version: "1.2.0",
       comfyUrl: "http://127.0.0.1:8188",
+      comfyReady: true,
       comfyVersion: "0.33.0",
       device: "Test GPU",
       activeJobId: null,
@@ -2164,6 +2279,18 @@ describe("Creative Studio Worker API", () => {
     });
     const { bucket } = memoryBucket();
     const local = workerEnv("development", undefined, bucket);
+    const inspirationBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const inspiration = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("Violet source.png"),
+        "x-cs-file-size": String(inspirationBytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: inspirationBytes,
+    }), local)) as { asset: { id: string } };
     const musicPrompt = "Global Metadata: 112 BPM. Visual source translated into sound: patient violet light with fine internal motion. Vocal Details: If lyrics are supplied, use a close human vocal; otherwise remain instrumental. Arrangement: granular percussion, warm bass, suspended harmony, and a gradual final lift.";
     const graph = JSON.stringify({
       "1": { class_type: "MiniMaxMusic3TextEncode", inputs: {
@@ -2179,12 +2306,61 @@ describe("Creative Studio Worker API", () => {
         "x-cs-project-id": project.id,
         "x-cs-file-name": encodeURIComponent("minimax-music3-api.json"),
         "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
-        "x-cs-workflow-name": encodeURIComponent("MiniMax Music 3"),
+        "x-cs-workflow-name": encodeURIComponent("Owner song workflow"),
       },
       body: graph,
     }), local)) as { workflow: { id: string; name: string; currentRevision: { id: string; parameters: Array<{ id: string; label: string; value: string | number | boolean }>; models: string[] } } };
     const caption = imported.workflow.currentRevision.parameters.find((parameter) => /caption/i.test(`${parameter.id} ${parameter.label}`));
     expect(caption).toBeTruthy();
+    const promptReference = {
+      schemaVersion: "creative-studio-prompt-reference-request/1.0",
+      purpose: "music-prompt-inspiration",
+      sourceId: inspiration.asset.id,
+      source: "upload",
+      kind: "image",
+    } as const;
+    const wrongKind = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "music",
+        idempotencyKey: "runner_music_wrong_reference_001",
+        workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id, inputBindings: {}, expectedPrompt: musicPrompt },
+        promptReference: { ...promptReference, kind: "audio" },
+      }),
+    }), local);
+    expect(wrongKind.status).toBe(400);
+    expect(await result(wrongKind)).toMatchObject({ error: "prompt_reference_source_mismatch" });
+
+    const foreignProject = await testProject(ownerId, "Foreign song inspiration");
+    const foreignInspiration = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": foreignProject.id,
+        "x-cs-file-name": encodeURIComponent("Foreign source.png"),
+        "x-cs-file-size": String(inspirationBytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: inspirationBytes,
+    }), local)) as { asset: { id: string } };
+    const crossProjectReference = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "music",
+        idempotencyKey: "runner_music_cross_reference_001",
+        workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id, inputBindings: {}, expectedPrompt: musicPrompt },
+        promptReference: { ...promptReference, sourceId: foreignInspiration.asset.id },
+      }),
+    }), local);
+    expect(crossProjectReference.status).toBe(400);
+    expect(await result(crossProjectReference)).toMatchObject({ error: "prompt_reference_project_mismatch" });
+
     const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -2194,8 +2370,33 @@ describe("Creative Studio Worker API", () => {
         modality: "music",
         idempotencyKey: "runner_music_enhance_001",
         workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id, inputBindings: {}, expectedPrompt: musicPrompt },
+        promptReference,
       }),
-    }), local)) as { job: { id: string; prompt: string; settingsStamp: { prompt: string; promptEnhancement?: unknown } } };
+    }), local)) as { job: { id: string; prompt: string; settingsStamp: {
+      prompt: string;
+      inputBindings: Record<string, string>;
+      inputSources: unknown[];
+      promptReference: { schemaVersion: string; projectId: string; sourceId: string; source: string; kind: string; name: string };
+      musicPromptProfile: { id: string; targetModel: string; outputFormat: string };
+      promptEnhancement?: unknown;
+    } } };
+    expect(created.job.settingsStamp).toMatchObject({
+      inputBindings: {},
+      inputSources: [],
+      promptReference: {
+        schemaVersion: "creative-studio-prompt-reference/1.0",
+        projectId: project.id,
+        sourceId: inspiration.asset.id,
+        source: "upload",
+        kind: "image",
+        name: "Violet source",
+      },
+      musicPromptProfile: {
+        id: "minimax-music-3-structured-caption/1.0",
+        targetModel: "MiniMax Music 3",
+        outputFormat: "structured-caption",
+      },
+    });
 
     const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Song prompt runner" }),
@@ -2214,8 +2415,9 @@ describe("Creative Studio Worker API", () => {
     }), local);
     const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
-    }), local)) as { bundle: { job: { id: string } } };
+    }), local)) as { bundle: { job: { id: string }; inputs: unknown[] } };
     expect(claimed.bundle.job.id).toBe(created.job.id);
+    expect(claimed.bundle.inputs).toEqual([]);
 
     const section = (lead: string) => `${lead} ${Array.from({ length: 62 }, (_, index) => `musical${index + 1}`).join(" ")}.`;
     const enhancedPrompt = `### Global Metadata\n${section("A measured 112 BPM electronic instrumental")}
@@ -2268,12 +2470,16 @@ describe("Creative Studio Worker API", () => {
         workflow: { workflowId: string; revisionId: string; name: string };
         models: string[];
         parameters: Record<string, string | number | boolean>;
+        promptReference?: { sourceId: string; kind: string };
         promptEnhancement?: { sourcePrompt: string; enhancedPrompt: string; promptProfileId: string; targetModel: string };
       } }>;
     };
     expect(history.artifacts[0]).toMatchObject({
       prompt: enhancedPrompt,
-      settingsStamp: { promptEnhancement: { sourcePrompt: created.job.prompt, enhancedPrompt } },
+      settingsStamp: {
+        promptReference: { sourceId: inspiration.asset.id, kind: "image" },
+        promptEnhancement: { sourcePrompt: created.job.prompt, enhancedPrompt },
+      },
     });
     const musicArtifact = history.artifacts[0];
     const createMusicRecipe = async (targetModel: string) => result(await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
@@ -2308,6 +2514,251 @@ describe("Creative Studio Worker API", () => {
     }), local);
     expect(musicEvidence.status).toBe(201);
     expect(await result(musicEvidence)).toMatchObject({ evidence: { jobId: musicArtifact.jobId, outcome: "completed" } });
+  });
+
+  it("accepts production-shaped standard and four-way video batches with exact source binding", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Direct video batches");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Batch motion direction",
+      directive: "A translucent figure turns beneath a violet storm while the camera moves low across wet stone.",
+      targetModality: "image",
+    });
+    const { bucket } = memoryBucket();
+    const local = workerEnv("development", undefined, bucket);
+    const sourceBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("batch-source.png"),
+        "x-cs-file-size": String(sourceBytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: sourceBytes,
+    }), local)) as { asset: { id: string } };
+    const profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" });
+    const basePrompt = compileVideoPromptWithSpeech(
+      "The figure turns toward a distant light while the camera makes one restrained lateral move.",
+      undefined,
+      profile,
+    );
+    const graph = JSON.stringify({
+      "1": { class_type: "LoadImage", inputs: { image: "source.png" } },
+      "2": { class_type: "MiniMaxH3I2V", inputs: { prompt: basePrompt.prompt, image: ["1", 0], seed: 42, duration: 10 } },
+      "3": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("direct-video-batches.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("MiniMax H3 I2V"),
+      },
+      body: graph,
+    }), local)) as {
+      workflow: {
+        id: string;
+        currentRevision: {
+          id: string;
+          parameters: Array<{ id: string; kind: string; label: string }>;
+        };
+      };
+    };
+    const mediaParameter = imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "media");
+    const promptParameter = imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "text");
+    const seedParameter = imported.workflow.currentRevision.parameters.find((parameter) => parameter.label.toLowerCase().includes("seed"));
+    expect(mediaParameter).toBeTruthy();
+    expect(promptParameter).toBeTruthy();
+    expect(seedParameter).toBeTruthy();
+    let currentRevisionId = imported.workflow.currentRevision.id;
+
+    const productionPairId = (batchId: string, suffix: "pair-1" | "board") =>
+      `video_pair_${batchId.replace(/^output_batch_/, "")}-${suffix}`;
+    const prepare = async (output: VideoGenerationVersion) => {
+      const compiled = compileVideoPromptWithSpeech(output.prompt, undefined, profile);
+      const values: Record<string, string | number> = { [promptParameter!.id]: compiled.prompt };
+      if (output.variant.seed !== null) values[seedParameter!.id] = output.variant.seed;
+      const response = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseRevisionId: currentRevisionId, values }),
+      }), local);
+      expect(response.status).toBe(201);
+      const revised = await result(response) as { workflow: { currentRevision: { id: string } } };
+      currentRevisionId = revised.workflow.currentRevision.id;
+      return { compiled, revisionId: currentRevisionId };
+    };
+    const submitBatch = async (
+      outputs: VideoGenerationVersion[],
+      outputBatch: { batchId: string; count: 1 | 2 | 4 },
+    ) => {
+      const jobs: Array<{ id: string; settingsStamp: { inputBindings: Record<string, string>; outputBatch: { batchId: string; index: number; count: number }; videoVariant: VideoGenerationVersion["variant"] } }> = [];
+      for (let index = 0; index < outputs.length; index += 1) {
+        const output = outputs[index];
+        const prepared = await prepare(output);
+        const response = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            projectId: project.id,
+            dnaArtifactId: dna.artifactId,
+            modality: "video",
+            videoDurationSeconds: 10,
+            idempotencyKey: `video_batch_${outputBatch.count}_${index + 1}_${outputBatch.batchId}`,
+            workflow: {
+              workflowId: imported.workflow.id,
+              revisionId: prepared.revisionId,
+              inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+              expectedPrompt: prepared.compiled.prompt,
+            },
+            videoVariant: output.variant,
+            videoSpeech: prepared.compiled.speech,
+            outputBatch: {
+              schemaVersion: "creative-studio-output-batch/1.0",
+              batchId: outputBatch.batchId,
+              index: index + 1,
+              count: outputBatch.count,
+            },
+          }),
+        }), local);
+        expect(response.status).toBe(202);
+        const created = await result(response) as { job: (typeof jobs)[number] };
+        expect(created.job.settingsStamp.inputBindings).toEqual({ [mediaParameter!.id]: uploaded.asset.id });
+        expect(created.job.settingsStamp.outputBatch).toEqual({
+          schemaVersion: "creative-studio-output-batch/1.0",
+          batchId: outputBatch.batchId,
+          index: index + 1,
+          count: outputBatch.count,
+        });
+        expect(created.job.settingsStamp.videoVariant).toEqual(output.variant);
+        jobs.push(created.job);
+      }
+      return jobs;
+    };
+
+    const singleBatchId = "output_batch_123e4567-e89b-12d3-a456-426614174101";
+    const singlePairId = productionPairId(singleBatchId, "pair-1");
+    const single = createVideoGenerationVersions({
+      direction: "The figure turns once toward a violet reflection and holds the final profile.",
+      dimensions: dna.shared,
+      pairId: singlePairId,
+      discoverySeed: 101,
+      hasSource: true,
+    }).slice(0, 1);
+    const singleJobs = await submitBatch(single, { batchId: singleBatchId, count: 1 });
+
+    const standardBatchId = "output_batch_123e4567-e89b-12d3-a456-426614174102";
+    const standardPairId = productionPairId(standardBatchId, "pair-1");
+    const standard = createVideoGenerationVersions({
+      direction: "The figure crosses one pool of light as the camera follows at shoulder height.",
+      dimensions: dna.shared,
+      pairId: standardPairId,
+      discoverySeed: 202,
+      hasSource: true,
+    });
+    const standardJobs = await submitBatch(standard, { batchId: standardBatchId, count: 2 });
+
+    const fourWayBatchId = "output_batch_123e4567-e89b-12d3-a456-426614174104";
+    const fourWayPairId = productionPairId(fourWayBatchId, "board");
+    const fourWay = createFourWayVideoGenerationVersions({
+      exactPrompt: "The figure pauses, looks left, and lets violet rain pass through the foreground.",
+      enhancedPrompt: "The figure pauses beneath violet rain, slowly looks left as the camera arcs around the shoulder, and holds on a fractured reflection in the final frame.",
+      dimensions: dna.shared,
+      pairId: fourWayPairId,
+      boardSeed: 404,
+      hasSource: true,
+    });
+    const fourWayJobs = await submitBatch(fourWay, { batchId: fourWayBatchId, count: 4 });
+
+    expect(singleJobs.map((job) => job.settingsStamp.videoVariant.role)).toEqual(["aligned"]);
+    expect(standardJobs.map((job) => job.settingsStamp.videoVariant.role)).toEqual(["aligned", "discovery"]);
+    expect(fourWayJobs.map((job) => job.settingsStamp.videoVariant.role)).toEqual(["exact", "enhanced", "left-field", "awe"]);
+    expect(singleJobs[0].settingsStamp.videoVariant.pairId).toBe(singlePairId);
+    expect(standardJobs.every((job) => job.settingsStamp.videoVariant.pairId === standardPairId)).toBe(true);
+    expect(fourWayJobs.every((job) => job.settingsStamp.videoVariant.pairId === fourWayPairId)).toBe(true);
+    expect(new Set([...singleJobs, ...standardJobs, ...fourWayJobs].map((job) => job.id)).size).toBe(7);
+
+    const guardBatchId = "output_batch_123e4567-e89b-12d3-a456-426614174109";
+    const guardPairId = productionPairId(guardBatchId, "pair-1");
+    const guardOutput = createVideoGenerationVersions({
+      direction: "The figure remains beside the source light while the camera settles.",
+      dimensions: dna.shared,
+      pairId: guardPairId,
+      discoverySeed: 909,
+      hasSource: true,
+    })[0];
+    const preparedGuard = await prepare(guardOutput);
+    const guardRequest = (overrides: Record<string, unknown>) => ({
+      projectId: project.id,
+      dnaArtifactId: dna.artifactId,
+      modality: "video",
+      videoDurationSeconds: 10,
+      idempotencyKey: "video_batch_rejection_guard_001",
+      workflow: {
+        workflowId: imported.workflow.id,
+        revisionId: preparedGuard.revisionId,
+        inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+        expectedPrompt: preparedGuard.compiled.prompt,
+      },
+      videoVariant: guardOutput.variant,
+      videoSpeech: preparedGuard.compiled.speech,
+      outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId: guardBatchId, index: 1, count: 1 },
+      ...overrides,
+    });
+    const underscorePair = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(guardRequest({ videoVariant: { ...guardOutput.variant, pairId: guardPairId.replace(/-pair-1$/, "_1") } })),
+    }), local);
+    expect(underscorePair.status).toBe(400);
+    expect(await result(underscorePair)).toMatchObject({ error: "invalid_video_generation_variant" });
+
+    const invalidCount = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(guardRequest({
+        idempotencyKey: "video_batch_rejection_guard_002",
+        outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId: guardBatchId, index: 1, count: 3 },
+      })),
+    }), local);
+    expect(invalidCount.status).toBe(400);
+    expect(await result(invalidCount)).toMatchObject({ error: "invalid_output_batch" });
+
+    const foreignProject = await testProject(ownerId, "Foreign video source");
+    const foreignSource = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": foreignProject.id,
+        "x-cs-file-name": encodeURIComponent("foreign-source.png"),
+        "x-cs-file-size": String(sourceBytes.byteLength),
+        "x-cs-training-eligible": "true",
+      },
+      body: sourceBytes,
+    }), local)) as { asset: { id: string } };
+    const wrongSource = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(guardRequest({
+        idempotencyKey: "video_batch_rejection_guard_003",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: preparedGuard.revisionId,
+          inputBindings: { [mediaParameter!.id]: foreignSource.asset.id },
+          expectedPrompt: preparedGuard.compiled.prompt,
+        },
+      })),
+    }), local);
+    expect(wrongSource.status).toBe(400);
+    expect(await result(wrongSource)).toMatchObject({ error: "runner_input_project_mismatch" });
+
+    const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), local)) as { snapshot: { jobs: Array<{ projectId: string }> } };
+    expect(snapshot.snapshot.jobs.filter((job) => job.projectId === project.id)).toHaveLength(7);
   });
 
   it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
@@ -2862,7 +3313,7 @@ describe("Creative Studio Worker API", () => {
       body: JSON.stringify(body),
     }), production);
     const state = {
-      version: "1.9.0", comfyUrl: "http://127.0.0.1:8188", comfyVersion: "0.33.0", device: "RTX 3090",
+      version: "1.9.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, comfyVersion: "0.33.0", device: "RTX 3090",
       activeJobId: null, error: null, modelTrainingProviders: ["ace-step-1.5-lora"],
     };
     const claimed = await result(await runnerPost("/api/creative-studio/runner/work/claim", state)) as {
@@ -2979,6 +3430,535 @@ describe("Creative Studio Worker API", () => {
       revokedAt: null,
     });
     expect(claimed).toBeNull();
+  });
+
+  it("plans and renders an overnight session sequentially without accepting its artifacts", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Overnight Glass Orchard");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Nocturnal glass language",
+      directive: "Translucent organic structures hold traces of memory in restrained nocturnal light.",
+      targetModality: "image",
+    });
+    const { bucket } = memoryBucket();
+    const local = workerEnv("development", undefined, bucket);
+    const graph = JSON.stringify({
+      "1": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" }, _meta: { title: "Load model" } },
+      "2": { class_type: "PrimitiveStringMultiline", inputs: { value: "A nocturnal glass orchard" }, _meta: { title: "Prompt" } },
+      "3": { class_type: "KSampler", inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "res_multistep", scheduler: "simple", denoise: 1, model: ["1", 0], positive: ["2", 0] }, _meta: { title: "Sampler" } },
+      "4": { class_type: "SaveImage", inputs: { filename_prefix: "overnight", images: ["3", 0] }, _meta: { title: "Save image" } },
+      "5": { class_type: "EmptySD3LatentImage", inputs: { width: 512, height: 512, batch_size: 1 }, _meta: { title: "Fast image" } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("overnight-fast-image.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("Overnight Fast Image"),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+
+    const now = Date.now();
+    const createdResponse = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        name: "Glass orchard after midnight",
+        storySeed: "A traveler discovers an orchard whose fruit stores memories as light.",
+        storyCount: 1,
+        outputCount: 3,
+        modalities: ["image"],
+        exploration: "exploratory",
+        workflowSelections: [{
+          modality: "image",
+          workflowId: imported.workflow.id,
+          workflowRevisionId: imported.workflow.currentRevision.id,
+        }],
+        scheduledFor: new Date(now - 1_000).toISOString(),
+        cutoffAt: new Date(now + 60 * 60_000).toISOString(),
+        maxFailures: 2,
+        maxBytes: 512 * 1024 * 1024,
+        idempotencyKey: "overnight_worker_lifecycle_001",
+      }),
+    }), local);
+    expect(createdResponse.status).toBe(201);
+    const created = await result(createdResponse) as { overnightSession: { id: string; status: string; tasks: unknown[] } };
+    expect(created.overnightSession).toMatchObject({ status: "armed", tasks: [] });
+
+    const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Overnight 3090 test runner" }),
+    }), local)) as { runner: { id: string }; token: string };
+    const runnerHeaders = { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" };
+    const runnerState = {
+      version: "1.13.0",
+      comfyUrl: "http://127.0.0.1:8188",
+      comfyVersion: "0.33.0",
+      device: "RTX 3090",
+      activeJobId: null,
+      error: null,
+      modelTrainingProviders: [],
+    };
+    const claimWork = (comfyReady: boolean) => routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ ...runnerState, comfyReady }),
+    }), local);
+
+    const offlineClaim = await result(await claimWork(false));
+    expect(offlineClaim).toMatchObject({ ok: true, kind: null, bundle: null });
+    const stillArmed = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), local)) as {
+      overnightSessions: Array<{ id: string; status: string }>;
+    };
+    expect(stillArmed.overnightSessions).toContainEqual(expect.objectContaining({ id: created.overnightSession.id, status: "armed" }));
+
+    const plannerClaim = await result(await claimWork(true)) as {
+      kind: string;
+      bundle: {
+        session: { id: string; status: string };
+        slots: Array<{ ordinal: number; storyIndex: number; role: "scene-image"; modality: "image" }>;
+      };
+    };
+    expect(plannerClaim).toMatchObject({ kind: "overnight-plan", bundle: { session: { id: created.overnightSession.id, status: "planning" } } });
+    expect(plannerClaim.bundle.slots).toHaveLength(3);
+    const plan = {
+      schemaVersion: "creative-studio-overnight-plan/1.0",
+      title: "The Glass Orchard",
+      logline: "A traveler follows stored memories through a nocturnal orchard before the first light.",
+      stories: [{
+        index: 1,
+        title: "The Glass Orchard",
+        premise: "A solitary traveler discovers that each translucent fruit holds one unfinished memory and follows their light toward dawn.",
+      }],
+      outputs: plannerClaim.bundle.slots.map((slot) => ({
+        ...slot,
+        sceneIndex: slot.ordinal,
+        title: `Glass orchard scene ${slot.ordinal}`,
+        prompt: `A solitary traveler moves through a nocturnal glass orchard, scene ${slot.ordinal}; translucent fruit stores visible memories, precise cinematic lighting, tactile surfaces, no text.`,
+      })),
+    };
+    const plannedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${created.overnightSession.id}/complete`, {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ plan, comfyPromptId: "comfy-gemma-overnight-001", plannerModel: "gemma-4-local" }),
+    }), local);
+    expect(plannedResponse.status).toBe(200);
+    expect(await result(plannedResponse)).toMatchObject({
+      overnightSession: {
+        status: "running",
+        progress: { planned: 3, queued: 1, completed: 0, readyForReview: 0, decided: 0 },
+      },
+    });
+    const firstMaterialization = await env.DB.prepare(`select count(*) as total,
+      sum(case when status in ('queued', 'running') then 1 else 0 end) as active,
+      min(priority) as priority from creative_jobs where automation_session_id = ?`)
+      .bind(created.overnightSession.id).first<{ total: number; active: number; priority: number }>();
+    expect(firstMaterialization).toMatchObject({ total: 1, active: 1, priority: 10 });
+
+    const completedJobIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const claimed = await result(await claimWork(true)) as {
+        kind: string;
+        bundle: { job: { id: string; status: string; settingsStamp: { overnight: { sessionId: string; taskId: string; seed: number } } } };
+      };
+      expect(claimed).toMatchObject({
+        kind: "generation",
+        bundle: { job: { status: "running", settingsStamp: { overnight: { sessionId: created.overnightSession.id } } } },
+      });
+      expect(completedJobIds).not.toContain(claimed.bundle.job.id);
+      const active = await env.DB.prepare(`select count(*) as count from creative_jobs
+        where automation_session_id = ? and status in ('queued', 'running')`)
+        .bind(created.overnightSession.id).first<{ count: number }>();
+      expect(Number(active?.count)).toBe(1);
+      const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, index]);
+      const completedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${claimed.bundle.job.id}/complete`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${enrollment.token}`,
+          "content-type": "image/png",
+          "x-cs-file-size": String(bytes.byteLength),
+        },
+        body: bytes,
+      }), local);
+      expect(completedResponse.status).toBe(200);
+      completedJobIds.push(claimed.bundle.job.id);
+    }
+
+    expect(await result(await claimWork(true))).toMatchObject({ ok: true, kind: null, bundle: null });
+    const finalState = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), local)) as {
+      overnightSessions: Array<{
+        id: string;
+        status: string;
+        progress: { planned: number; completed: number; readyForReview: number; decided: number };
+        tasks: Array<{ status: string; artifactId: string | null }>;
+      }>;
+    };
+    expect(finalState.overnightSessions[0]).toMatchObject({
+      id: created.overnightSession.id,
+      status: "completed",
+      progress: { planned: 3, completed: 3, readyForReview: 3, decided: 0 },
+    });
+    expect(finalState.overnightSessions[0].tasks).toHaveLength(3);
+    expect(finalState.overnightSessions[0].tasks.every((task) => task.status === "completed" && task.artifactId)).toBe(true);
+    const decisions = await env.DB.prepare("select count(*) as count from creative_acceptances").first<{ count: number }>();
+    const readyArtifacts = await env.DB.prepare("select count(*) as count from creative_artifacts where owner_id = ? and status = 'ready'")
+      .bind(ownerId).first<{ count: number }>();
+    expect(Number(decisions?.count)).toBe(0);
+    expect(Number(readyArtifacts?.count)).toBe(3);
+  });
+
+  it("ends an active overnight run at cutoff and rejects a late runner heartbeat and output", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_cutoff_guard_001");
+    const plannerClaim = await result(await fixture.claimWork()) as {
+      kind: string;
+      bundle: { session: { id: string }; slots: Array<{ ordinal: number; storyIndex: number; role: "scene-image"; modality: "image" }> };
+    };
+    expect(plannerClaim.kind).toBe("overnight-plan");
+    const plan = {
+      schemaVersion: "creative-studio-overnight-plan/1.0",
+      title: "Bounded night",
+      logline: "A nocturnal object transforms only while its explicitly bounded creative window remains open.",
+      stories: [{ index: 1, title: "The bounded object", premise: "A tactile structure reveals three states before the night closes around it." }],
+      outputs: plannerClaim.bundle.slots.map((slot) => ({
+        ...slot,
+        sceneIndex: slot.ordinal,
+        title: `Bounded scene ${slot.ordinal}`,
+        prompt: `A tactile nocturnal structure in bounded scene ${slot.ordinal}, restrained cyan light, material detail, decisive composition, no text.`,
+      })),
+    };
+    const planned = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${plannerClaim.bundle.session.id}/complete`, {
+      method: "POST",
+      headers: fixture.runnerHeaders,
+      body: JSON.stringify({ plan, comfyPromptId: "comfy-cutoff-plan", plannerModel: "gemma-4-local" }),
+    }), fixture.local);
+    expect(planned.status).toBe(200);
+    const generation = await result(await fixture.claimWork()) as { kind: string; bundle: { job: { id: string } } };
+    expect(generation.kind).toBe("generation");
+
+    await env.DB.prepare("update creative_overnight_sessions set cutoff_at = ? where id = ? and owner_id = ?")
+      .bind(new Date(Date.now() - 1_000).toISOString(), plannerClaim.bundle.session.id, fixture.ownerId).run();
+    const heartbeat = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${generation.bundle.job.id}/heartbeat`, {
+      method: "POST",
+      headers: fixture.runnerHeaders,
+      body: JSON.stringify({ progress: 35, stage: "rendering", upstreamId: "comfy-late-render" }),
+    }), fixture.local);
+    expect(heartbeat.status).toBe(200);
+    expect(await result(heartbeat)).toMatchObject({ continue: false, job: { status: "cancelled", error: "overnight_window_ended" } });
+
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const lateCompletion = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${generation.bundle.job.id}/complete`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${fixture.enrollment.token}`,
+        "content-type": "image/png",
+        "x-cs-file-size": String(bytes.byteLength),
+      },
+      body: bytes,
+    }), fixture.local);
+    expect(lateCompletion.status).toBe(409);
+    expect(await result(lateCompletion)).toMatchObject({ error: "runner_job_not_completable" });
+    expect(fixture.storage.values.size).toBe(0);
+
+    expect(await result(await fixture.claimWork())).toMatchObject({ kind: null, bundle: null });
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), fixture.local)) as {
+      overnightSessions: Array<{ id: string; status: string; error: string; tasks: Array<{ status: string }> }>;
+    };
+    const ended = listed.overnightSessions.find((session) => session.id === plannerClaim.bundle.session.id);
+    expect(ended).toMatchObject({ status: "failed", error: "overnight_window_ended" });
+    expect(ended?.tasks.map((task) => task.status)).toEqual(["cancelled", "skipped", "skipped"]);
+    const resume = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${plannerClaim.bundle.session.id}/resume`, { method: "POST" }), fixture.local);
+    expect(resume.status).toBe(409);
+    expect(await result(resume)).toMatchObject({ error: "overnight_session_not_resumable" });
+    const artifacts = await env.DB.prepare("select count(*) as count from creative_artifacts where owner_id = ?")
+      .bind(fixture.ownerId).first<{ count: number }>();
+    expect(Number(artifacts?.count)).toBe(0);
+  });
+
+  it("keeps pause and cancel authoritative over an in-flight overnight planner", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_planner_cas_001");
+    const firstClaim = await result(await fixture.claimWork()) as {
+      kind: string;
+      bundle: { session: { id: string }; slots: Array<{ ordinal: number; storyIndex: number; role: "scene-image"; modality: "image" }> };
+    };
+    expect(firstClaim.kind).toBe("overnight-plan");
+    const pause = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${firstClaim.bundle.session.id}/pause`, { method: "POST" }), fixture.local);
+    expect(await result(pause)).toMatchObject({ overnightSession: { status: "paused" } });
+    const plan = {
+      schemaVersion: "creative-studio-overnight-plan/1.0",
+      title: "Planner race",
+      logline: "The owner remains authoritative while a local planner is still composing its bounded set of scenes.",
+      stories: [{ index: 1, title: "Planner race", premise: "A stopped plan cannot create work after the owner changes its lifecycle." }],
+      outputs: firstClaim.bundle.slots.map((slot) => ({
+        ...slot,
+        sceneIndex: slot.ordinal,
+        title: `Planner scene ${slot.ordinal}`,
+        prompt: `A precise nocturnal planner scene ${slot.ordinal} with tactile surfaces and no typography.`,
+      })),
+    };
+    const lateComplete = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${firstClaim.bundle.session.id}/complete`, {
+      method: "POST",
+      headers: fixture.runnerHeaders,
+      body: JSON.stringify({ plan, comfyPromptId: "comfy-paused-plan", plannerModel: "gemma-4-local" }),
+    }), fixture.local);
+    expect(lateComplete.status).toBe(409);
+    expect(await result(lateComplete)).toMatchObject({ error: "overnight_plan_not_completable" });
+    const taskCount = await env.DB.prepare("select count(*) as count from creative_overnight_tasks where session_id = ?")
+      .bind(firstClaim.bundle.session.id).first<{ count: number }>();
+    expect(Number(taskCount?.count)).toBe(0);
+
+    const resumed = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${firstClaim.bundle.session.id}/resume`, { method: "POST" }), fixture.local);
+    expect(await result(resumed)).toMatchObject({ overnightSession: { status: "armed" } });
+    const secondClaim = await result(await fixture.claimWork()) as { kind: string; bundle: { session: { id: string } } };
+    expect(secondClaim).toMatchObject({ kind: "overnight-plan", bundle: { session: { id: firstClaim.bundle.session.id } } });
+    const cancelled = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${firstClaim.bundle.session.id}/cancel`, { method: "POST" }), fixture.local);
+    expect(await result(cancelled)).toMatchObject({ overnightSession: { status: "cancelled" } });
+    const lateHeartbeat = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${firstClaim.bundle.session.id}/heartbeat`, {
+      method: "POST",
+      headers: fixture.runnerHeaders,
+      body: JSON.stringify({ progress: 50 }),
+    }), fixture.local);
+    expect(lateHeartbeat.status).toBe(409);
+    expect(await result(lateHeartbeat)).toMatchObject({ error: "overnight_plan_not_completable" });
+  });
+
+  it("keeps the cutoff explanation authoritative when an overdue planner reports failure", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_planner_cutoff_001");
+    const claimed = await result(await fixture.claimWork()) as { kind: string; bundle: { session: { id: string } } };
+    expect(claimed.kind).toBe("overnight-plan");
+    await env.DB.prepare("update creative_overnight_sessions set cutoff_at = ? where id = ? and owner_id = ?")
+      .bind(new Date(Date.now() - 1_000).toISOString(), claimed.bundle.session.id, fixture.ownerId).run();
+    const failed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${claimed.bundle.session.id}/fail`, {
+      method: "POST",
+      headers: fixture.runnerHeaders,
+      body: JSON.stringify({ error: "overnight_planning_failed" }),
+    }), fixture.local);
+    expect(failed.status).toBe(200);
+    expect(await result(failed)).toMatchObject({ overnightSession: { status: "failed", error: "overnight_window_ended" } });
+  });
+
+  it("redacts commercial CreativeDNA identity before local Gemma sees planner evidence", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_identity_seed_001");
+    await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${fixture.created.overnightSession.id}/cancel`, { method: "POST" }), fixture.local);
+    const identity = "Protected Franchise Name";
+    const commercialDna = {
+      ...fixture.dna,
+      name: `${identity} study`,
+      source: {
+        ...fixture.dna.source,
+        kind: "commercial_reference" as const,
+        directive: `Translate ${identity} into a new tactile nocturnal language without copying it.`,
+        referenceLabel: identity,
+      },
+      generationPrompts: {
+        ...fixture.dna.generationPrompts,
+        image: `${identity} translated into tactile glass and cyan light.`,
+        music: `An instrumental response to ${identity} with restrained nocturnal electronics.`,
+      },
+    };
+    await env.DB.batch([
+      env.DB.prepare("update creative_dna_artifacts set dna_json = ? where id = ? and owner_id = ?")
+        .bind(JSON.stringify(commercialDna), fixture.dna.artifactId, fixture.ownerId),
+      env.DB.prepare("update creative_projects set name = ?, description = ?, note = ? where id = ? and owner_id = ?")
+        .bind(`${identity} world`, `A project derived from ${identity}.`, `Keep ${identity} visible in owner provenance only.`, fixture.project.id, fixture.ownerId),
+    ]);
+    const input = {
+      ...fixture.sessionInput("overnight_identity_seed_002"),
+      storySeed: `${identity} crosses a nocturnal glass garden and changes its weather.`,
+    };
+    const created = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }), fixture.local);
+    expect(created.status).toBe(201);
+    const claimed = await result(await fixture.claimWork()) as {
+      kind: string;
+      bundle: {
+        session: { id: string; storySeed: string };
+        context: unknown;
+        slots: Array<{ ordinal: number; storyIndex: number; role: "scene-image"; modality: "image" }>;
+      };
+    };
+    expect(claimed.kind).toBe("overnight-plan");
+    expect(JSON.stringify({ storySeed: claimed.bundle.session.storySeed, context: claimed.bundle.context }).toLowerCase())
+      .not.toContain(identity.toLowerCase());
+    const stored = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), fixture.local)) as {
+      overnightSessions: Array<{ id: string; storySeed: string }>;
+    };
+    expect(stored.overnightSessions.find((session) => session.id === claimed.bundle.session.id)?.storySeed).toContain(identity);
+    const rejectedPlan = {
+      schemaVersion: "creative-studio-overnight-plan/1.0",
+      title: "Identity leak",
+      logline: "A protected identity is intentionally returned to prove completion validation remains a second boundary.",
+      stories: [{ index: 1, title: "Identity leak", premise: "The completion validator rejects a protected commercial reference before any tasks materialize." }],
+      outputs: claimed.bundle.slots.map((slot) => ({
+        ...slot,
+        sceneIndex: slot.ordinal,
+        title: `Identity scene ${slot.ordinal}`,
+        prompt: `A precise scene ${slot.ordinal} explicitly showing ${identity}, tactile glass, cyan light, no typography.`,
+      })),
+    };
+    const completed = await routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${claimed.bundle.session.id}/complete`, {
+      method: "POST",
+      headers: fixture.runnerHeaders,
+      body: JSON.stringify({ plan: rejectedPlan, comfyPromptId: "comfy-identity-leak", plannerModel: "gemma-4-local" }),
+    }), fixture.local);
+    expect(completed.status).toBe(400);
+    expect(await result(completed)).toMatchObject({ error: "continuity_commercial_identity_in_prompt" });
+  });
+
+  it("resumes a paused in-flight creation without losing its saved task", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_pause_resume_001");
+    const started = await startOvernightLifecycleGeneration(fixture, "pause-resume");
+    const jobId = started.generation.bundle.job.id;
+    const paused = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${started.sessionId}/pause`, { method: "POST" }), fixture.local);
+    const pausedState = await result(paused) as { overnightSession: { status: string; tasks: Array<{ status: string; jobId: string | null }> } };
+    expect(pausedState.overnightSession.status).toBe("paused");
+    expect(pausedState.overnightSession.tasks.find((task) => task.jobId === jobId)).toMatchObject({ status: "cancelled", jobId });
+    const pausedJob = await env.DB.prepare(`select status, error, runner_lease_until as runnerLeaseUntil from creative_jobs
+      where id = ? and owner_id = ?`).bind(jobId, fixture.ownerId)
+      .first<{ status: string; error: string; runnerLeaseUntil: string | null }>();
+    expect(pausedJob).toMatchObject({ status: "cancelled", error: "overnight_paused" });
+    expect(pausedJob?.runnerLeaseUntil).toBeTruthy();
+
+    const resumed = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${started.sessionId}/resume`, { method: "POST" }), fixture.local);
+    const resumedState = await result(resumed) as { overnightSession: { status: string; tasks: Array<{ status: string; jobId: string | null }> } };
+    expect(resumedState.overnightSession.status).toBe("running");
+    expect(resumedState.overnightSession.tasks.find((task) => task.jobId === jobId)).toMatchObject({ status: "queued", jobId });
+    expect(await result(await fixture.claimWork())).toMatchObject({ kind: null, bundle: null });
+    await env.DB.prepare(`update creative_jobs set runner_lease_until = ?, not_before = ? where id = ? and owner_id = ?`)
+      .bind(new Date(Date.now() - 2_000).toISOString(), new Date(Date.now() - 1_000).toISOString(), jobId, fixture.ownerId).run();
+    const retried = await result(await fixture.claimWork()) as { kind: string; bundle: { job: { id: string; status: string } } };
+    expect(retried).toMatchObject({ kind: "generation", bundle: { job: { id: jobId, status: "running" } } });
+    const taskCount = await env.DB.prepare("select count(*) as count from creative_overnight_tasks where session_id = ?")
+      .bind(started.sessionId).first<{ count: number }>();
+    expect(Number(taskCount?.count)).toBe(3);
+    await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${started.sessionId}/cancel`, { method: "POST" }), fixture.local);
+  });
+
+  it("does not leave an active or unlinked job when plan completion races owner cancellation", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_cancel_race_001");
+    const plannerClaim = await result(await fixture.claimWork()) as {
+      kind: string;
+      bundle: { session: { id: string }; slots: Array<{ ordinal: number; storyIndex: number; role: "scene-image"; modality: "image" }> };
+    };
+    const plan = {
+      schemaVersion: "creative-studio-overnight-plan/1.0",
+      title: "Cancel race",
+      logline: "Owner cancellation remains authoritative while a planner tries to materialize bounded local work.",
+      stories: [{ index: 1, title: "Cancel race", premise: "A local plan stops cleanly at the owner's explicit boundary." }],
+      outputs: plannerClaim.bundle.slots.map((slot) => ({
+        ...slot,
+        sceneIndex: slot.ordinal,
+        title: `Race scene ${slot.ordinal}`,
+        prompt: `A bounded nocturnal race scene ${slot.ordinal}, tactile detail, controlled light, no text.`,
+      })),
+    };
+    const [completeResponse, cancelResponse] = await Promise.all([
+      routeCreativeStudioApi(request(`/api/creative-studio/runner/overnight/${plannerClaim.bundle.session.id}/complete`, {
+        method: "POST",
+        headers: fixture.runnerHeaders,
+        body: JSON.stringify({ plan, comfyPromptId: "comfy-cancel-race", plannerModel: "gemma-4-local" }),
+      }), fixture.local),
+      routeCreativeStudioApi(request(`/api/creative-studio/overnight/${plannerClaim.bundle.session.id}/cancel`, { method: "POST" }), fixture.local),
+    ]);
+    expect([200, 409]).toContain(completeResponse.status);
+    expect(cancelResponse.status).toBe(200);
+    const state = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), fixture.local)) as {
+      overnightSessions: Array<{ id: string; status: string }>;
+    };
+    expect(state.overnightSessions.find((session) => session.id === plannerClaim.bundle.session.id)).toMatchObject({ status: "cancelled" });
+    const activeJobs = await env.DB.prepare(`select count(*) as count from creative_jobs where owner_id = ? and automation_session_id = ?
+      and status in ('queued', 'running')`).bind(fixture.ownerId, plannerClaim.bundle.session.id).first<{ count: number }>();
+    const orphanJobs = await env.DB.prepare(`select count(*) as count from creative_jobs j left join creative_overnight_tasks t
+      on t.owner_id = j.owner_id and t.job_id = j.id where j.owner_id = ? and j.automation_session_id = ? and t.id is null`)
+      .bind(fixture.ownerId, plannerClaim.bundle.session.id).first<{ count: number }>();
+    expect(Number(activeJobs?.count)).toBe(0);
+    expect(Number(orphanJobs?.count)).toBe(0);
+  });
+
+  it("expires stale armed sessions and releases the project for a replacement", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_expiry_guard_001");
+    await env.DB.prepare("update creative_overnight_sessions set cutoff_at = ? where id = ? and owner_id = ?")
+      .bind(new Date(Date.now() - 1_000).toISOString(), fixture.created.overnightSession.id, fixture.ownerId).run();
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), fixture.local)) as {
+      overnightSessions: Array<{ id: string; status: string; error: string }>;
+    };
+    expect(listed.overnightSessions.find((session) => session.id === fixture.created.overnightSession.id))
+      .toMatchObject({ status: "failed", error: "overnight_window_ended" });
+    const replacement = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(fixture.sessionInput("overnight_expiry_guard_002")),
+    }), fixture.local);
+    expect(replacement.status).toBe(201);
+    expect(await result(replacement)).toMatchObject({ overnightSession: { status: "armed" } });
+  });
+
+  it("terminalizes an overdue running session from an owner list even while the runner is offline", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_offline_cutoff_001");
+    const started = await startOvernightLifecycleGeneration(fixture, "offline-cutoff");
+    await env.DB.prepare("update creative_overnight_sessions set cutoff_at = ? where id = ? and owner_id = ?")
+      .bind(new Date(Date.now() - 1_000).toISOString(), started.sessionId, fixture.ownerId).run();
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), fixture.local)) as {
+      overnightSessions: Array<{ id: string; status: string; error: string; tasks: Array<{ status: string }> }>;
+    };
+    const ended = listed.overnightSessions.find((session) => session.id === started.sessionId);
+    expect(ended).toMatchObject({ status: "failed", error: "overnight_window_ended" });
+    expect(ended?.tasks.map((task) => task.status)).toEqual(["cancelled", "skipped", "skipped"]);
+    const activeJobs = await env.DB.prepare(`select count(*) as count from creative_jobs where owner_id = ? and automation_session_id = ?
+      and status in ('queued', 'running')`).bind(fixture.ownerId, started.sessionId).first<{ count: number }>();
+    expect(Number(activeJobs?.count)).toBe(0);
+    const replacement = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(fixture.sessionInput("overnight_offline_cutoff_002")),
+    }), fixture.local);
+    expect(replacement.status).toBe(201);
+  });
+
+  it("terminalizes an overdue paused session and releases the project", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_paused_cutoff_001");
+    const started = await startOvernightLifecycleGeneration(fixture, "paused-cutoff");
+    const paused = await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${started.sessionId}/pause`, { method: "POST" }), fixture.local);
+    expect(await result(paused)).toMatchObject({ overnightSession: { status: "paused" } });
+    await env.DB.prepare("update creative_overnight_sessions set cutoff_at = ? where id = ? and owner_id = ?")
+      .bind(new Date(Date.now() - 1_000).toISOString(), started.sessionId, fixture.ownerId).run();
+
+    const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/overnight"), fixture.local)) as {
+      overnightSessions: Array<{ id: string; status: string; error: string }>;
+    };
+    expect(listed.overnightSessions.find((session) => session.id === started.sessionId))
+      .toMatchObject({ status: "failed", error: "overnight_window_ended" });
+    const replacement = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(fixture.sessionInput("overnight_paused_cutoff_002")),
+    }), fixture.local);
+    expect(replacement.status).toBe(201);
+  });
+
+  it("accepts the stated exact thirty-minute overnight window", async () => {
+    const fixture = await overnightLifecycleFixture("overnight_30_minimum_001");
+    await routeCreativeStudioApi(request(`/api/creative-studio/overnight/${fixture.created.overnightSession.id}/cancel`, { method: "POST" }), fixture.local);
+    const scheduledFor = new Date(Date.now() + 60_000);
+    const response = await routeCreativeStudioApi(request("/api/creative-studio/overnight", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...fixture.sessionInput("overnight_30_minimum_002"),
+        scheduledFor: scheduledFor.toISOString(),
+        cutoffAt: new Date(scheduledFor.getTime() + 30 * 60_000).toISOString(),
+      }),
+    }), fixture.local);
+    expect(response.status).toBe(201);
   });
 
   it("does not expose a generic proxy route", async () => {

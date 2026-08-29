@@ -114,14 +114,14 @@ describe("durable video Script Builder", () => {
     const gated = await result<{ kind: string | null }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
       method: "POST",
       headers: runner.headers,
-      body: JSON.stringify({ version: "1.11.0", comfyUrl: "http://127.0.0.1:8188", modelTrainingProviders: [] }),
+      body: JSON.stringify({ version: "1.11.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
     }), env));
     expect(gated.kind).toBeNull();
 
     const claimed = await result<{ kind: string; bundle: { videoScriptDraft: { id: string; scriptFormat: string }; source: null } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
       method: "POST",
       headers: runner.headers,
-      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", modelTrainingProviders: [] }),
+      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
     }), env));
     expect(claimed).toMatchObject({ kind: "video-script", bundle: { videoScriptDraft: { id: created.videoScriptDraft.id, scriptFormat: "full-script-v2" }, source: null } });
 
@@ -280,7 +280,7 @@ describe("durable video Script Builder", () => {
     } } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
       method: "POST",
       headers: runner.headers,
-      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", modelTrainingProviders: [] }),
+      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
     }), env));
     expect(claimed).toMatchObject({
       kind: "video-script",
@@ -338,7 +338,7 @@ describe("durable video Script Builder", () => {
     const runner = await enrollRunner("Validation runner");
     await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
       method: "POST", headers: runner.headers,
-      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", modelTrainingProviders: [] }),
+      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
     }), env));
     const invalid = await routeCreativeStudioApi(request(`/api/creative-studio/runner/video-scripts/${created.videoScriptDraft.id}/complete`, {
       method: "POST", headers: runner.headers,
@@ -371,7 +371,7 @@ describe("durable video Script Builder", () => {
     const runner = await enrollRunner("Legacy script runner");
     const claimed = await result<{ kind: string; bundle: { videoScriptDraft: { id: string; scriptFormat: string } } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
       method: "POST", headers: runner.headers,
-      body: JSON.stringify({ version: "1.11.0", comfyUrl: "http://127.0.0.1:8188", modelTrainingProviders: [] }),
+      body: JSON.stringify({ version: "1.11.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
     }), env));
     expect(claimed).toMatchObject({ kind: "video-script", bundle: { videoScriptDraft: { id: draftId, scriptFormat: "dialogue-v1" } } });
 

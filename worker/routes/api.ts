@@ -5,6 +5,7 @@ import {
   deriveProjectProductionLoop,
   deriveProductionCockpit,
   generationWorkflowPromptParameters,
+  musicWorkflowPromptProfile,
   normalizeVideoGenerationVariant,
   normalizeVideoSpeechStamp,
   type AcceptanceDecision,
@@ -20,7 +21,11 @@ import {
   primaryWorkflowPromptParameter,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaTrainingJobRequest,
+  type CreateOvernightSessionRequest,
+  type CompleteOvernightPlanRequest,
+  type FailOvernightPlanRequest,
   type GenerationModality,
+  type GenerationPromptReferenceStamp,
   type Job,
   type RetryJobRequest,
   type SaveWorkflowRevisionRequest,
@@ -37,6 +42,7 @@ import {
   type RunnerHeartbeatRequest,
   type RunnerJobHeartbeatRequest,
   type RunnerFailJobRequest,
+  type OvernightPlanHeartbeatRequest,
   type RunnerTrainingHeartbeatRequest,
   type RunnerCompleteTrainingRequest,
   type ReviewCreativeDnaTrainingRequest,
@@ -186,6 +192,18 @@ import {
   videoScriptDraftById,
   videoScriptStampForJob,
 } from "../videoScripts";
+import {
+  cancelOvernightSession,
+  claimOvernightPlan,
+  completeOvernightPlan,
+  createOvernightSession,
+  failOvernightPlan,
+  heartbeatOvernightPlan,
+  listOvernightSessions,
+  pauseOvernightSession,
+  reconcileOvernightSessions,
+  resumeOvernightSession,
+} from "../overnight";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -226,6 +244,9 @@ function statusFor(error: string) {
     || error === "video_script_idempotency_conflict" || error === "video_script_context_mismatch"
     || error === "video_script_version_conflict" || error === "video_script_applied_text_mismatch"
     || error === "video_script_speech_mismatch") return 409;
+  if (error === "overnight_session_already_active" || error === "overnight_session_not_pauseable"
+    || error === "overnight_session_not_resumable" || error === "overnight_window_ended"
+    || error === "overnight_plan_not_completable" || error === "overnight_plan_conflict") return 409;
   if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
     || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
     || error === "artifact_already_canonical") return 409;
@@ -309,6 +330,41 @@ function requestedVideoOperation(value: SubmitJobRequest["videoOperation"], moda
     throw new Error("invalid_video_operation");
   }
   return { ...value, sourceId, transitionSeconds } as NonNullable<SubmitJobRequest["videoOperation"]>;
+}
+
+async function generationPromptReferenceStamp(
+  env: Env,
+  ownerId: string,
+  projectId: string,
+  modality: GenerationModality,
+  value: SubmitJobRequest["promptReference"],
+  inputBindings: Record<string, string>,
+): Promise<GenerationPromptReferenceStamp | undefined> {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || modality !== "music"
+    || value.schemaVersion !== "creative-studio-prompt-reference-request/1.0"
+    || value.purpose !== "music-prompt-inspiration"
+    || !["upload", "artifact"].includes(value.source)
+    || !["image", "audio", "video"].includes(value.kind)) {
+    throw new Error("invalid_generation_prompt_reference");
+  }
+  const sourceId = boundedText(value.sourceId, 100);
+  if (!sourceId) throw new Error("invalid_generation_prompt_reference");
+  if (Object.values(inputBindings).includes(sourceId)) throw new Error("prompt_reference_renderer_binding_conflict");
+  const source = await runnerInputById(env, ownerId, sourceId);
+  if (!source) throw new Error("prompt_reference_source_not_found");
+  if (source.projectId !== projectId) throw new Error("prompt_reference_project_mismatch");
+  if (source.source !== value.source || source.kind !== value.kind) throw new Error("prompt_reference_source_mismatch");
+  return {
+    schemaVersion: "creative-studio-prompt-reference/1.0",
+    purpose: "music-prompt-inspiration",
+    projectId,
+    sourceId: source.id,
+    source: source.source,
+    kind: source.kind,
+    name: boundedText(source.name, 200),
+  };
 }
 
 function aceStepWorkflowIdentity(workflow: Awaited<ReturnType<typeof workflowExecutionPlan>>["workflow"]) {
@@ -420,7 +476,7 @@ async function syncJobs(env: Env, ownerId: string) {
 
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, runners, worldRecords] = await Promise.all([
+  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, overnightSessions, runners, worldRecords] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
@@ -438,6 +494,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listModelAdapterReviews(env, session.userId),
     listVideoPromptEnhancements(env, session.userId),
     listVideoScriptDrafts(env, session.userId),
+    listOvernightSessions(env, session.userId),
     listLocalRunners(env, session.userId),
     listWorldRecords(env, session.userId),
   ]);
@@ -462,6 +519,7 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     jobs,
     promptEnhancements,
     videoScriptDrafts,
+    overnightSessions,
     artifacts,
     mediaAssets,
     workflows,
@@ -494,6 +552,8 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (!input) throw new Error("invalid_runner_request");
     const heartbeat = await heartbeatLocalRunner(env, runner, input);
     const currentRunner = { ...runner, version: heartbeat.version };
+    if (input.comfyReady !== true) return json({ ok: true, kind: null, bundle: null });
+    await reconcileOvernightSessions(env, currentRunner.ownerId);
     const promptEnhancement = await claimVideoPromptEnhancement(env, currentRunner);
     if (promptEnhancement) return json({ ok: true, kind: "prompt-enhancement", bundle: promptEnhancement });
     const videoScript = await claimVideoScriptDraft(env, currentRunner);
@@ -504,12 +564,32 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (training) return json({ ok: true, kind: "training", bundle: training });
     const modelTraining = await claimModelTrainingJob(env, currentRunner, input.modelTrainingProviders ?? []);
     if (modelTraining) return json({ ok: true, kind: "model-training", bundle: modelTraining });
+    const overnightPlan = await claimOvernightPlan(env, currentRunner);
+    if (overnightPlan) return json({ ok: true, kind: "overnight-plan", bundle: overnightPlan });
     return json({ ok: true, kind: null, bundle: null });
   }
   if (route === "runner-heartbeat") {
     const input = await body<RunnerHeartbeatRequest>(request);
     if (!input) throw new Error("invalid_runner_request");
     return json({ ok: true, runner: await heartbeatLocalRunner(env, runner, input) });
+  }
+  if (route === "runner-overnight-heartbeat") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/overnight\/([a-z0-9_]+)\/heartbeat$/i);
+    const input = await body<OvernightPlanHeartbeatRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, overnightSession: await heartbeatOvernightPlan(env, runner, match[1], input) });
+  }
+  if (route === "runner-overnight-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/overnight\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<CompleteOvernightPlanRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, overnightSession: await completeOvernightPlan(env, runner, match[1], input) });
+  }
+  if (route === "runner-overnight-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/overnight\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<FailOvernightPlanRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, overnightSession: await failOvernightPlan(env, runner, match[1], input) });
   }
   if (route === "runner-prompt-enhancement-heartbeat") {
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/prompt-enhancements\/([a-z0-9_]+)\/heartbeat$/i);
@@ -764,6 +844,24 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       await syncJobs(env, session.userId);
       return json({ ok: true, jobs: await listJobs(env, session.userId) });
     }
+    if (route === "overnight-list") {
+      return json({ ok: true, overnightSessions: await listOvernightSessions(env, session.userId) });
+    }
+    if (route === "overnight-create") {
+      const input = await body<CreateOvernightSessionRequest>(request);
+      if (!input) throw new Error("invalid_overnight_session");
+      return json({ ok: true, overnightSession: await createOvernightSession(env, session.userId, input) }, { status: 201 });
+    }
+    if (route === "overnight-pause" || route === "overnight-resume" || route === "overnight-cancel") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/overnight\/([a-z0-9_]+)\/(pause|resume|cancel)$/i);
+      if (!match) throw new Error("invalid_overnight_session");
+      const overnightSession = route === "overnight-pause"
+        ? await pauseOvernightSession(env, session.userId, match[1])
+        : route === "overnight-resume"
+          ? await resumeOvernightSession(env, session.userId, match[1])
+          : await cancelOvernightSession(env, session.userId, match[1]);
+      return json({ ok: true, overnightSession });
+    }
     if (route === "prompt-enhancement-create") {
       const input = await body<CreateVideoPromptEnhancementRequest>(request);
       if (!input) throw new Error("invalid_prompt_enhancement_request");
@@ -862,6 +960,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (input.provider !== undefined && input.provider !== "afdfw" && input.provider !== "development-preview") {
         throw new Error("invalid_generation_provider");
       }
+      if (input.promptReference && !input.workflow) throw new Error("prompt_reference_workflow_required");
       if (input.workflow) {
         if (input.provider) throw new Error("workflow_provider_conflict");
         if (!input.workflow.workflowId || !input.workflow.revisionId || !input.workflow.inputBindings || typeof input.workflow.inputBindings !== "object") {
@@ -885,6 +984,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           .filter(([parameterId, assetId]) => Boolean(parameterId && assetId))) as Record<string, string>;
         if (Object.keys(inputBindings).some((parameterId) => !allowedParameters.has(parameterId))) throw new Error("unknown_workflow_media_parameter");
         if (mediaParameters.some((parameter) => !inputBindings[parameter.id])) throw new Error("workflow_media_input_required");
+        const promptReference = await generationPromptReferenceStamp(env, session.userId, input.projectId, modality, input.promptReference, inputBindings);
         if (videoOperation) {
           const extensionInputs = mediaParameters.filter((parameter) => parameter.mediaKind === "image" && inputBindings[parameter.id] === videoOperation.sourceId);
           if (extensionInputs.length !== 1) throw new Error("video_extension_image_input_required");
@@ -1061,6 +1161,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             inputArtifactIds: inputSources.filter((inputSource) => inputSource.source === "artifact").map((inputSource) => inputSource.id),
             inputSources,
             inputBindings,
+            promptReference,
+            musicPromptProfile: modality === "music" ? musicWorkflowPromptProfile(plan.workflow) : undefined,
             videoVariant,
             videoSpeech,
             videoScript,

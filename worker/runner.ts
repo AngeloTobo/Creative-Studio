@@ -162,6 +162,28 @@ export async function heartbeatLocalRunner(env: Env, runner: RunnerIdentity, inp
   return mapRunner({ ...runner, version, comfyUrl, comfyVersion, device, activeJobId, modelTrainingProvidersJson: JSON.stringify(modelTrainingProviders), lastError: error, lastHeartbeatAt: now });
 }
 
+async function automationJobMayContinue(env: Env, runner: RunnerIdentity, jobId: string, now: string) {
+  const row = await env.DB.prepare(`select j.automation_session_id as automationSessionId,
+    s.status as sessionStatus, s.cutoff_at as cutoffAt from creative_jobs j
+    left join creative_overnight_sessions s on s.id = j.automation_session_id and s.owner_id = j.owner_id
+    where j.id = ? and j.owner_id = ?`).bind(jobId, runner.ownerId)
+    .first<{ automationSessionId: string | null; sessionStatus: string | null; cutoffAt: string | null }>();
+  if (!row) throw new Error("job_not_found");
+  if (!row.automationSessionId) return true;
+  if (row.sessionStatus === "running" && row.cutoffAt && row.cutoffAt > now) return true;
+  const error = row.cutoffAt && row.cutoffAt <= now ? "overnight_window_ended" : "overnight_session_not_running";
+  await env.DB.batch([
+    env.DB.prepare(`update creative_jobs set status = 'cancelled', error = ?, execution_stage = 'cancelled',
+      stage_updated_at = ?, cancelled_at = ?, completed_at = ?, runner_lease_until = null, next_reconcile_at = null,
+      reconcile_lease_until = null, updated_at = ? where id = ? and owner_id = ? and status in ('queued', 'running')`)
+      .bind(error, now, now, now, now, jobId, runner.ownerId),
+    env.DB.prepare(`update creative_runners set active_job_id = case when active_job_id = ? then null else active_job_id end,
+      last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null`)
+      .bind(jobId, now, runner.id, runner.ownerId),
+  ]);
+  return false;
+}
+
 export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   const now = new Date();
   const nowValue = now.toISOString();
@@ -172,8 +194,14 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
         or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
       and (timeout_at is null or timeout_at > ?)
-    order by case when runner_id = ? then 0 else 1 end, created_at limit 1`)
-    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, runner.id, nowValue, runner.id, nowValue, runner.id).first<{ id: string }>();
+      and (not_before is null or not_before <= ?)
+      and (automation_session_id is null or exists (
+        select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
+          and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
+      ))
+    order by case when status = 'running' and runner_id = ? then 0 when status = 'running' then 1 else 2 end,
+      priority desc, created_at limit 1`)
+    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, runner.id, nowValue, runner.id, nowValue, nowValue, nowValue, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();
   const claimed = await env.DB.prepare(`update creative_jobs set status = 'running', progress = max(progress, 5),
@@ -182,8 +210,14 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
     where id = ? and owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
       and (json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') is null
         or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
-      and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)`)
-    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, runner.id, nowValue, runner.id).run();
+      and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
+      and (timeout_at is null or timeout_at > ?) and (not_before is null or not_before <= ?)
+      and (automation_session_id is null or exists (
+        select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
+          and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
+      ))`)
+    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, runner.id, nowValue, runner.id,
+      nowValue, nowValue, nowValue).run();
   if (!claimed.meta.changes) return null;
   await env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
     .bind(candidate.id, nowValue, runner.id, runner.ownerId).run();
@@ -202,6 +236,11 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
   const upstreamId = boundedText(input.upstreamId, 120) || null;
   const stage = RUNNER_STAGES.has(input.stage as NonNullable<Job["executionStage"]>) ? input.stage as NonNullable<Job["executionStage"]> : null;
   const now = new Date();
+  if (!await automationJobMayContinue(env, runner, jobId, now.toISOString())) {
+    const job = await jobById(env, runner.ownerId, jobId);
+    if (!job) throw new Error("job_not_found");
+    return { continue: false, job };
+  }
   if (input.promptEnhancement) {
     const current = await jobById(env, runner.ownerId, jobId);
     if (!current) throw new Error("job_not_found");
@@ -219,11 +258,19 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
     const promptProfileId = boundedText(input.promptEnhancement.promptProfileId, 100);
     const targetModel = boundedText(input.promptEnhancement.targetModel, 100);
     const outputFormat = boundedText(input.promptEnhancement.outputFormat, 40);
-    const expectedProfile = musicPromptProfileForIdentity({
-      name: current.settingsStamp.workflow?.name,
-      models: current.settingsStamp.models,
-      parameters: Object.keys(current.settingsStamp.parameters).map((parameterId) => ({ id: parameterId, label: parameterId })),
-    });
+    let expectedProfile = current.settingsStamp.musicPromptProfile;
+    if (!expectedProfile) {
+      const workflow = current.settingsStamp.workflow;
+      if (!workflow) throw new Error("invalid_song_prompt_enhancement");
+      const plan = await workflowExecutionPlan(env, runner.ownerId, workflow.workflowId, workflow.revisionId);
+      expectedProfile = musicPromptProfileForIdentity({
+        name: plan.workflow.name,
+        description: plan.workflow.description,
+        sourceFileName: plan.workflow.sourceFileName,
+        models: plan.workflow.currentRevision.models,
+        parameters: plan.workflow.currentRevision.parameters,
+      });
+    }
     const existing = current.settingsStamp.promptEnhancement;
     const idempotent = existing?.comfyPromptId === comfyPromptId && existing.enhancedPrompt === enhancedPrompt;
     const parameterSource = Object.prototype.hasOwnProperty.call(current.settingsStamp.parameters, parameterId)
@@ -269,8 +316,12 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
       };
       const updated = await env.DB.prepare(`update creative_jobs set prompt = ?, settings_stamp_json = ?, execution_stage = 'enhancing-prompt',
         stage_updated_at = ?, updated_at = ? where id = ? and owner_id = ? and runner_id = ?
-        and execution_target = 'local-comfyui' and status = 'running'`)
-        .bind(enhancedPrompt, JSON.stringify(settingsStamp), now.toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id).run();
+        and execution_target = 'local-comfyui' and status = 'running'
+        and (automation_session_id is null or exists (
+          select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
+            and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
+        ))`)
+        .bind(enhancedPrompt, JSON.stringify(settingsStamp), now.toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id, now.toISOString()).run();
       if (!updated.meta.changes) throw new Error("runner_job_not_completable");
     }
   }
@@ -278,11 +329,16 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
     env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?),
       execution_stage = coalesce(?, execution_stage), stage_updated_at = case when ? is null then stage_updated_at else ? end,
       runner_lease_until = ?, updated_at = ?
-      where id = ? and owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'`)
-      .bind(progress, upstreamId, stage, stage, now.toISOString(), new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id),
+      where id = ? and owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'
+        and (automation_session_id is null or exists (
+          select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
+            and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
+        ))`)
+      .bind(progress, upstreamId, stage, stage, now.toISOString(), new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id, now.toISOString()),
     env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null")
       .bind(jobId, now.toISOString(), runner.id, runner.ownerId),
   ]);
+  if (!changed.meta.changes) await automationJobMayContinue(env, runner, jobId, now.toISOString());
   const job = await jobById(env, runner.ownerId, jobId);
   if (!job) throw new Error("job_not_found");
   return { continue: Boolean(changed.meta.changes), job };
@@ -351,7 +407,9 @@ export function isLocalRunnerRoute(route: string) {
     || route === "runner-prompt-enhancement-heartbeat" || route === "runner-prompt-enhancement-complete"
     || route === "runner-prompt-enhancement-fail"
     || route === "runner-video-script-heartbeat" || route === "runner-video-script-complete"
-    || route === "runner-video-script-fail";
+    || route === "runner-video-script-fail"
+    || route === "runner-overnight-heartbeat" || route === "runner-overnight-complete"
+    || route === "runner-overnight-fail";
 }
 
 export function localRunnerJobLabel(job: Job) {

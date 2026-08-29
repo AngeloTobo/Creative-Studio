@@ -51,6 +51,7 @@ function projectInitials(name: string) {
 }
 
 function generationArtifactName(name: string, settingsStamp: GenerationSettingsStamp) {
+  if (settingsStamp.overnight?.taskTitle) return settingsStamp.overnight.taskTitle;
   return settingsStamp.videoVariant ? `${name} · ${videoGenerationVariantLabel(settingsStamp.videoVariant.role)}` : name;
 }
 
@@ -664,6 +665,7 @@ export type BackgroundJob = JobRow & {
   workflowRevisionId: string | null;
   runnerId: string | null;
   runnerLeaseUntil: string | null;
+  automationSessionId: string | null;
 };
 
 const PUBLIC_JOB_COLUMNS = `id, project_id as projectId, dna_artifact_id as dnaArtifactId, capability, modality,
@@ -677,7 +679,7 @@ const BACKGROUND_JOB_COLUMNS = `${PUBLIC_JOB_COLUMNS}, owner_id as ownerId, upst
   next_reconcile_at as nextReconcileAt, timeout_at as timeoutAt, reconcile_lease_until as reconcileLeaseUntil,
   last_reconcile_error as lastReconcileError, cancelled_at as cancelledAt, execution_target as executionTarget,
   workflow_id as workflowId, workflow_revision_id as workflowRevisionId, runner_id as runnerId,
-  runner_lease_until as runnerLeaseUntil`;
+  runner_lease_until as runnerLeaseUntil, automation_session_id as automationSessionId`;
 
 function parseSettingsStamp(value: string, fallback: Omit<GenerationSettingsStamp, "schemaVersion">): GenerationSettingsStamp {
   try {
@@ -740,6 +742,9 @@ export async function createQueuedJob(
     workflowId?: string | null;
     workflowRevisionId?: string | null;
     upstreamId?: string | null;
+    priority?: number;
+    notBefore?: string | null;
+    automationSessionId?: string | null;
   },
 ) {
   const existing = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -786,16 +791,24 @@ export async function createQueuedJob(
     settingsStamp,
   };
   try {
-    await env.DB.prepare(`insert into creative_jobs (
+    const automationSessionId = input.automationSessionId ? boundedText(input.automationSessionId, 100) : null;
+    const inserted = await env.DB.prepare(`insert into creative_jobs (
       id, owner_id, project_id, dna_artifact_id, capability, modality, status, progress, prompt, provider,
       upstream_id, artifact_id, retry_of_job_id, error, created_at, updated_at, started_at, execution_stage, stage_updated_at, completed_at,
       reconcile_email, idempotency_key, reconcile_attempts, next_reconcile_at, timeout_at, settings_stamp_json,
-      execution_target, workflow_id, workflow_revision_id
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, null, ?, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
+      execution_target, workflow_id, workflow_revision_id, priority, not_before, automation_session_id
+    ) select ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, null, ?, ?, null, ?, ?, null, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      where ? is null or exists (
+        select 1 from creative_overnight_sessions s where s.id = ? and s.owner_id = ? and s.project_id = ?
+          and s.status = 'running' and s.cutoff_at > ?
+      )`)
       .bind(job.id, ownerId, input.projectId, job.dnaArtifactId, job.capability, job.modality, job.status, job.progress,
         job.prompt, job.provider, job.upstreamId, job.retryOfJobId, now, now, job.executionStage, now,
         input.reconcileEmail, input.idempotencyKey, now, timeoutAt,
-        JSON.stringify(job.settingsStamp), input.executionTarget ?? "afdfw", input.workflowId ?? null, input.workflowRevisionId ?? null).run();
+        JSON.stringify(job.settingsStamp), input.executionTarget ?? "afdfw", input.workflowId ?? null, input.workflowRevisionId ?? null,
+        Math.max(0, Math.min(1_000, Math.round(input.priority ?? 100))), input.notBefore ?? null,
+        automationSessionId, automationSessionId, automationSessionId, ownerId, input.projectId, now).run();
+    if (!inserted.meta.changes) throw new Error("overnight_session_not_running");
     return { job, created: true };
   } catch (error) {
     const winner = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
@@ -973,6 +986,20 @@ const RUNNER_OUTPUT_TYPES: Record<string, { kind: Job["modality"]; extension: st
 export const MAX_RUNNER_OUTPUT_BYTES = 100 * 1024 * 1024;
 export const MAX_VIDEO_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 
+async function assertAutomationJobMayComplete(env: Env, background: BackgroundJob, now: string) {
+  if (!background.automationSessionId) return;
+  const session = await env.DB.prepare(`select status, cutoff_at as cutoffAt from creative_overnight_sessions
+    where id = ? and owner_id = ?`).bind(background.automationSessionId, background.ownerId)
+    .first<{ status: string; cutoffAt: string }>();
+  if (session?.status === "running" && session.cutoffAt > now) return;
+  const error = session && session.cutoffAt <= now ? "overnight_window_ended" : "overnight_session_not_running";
+  await env.DB.prepare(`update creative_jobs set status = 'cancelled', error = ?, execution_stage = 'cancelled',
+    stage_updated_at = ?, cancelled_at = ?, completed_at = ?, runner_lease_until = null, next_reconcile_at = null, updated_at = ?
+    where id = ? and owner_id = ? and status in ('queued', 'running')`)
+    .bind(error, now, now, now, now, background.id, background.ownerId).run();
+  throw new Error("runner_job_not_completable");
+}
+
 export async function completeLocalRunnerJob(
   env: Env,
   ownerId: string,
@@ -999,6 +1026,9 @@ export async function completeLocalRunnerJob(
   }
   if (background.status !== "running") throw new Error("runner_job_not_completable");
 
+  const completionStartedAt = new Date().toISOString();
+  await assertAutomationJobMayComplete(env, background, completionStartedAt);
+
   const artifactId = `artifact_${jobId}`;
   const safeOwner = ownerId.replace(/[^a-z0-9_-]/gi, "_").slice(0, 120);
   const key = `owners/${safeOwner}/artifacts/${artifactId}/result.${output.extension}`;
@@ -1017,23 +1047,42 @@ export async function completeLocalRunnerJob(
   const completedSettings = mapJob(background).settingsStamp;
   const now = new Date().toISOString();
   const colors = background.modality === "music" ? ["#9d174d", "#7c3aed"] : background.modality === "video" ? ["#312e81", "#db2777"] : ["#0e7490", "#a21caf"];
-  await env.DB.batch([
+  const [artifactWrite, jobWrite] = await env.DB.batch([
     env.DB.prepare(`insert or ignore into creative_artifacts (
       id, owner_id, project_id, job_id, dna_artifact_id, kind, name, status, provider, prompt,
       preview_kind, preview_url, preview_from, preview_to, upstream_media_path, parent_artifact_id,
       created_at, updated_at, retained_key, retained_content_type, retained_size, settings_stamp_json
-    ) values (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 'remote-media', ?, ?, ?, null, null, ?, ?, ?, ?, ?, ?)`)
+    ) select ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 'remote-media', ?, ?, ?, null, null, ?, ?, ?, ?, ?, ?
+      where exists (select 1 from creative_jobs j where j.id = ? and j.owner_id = ? and j.runner_id = ? and j.status = 'running'
+        and (j.automation_session_id is null or exists (
+          select 1 from creative_overnight_sessions s where s.id = j.automation_session_id and s.owner_id = j.owner_id
+            and s.status = 'running' and s.cutoff_at > ?
+        )))`)
       .bind(artifactId, ownerId, background.projectId, jobId, background.dnaArtifactId, background.modality,
         generationArtifactName(dna?.name ?? `${background.modality} artifact`, completedSettings), background.provider, background.prompt,
         `/api/creative-studio/artifacts/${artifactId}/media`, colors[0], colors[1], now, now, key, contentType,
-        retained.size, background.settingsStampJson),
+        retained.size, background.settingsStampJson, jobId, ownerId, runnerId, now),
     env.DB.prepare(`update creative_jobs set status = 'completed', progress = 100, artifact_id = ?, error = null,
       execution_stage = 'completed', stage_updated_at = ?, completed_at = coalesce(completed_at, ?), updated_at = ?, runner_lease_until = null, next_reconcile_at = null
-      where id = ? and owner_id = ? and execution_target = 'local-comfyui' and runner_id = ? and status = 'running'`)
-      .bind(artifactId, now, now, now, jobId, ownerId, runnerId),
+      where id = ? and owner_id = ? and execution_target = 'local-comfyui' and runner_id = ? and status = 'running'
+        and (automation_session_id is null or exists (
+          select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id and s.owner_id = creative_jobs.owner_id
+            and s.status = 'running' and s.cutoff_at > ?
+        ))`)
+      .bind(artifactId, now, now, now, jobId, ownerId, runnerId, now),
     env.DB.prepare("update creative_runners set active_job_id = null, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
       .bind(now, runnerId, ownerId),
   ]);
+  if (!jobWrite.meta.changes) {
+    if (created) await env.ARTIFACTS.delete(key);
+    if (artifactWrite.meta.changes) {
+      await env.DB.prepare("delete from creative_artifacts where id = ? and owner_id = ? and job_id = ?")
+        .bind(artifactId, ownerId, jobId).run();
+    }
+    const latest = await backgroundJobById(env, jobId);
+    if (latest?.status === "running") await assertAutomationJobMayComplete(env, latest, now);
+    throw new Error("runner_job_not_completable");
+  }
   const completed = await jobById(env, ownerId, jobId);
   if (!completed || completed.status !== "completed") throw new Error("runner_job_not_completable");
   await ensureTrainingExample(env, ownerId, completed, artifactId);

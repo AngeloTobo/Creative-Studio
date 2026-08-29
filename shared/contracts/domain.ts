@@ -110,6 +110,8 @@ export type GenerationSettingsStamp = {
     kind: MediaKind;
   }>;
   inputBindings?: Record<string, string>;
+  promptReference?: GenerationPromptReferenceStamp;
+  musicPromptProfile?: import("./workflows").MusicPromptProfile;
   videoVariant?: import("./creativeDna").VideoGenerationVariant;
   videoSpeech?: import("./promptEnhancements").VideoSpeechStamp;
   videoScript?: import("./videoScripts").VideoScriptStamp;
@@ -119,6 +121,25 @@ export type GenerationSettingsStamp = {
   promptEnhancement?: SongPromptEnhancementStamp | import("./promptEnhancements").VideoPromptEnhancementStamp;
   modelAdapters?: import("./modelTraining").GenerationModelAdapterBinding[];
   continuity?: import("./worlds").GenerationContinuityStamp;
+  overnight?: import("./overnight").OvernightGenerationStamp;
+};
+
+export type GenerationPromptReferenceSelection = {
+  schemaVersion: "creative-studio-prompt-reference-request/1.0";
+  purpose: "music-prompt-inspiration";
+  sourceId: string;
+  source: "upload" | "artifact";
+  kind: MediaKind;
+};
+
+export type GenerationPromptReferenceStamp = {
+  schemaVersion: "creative-studio-prompt-reference/1.0";
+  purpose: "music-prompt-inspiration";
+  projectId: string;
+  sourceId: string;
+  source: "upload" | "artifact";
+  kind: MediaKind;
+  name: string;
 };
 
 export type GenerationOutputBatch = {

@@ -22,6 +22,7 @@ import type {
   EvolutionStudy,
   SongPromptEnhancementStamp,
   GenerationOutputBatch,
+  GenerationPromptReferenceSelection,
 } from "./domain";
 import type { CreativeDnaArtifact, CreativeDnaInput, CreativeDnaTrainingAnalysis, VideoGenerationVariant } from "./creativeDna";
 import type {
@@ -57,6 +58,14 @@ import type {
 } from "./modelTraining";
 import type { ProjectProductionLoop } from "./productionLoop";
 import type { ProductionCockpit } from "./productionCockpit";
+import type {
+  CompleteOvernightPlanRequest,
+  CreateOvernightSessionRequest,
+  FailOvernightPlanRequest,
+  OvernightPlanHeartbeatRequest,
+  OvernightPlannerBundle,
+  OvernightSession,
+} from "./overnight";
 import type { VideoDurationSeconds } from "./videoDuration";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
 import type {
@@ -107,6 +116,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   modelAdapters: `${CREATIVE_STUDIO_API_PREFIX}/model-adapters`,
   productionLoops: `${CREATIVE_STUDIO_API_PREFIX}/production-loops`,
   productionCockpit: `${CREATIVE_STUDIO_API_PREFIX}/production-cockpit`,
+  overnight: `${CREATIVE_STUDIO_API_PREFIX}/overnight`,
   runners: `${CREATIVE_STUDIO_API_PREFIX}/runners`,
   runner: `${CREATIVE_STUDIO_API_PREFIX}/runner`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
@@ -124,11 +134,13 @@ export type CreativeStudioRoute =
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
   | "recipes-list" | "recipe-get" | "recipe-create" | "recipe-update" | "recipe-delete" | "recipe-evidence-create"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
+  | "overnight-list" | "overnight-create" | "overnight-pause" | "overnight-resume" | "overnight-cancel"
   | "model-training-jobs-list" | "model-training-job-create" | "model-training-job-cancel" | "model-training-dataset-review" | "model-adapter-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
   | "runner-prompt-enhancement-heartbeat" | "runner-prompt-enhancement-complete" | "runner-prompt-enhancement-fail"
   | "runner-video-script-heartbeat" | "runner-video-script-complete" | "runner-video-script-fail"
+  | "runner-overnight-heartbeat" | "runner-overnight-complete" | "runner-overnight-fail"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail"
   | "runner-model-training-dataset" | "runner-model-training-heartbeat" | "runner-model-training-complete" | "runner-model-training-fail";
 
@@ -195,6 +207,11 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/model-adapters\/[a-z0-9_]+\/review$/i.test(pathname)) return "model-adapter-review";
   if (method === "GET" && pathname === "/api/creative-studio/production-loops") return "production-loops";
   if (method === "GET" && pathname === "/api/creative-studio/production-cockpit") return "production-cockpit";
+  if (method === "GET" && pathname === "/api/creative-studio/overnight") return "overnight-list";
+  if (method === "POST" && pathname === "/api/creative-studio/overnight") return "overnight-create";
+  if (method === "POST" && /^\/api\/creative-studio\/overnight\/[a-z0-9_]+\/pause$/i.test(pathname)) return "overnight-pause";
+  if (method === "POST" && /^\/api\/creative-studio\/overnight\/[a-z0-9_]+\/resume$/i.test(pathname)) return "overnight-resume";
+  if (method === "POST" && /^\/api\/creative-studio\/overnight\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "overnight-cancel";
   if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
   if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
   if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
@@ -212,6 +229,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/runner\/video-scripts\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-video-script-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/video-scripts\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-video-script-complete";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/video-scripts\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-video-script-fail";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/overnight\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-overnight-heartbeat";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/overnight\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-overnight-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/overnight\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-overnight-fail";
   if (method === "POST" && pathname === "/api/creative-studio/runner/training/claim") return "runner-training-claim";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-training-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-training-complete";
@@ -241,6 +261,7 @@ export type StudioSnapshot = {
   mediaAssets: MediaAsset[];
   workflows: WorkflowDefinition[];
   recipes: GenerationRecipe[];
+  overnightSessions: OvernightSession[];
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
@@ -302,6 +323,7 @@ export type SubmitJobRequest = {
   videoOperation?: VideoGenerationOperation;
   evolution?: EvolutionJobContext;
   outputBatch?: GenerationOutputBatch;
+  promptReference?: GenerationPromptReferenceSelection;
   continuity?: GenerationContinuitySelection;
   promptEnhancement?: { requestId: string; basePrompt: string; appliedPrompt: string };
 };
@@ -400,6 +422,8 @@ export type SaveWorkflowRevisionResponse = { workflow: WorkflowDefinition };
 export type GenerationRecipesResponse = { recipes: GenerationRecipe[] };
 export type GenerationRecipeResponse = { recipe: GenerationRecipe };
 export type RecipeEvidenceResponse = { recipe: GenerationRecipe; evidence: RecipeEvidence };
+export type OvernightSessionsResponse = { overnightSessions: OvernightSession[] };
+export type OvernightSessionResponse = { overnightSession: OvernightSession };
 export type EnrollLocalRunnerRequest = { name: string };
 export type EnrollLocalRunnerResponse = { runner: LocalRunner; token: string; apiBase: string };
 export type RevokeLocalRunnerResponse = { runner: LocalRunner };
@@ -407,6 +431,7 @@ export type RevokeLocalRunnerResponse = { runner: LocalRunner };
 export type RunnerHeartbeatRequest = {
   version: string;
   comfyUrl: string;
+  comfyReady?: boolean;
   comfyVersion?: string | null;
   device?: string | null;
   activeJobId?: string | null;
@@ -434,6 +459,7 @@ export type RunnerJobBundle = {
 
 export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
 export type RunnerWorkClaimResponse =
+  | { kind: "overnight-plan"; bundle: OvernightPlannerBundle }
   | { kind: "prompt-enhancement"; bundle: RunnerPromptEnhancementBundle }
   | { kind: "video-script"; bundle: RunnerVideoScriptDraftBundle }
   | { kind: "generation"; bundle: RunnerJobBundle }
@@ -464,6 +490,7 @@ export type RunnerModelAdapterEvaluation = ModelAdapterEvaluation;
 export type { CreateModelTrainingJobRequest, ModelAdapterReviewDecision, ReviewModelTrainingDatasetRequest };
 export type { SaveWorkflowRevisionRequest };
 export type { CreateGenerationRecipeRequest, RecordRecipeEvidenceRequest, UpdateGenerationRecipeRequest };
+export type { CreateOvernightSessionRequest, CompleteOvernightPlanRequest, FailOvernightPlanRequest, OvernightPlanHeartbeatRequest };
 export type {
   CreateCanonReferenceRequest,
   CreateContinuityRuleRequest,

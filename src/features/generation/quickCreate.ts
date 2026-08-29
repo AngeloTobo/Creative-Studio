@@ -33,6 +33,17 @@ export function preferredQuickWorkflow(
     })[0]?.workflow ?? null;
 }
 
+/** Music references shape the authored prompt; they are not implicit renderer inputs. */
+export function quickGenerationSourceUsage<T>(
+  intent: Exclude<CreateIntent, "train">,
+  source: T | null,
+) {
+  return {
+    rendererSource: intent === "music" ? null : source,
+    promptOnly: intent === "music" && source !== null,
+  };
+}
+
 export function quickAnimationDirection(sourceEvidence: string | null | undefined) {
   const evidence = String(sourceEvidence ?? "").replace(/\s+/g, " ").trim().slice(0, 760);
   const source = evidence ? `${evidence} ` : "";

@@ -26,6 +26,7 @@ import type {
   VideoDurationSeconds,
   EvolutionJobContext,
   GenerationOutputBatch,
+  GenerationPromptReferenceSelection,
   VideoSpeechStamp,
   ReviewArtifactResponse,
   CreateModelTrainingJobRequest,
@@ -62,6 +63,8 @@ import type {
   UpdateVideoScriptDraftRequest,
   VideoScriptDraft,
   VideoScriptUse,
+  CreateOvernightSessionRequest,
+  OvernightSession,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -121,6 +124,10 @@ type StudioContextValue = {
   reviewModelAdapter: (adapterId: string, decision: ModelAdapterReviewDecision, note: string) => Promise<ReviewModelAdapterResponse>;
   enrollLocalRunner: (name: string) => Promise<EnrollLocalRunnerResponse>;
   revokeLocalRunner: (runnerId: string) => Promise<LocalRunner>;
+  createOvernightSession: (input: Omit<CreateOvernightSessionRequest, "projectId" | "dnaArtifactId" | "idempotencyKey">) => Promise<OvernightSession>;
+  pauseOvernightSession: (sessionId: string) => Promise<OvernightSession>;
+  resumeOvernightSession: (sessionId: string) => Promise<OvernightSession>;
+  cancelOvernightSession: (sessionId: string) => Promise<OvernightSession>;
   refresh: () => Promise<void>;
 };
 
@@ -135,6 +142,7 @@ export type SubmitWorkflowJobInput = {
   videoSpeech?: VideoSpeechStamp;
   evolution?: EvolutionJobContext;
   outputBatch?: GenerationOutputBatch;
+  promptReference?: GenerationPromptReferenceSelection;
   videoDurationSeconds?: VideoDurationSeconds;
   idempotencyKey?: string;
   continuity?: GenerationContinuitySelection;
@@ -146,6 +154,9 @@ const StudioContext = createContext<StudioContextValue | null>(null);
 
 function message(error: unknown) {
   if (!(error instanceof Error)) return "Creative Studio request failed";
+  if (error.message === "invalid_video_generation_variant") {
+    return "Creative Studio could not prepare this video batch. No render started; refresh Create and try again.";
+  }
   if (error.message === "image_custom_mode_required") {
     return "This image setup exceeds the fast limits. Open Create and choose Custom · can be slow only when you want that longer render.";
   }
@@ -188,6 +199,12 @@ function message(error: unknown) {
     return `ACE-Step LoRA training needs a larger GPU (${totalGiB} detected; 20 GB minimum).`;
   }
   if (error.message === "ace_step_runtime_missing") return "The official ACE-Step 1.5 runtime or Base checkpoints are missing. Run the local setup script, then restart the Local Runner.";
+  if (error.message === "overnight_studio_requires_creative_studio_worker") return "Overnight Studio needs the real Creative Studio Worker and Local Runner. Development previews cannot create overnight work.";
+  if (error.message === "overnight_session_already_active") return "This project already has an active overnight run. Open it to pause, continue, or stop it first.";
+  if (error.message === "overnight_source_free_workflow_required") return "Overnight Studio needs a prompt-only workflow for each selected media type.";
+  if (error.message === "overnight_image_fast_workflow_required") return "The selected image workflow is outside the fast overnight limits. Save a proven fast image recipe first.";
+  if (error.message === "overnight_window_ended") return "That overnight window has ended. Create a new run with a later stop time.";
+  if (error.message === "overnight_workflow_selection_required" || error.message === "overnight_recipe_mismatch") return "Choose an available proven workflow for every selected media type.";
   return error.message.replaceAll("_", " ");
 }
 
@@ -289,7 +306,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const hasActiveWork = Boolean(snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
     || snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")
-    || snapshot?.modelTrainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running"));
+    || snapshot?.modelTrainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")
+    || (snapshot?.overnightSessions ?? []).some((session) => ["armed", "planning", "running"].includes(session.status)));
 
   useEffect(() => {
     if (!hasActiveWork) return;
@@ -436,7 +454,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, mergeVideoScriptDraft]);
 
   const submitWorkflowJob = useCallback(async (input: SubmitWorkflowJobInput) => {
-    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, videoSpeech, evolution, outputBatch, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript } = input;
+    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoVariant, videoSpeech, evolution, outputBatch, promptReference, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript } = input;
     if (!activeProjectId) throw new Error("project_required");
     const dnaId = dnaArtifactId ?? activeDna?.artifactId;
     if (!dnaId) throw new Error("creative_dna_required");
@@ -460,6 +478,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       videoOperation,
       evolution,
       outputBatch,
+      promptReference,
       continuity,
       promptEnhancement,
       videoScript,
@@ -630,6 +649,30 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const enrollLocalRunner = useCallback((name: string) => transact(() => adapter.enrollLocalRunner(name)), [adapter, transact]);
   const revokeLocalRunner = useCallback((runnerId: string) => transact(() => adapter.revokeLocalRunner(runnerId)), [adapter, transact]);
+  const activeDnaArtifactId = activeDna?.artifactId ?? "";
+
+  const createOvernightSession = useCallback((input: Omit<CreateOvernightSessionRequest, "projectId" | "dnaArtifactId" | "idempotencyKey">) => {
+    if (!activeProjectId) throw new Error("project_required");
+    if (!activeDnaArtifactId) throw new Error("creative_dna_required");
+    return transact(() => adapter.createOvernightSession({
+      ...input,
+      projectId: activeProjectId,
+      dnaArtifactId: activeDnaArtifactId,
+      idempotencyKey: operationKey("overnight"),
+    }));
+  }, [activeDnaArtifactId, activeProjectId, adapter, transact]);
+
+  const pauseOvernightSession = useCallback((sessionId: string) => (
+    transact(() => adapter.pauseOvernightSession(sessionId))
+  ), [adapter, transact]);
+
+  const resumeOvernightSession = useCallback((sessionId: string) => (
+    transact(() => adapter.resumeOvernightSession(sessionId))
+  ), [adapter, transact]);
+
+  const cancelOvernightSession = useCallback((sessionId: string) => (
+    transact(() => adapter.cancelOvernightSession(sessionId))
+  ), [adapter, transact]);
 
   const createProject = useCallback(async (input: CreateProjectRequest) => {
     const project = await transact(() => adapter.createProject(input));
@@ -709,8 +752,12 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     reviewModelAdapter,
     enrollLocalRunner,
     revokeLocalRunner,
+    createOvernightSession,
+    pauseOvernightSession,
+    resumeOvernightSession,
+    cancelOvernightSession,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

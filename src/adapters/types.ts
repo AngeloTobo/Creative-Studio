@@ -50,6 +50,8 @@ import type {
   CreateVideoScriptDraftRequest,
   UpdateVideoScriptDraftRequest,
   VideoScriptDraft,
+  CreateOvernightSessionRequest,
+  OvernightSession,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -101,4 +103,8 @@ export interface StudioAdapter {
   reviewModelAdapter(adapterId: string, decision: ModelAdapterReviewDecision, note: string): Promise<ReviewModelAdapterResponse>;
   enrollLocalRunner(name: string): Promise<EnrollLocalRunnerResponse>;
   revokeLocalRunner(runnerId: string): Promise<LocalRunner>;
+  createOvernightSession(input: CreateOvernightSessionRequest): Promise<OvernightSession>;
+  pauseOvernightSession(sessionId: string): Promise<OvernightSession>;
+  resumeOvernightSession(sessionId: string): Promise<OvernightSession>;
+  cancelOvernightSession(sessionId: string): Promise<OvernightSession>;
 }

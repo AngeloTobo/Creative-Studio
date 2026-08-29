@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { musicWorkflowLyricsParameter, type WorkflowDefinition, type WorkflowParameter } from "../../shared/contracts";
-import { preferredQuickWorkflow, quickAnimationDirection, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
+import { preferredQuickWorkflow, quickAnimationDirection, quickGenerationSourceUsage, quickInputBindings, quickParameterValue, workflowCreateIntent } from "../../src/features/generation/quickCreate";
 
 function workflow(id: string, modality: WorkflowDefinition["modality"], mediaKind: WorkflowParameter["mediaKind"] = null): WorkflowDefinition {
   return {
@@ -56,6 +56,13 @@ describe("quick Create routing", () => {
     expect(quickInputBindings(parameters, {}, { id: "media_1", kind: "image" })).toEqual({ "image-video_media": "media_1" });
     expect(quickInputBindings(parameters, { "image-video_media": "media_2" }, { id: "media_1", kind: "image" })).toEqual({ "image-video_media": "media_2" });
     expect(quickInputBindings(parameters, {}, { id: "media_1", kind: "audio" })).toEqual({});
+  });
+
+  it("keeps song inspiration out of renderer media bindings", () => {
+    const inspiration = { id: "media_song_art", kind: "image" as const, source: "upload" as const };
+    expect(quickGenerationSourceUsage("music", inspiration)).toEqual({ rendererSource: null, promptOnly: true });
+    expect(quickGenerationSourceUsage("video", inspiration)).toEqual({ rendererSource: inspiration, promptOnly: false });
+    expect(quickInputBindings([], {}, quickGenerationSourceUsage("music", inspiration).rendererSource)).toEqual({});
   });
 
   it("always gives the current direction priority over a cached or imported workflow prompt", () => {

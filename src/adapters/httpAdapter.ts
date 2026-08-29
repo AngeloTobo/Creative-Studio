@@ -57,6 +57,8 @@ import {
   type CreateVideoScriptDraftResponse,
   type UpdateVideoScriptDraftRequest,
   type UpdateVideoScriptDraftResponse,
+  type CreateOvernightSessionRequest,
+  type OvernightSessionResponse,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -391,6 +393,34 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify({}),
       });
       return result.runner;
+    },
+    async createOvernightSession(input: CreateOvernightSessionRequest) {
+      const result = await request<OvernightSessionResponse>(CREATIVE_STUDIO_ROUTES.overnight, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.overnightSession;
+    },
+    async pauseOvernightSession(sessionId: string) {
+      const result = await request<OvernightSessionResponse>(`${CREATIVE_STUDIO_ROUTES.overnight}/${encodeURIComponent(sessionId)}/pause`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.overnightSession;
+    },
+    async resumeOvernightSession(sessionId: string) {
+      const result = await request<OvernightSessionResponse>(`${CREATIVE_STUDIO_ROUTES.overnight}/${encodeURIComponent(sessionId)}/resume`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.overnightSession;
+    },
+    async cancelOvernightSession(sessionId: string) {
+      const result = await request<OvernightSessionResponse>(`${CREATIVE_STUDIO_ROUTES.overnight}/${encodeURIComponent(sessionId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return result.overnightSession;
     },
   };
 }

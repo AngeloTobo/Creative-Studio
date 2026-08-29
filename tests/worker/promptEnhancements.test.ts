@@ -66,7 +66,7 @@ describe("durable video prompt enhancement", () => {
     const claimed = await result<{ kind: string; bundle: { promptEnhancement: { id: string }; source: null } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
       method: "POST",
       headers: runnerHeaders,
-      body: JSON.stringify({ version: "1.10.0", comfyUrl: "http://127.0.0.1:8188", modelTrainingProviders: [] }),
+      body: JSON.stringify({ version: "1.10.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
     }), env));
     expect(claimed).toMatchObject({ kind: "prompt-enhancement", bundle: { promptEnhancement: { id: created.promptEnhancement.id }, source: null } });
 

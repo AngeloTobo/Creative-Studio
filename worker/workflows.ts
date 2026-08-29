@@ -206,6 +206,77 @@ export async function createWorkflowRevision(env: Env, ownerId: string, workflow
   });
 }
 
+/**
+ * Creates an immutable execution-only revision without changing the model card's
+ * currently selected revision. Autonomous work must never rewrite the owner's
+ * visible workflow merely to bind a prompt and seed.
+ */
+export async function createAutomationWorkflowRevision(
+  env: Env,
+  ownerId: string,
+  workflowId: string,
+  input: SaveWorkflowRevisionRequest,
+) {
+  const workflow = await env.DB.prepare(`select ${WORKFLOW_COLUMNS} from creative_workflows where id = ? and owner_id = ?`)
+    .bind(workflowId, ownerId).first<WorkflowRow>();
+  if (!workflow) throw new Error("workflow_not_found");
+  const base = await ownedRevision(env, ownerId, workflowId, boundedText(input.baseRevisionId, 100));
+  if (!base) throw new Error("workflow_revision_not_found");
+  let graph: unknown;
+  try { graph = JSON.parse(base.graphJson); } catch { throw new Error("invalid_workflow_json"); }
+  const parameters = parseRevision(base).parameters;
+  const updated = applyWorkflowValues(graph, parameters, input.values ?? {});
+  const graphJson = JSON.stringify(updated);
+  const inspection = inspectWorkflowGraph(updated);
+  if (inspection.format !== "comfyui-api") throw new Error("workflow_api_export_required");
+  const contentHash = await digest(graphJson);
+  if (contentHash === base.contentHash) {
+    return { ...workflow, currentRevision: parseRevision(base) } satisfies WorkflowDefinition;
+  }
+  const matchingRevision = async () => env.DB.prepare(`select ${REVISION_COLUMNS} from creative_workflow_revisions
+    where owner_id = ? and workflow_id = ? and content_hash = ? order by version desc limit 1`)
+    .bind(ownerId, workflowId, contentHash).first<RevisionRow>();
+  const existing = await matchingRevision();
+  if (existing) return { ...workflow, currentRevision: parseRevision(existing) } satisfies WorkflowDefinition;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const latest = await env.DB.prepare("select max(version) as version from creative_workflow_revisions where workflow_id = ? and owner_id = ?")
+      .bind(workflowId, ownerId).first<{ version: number | null }>();
+    const version = Number(latest?.version ?? 0) + 1;
+    const revisionId = id("workflowrev");
+    const now = new Date().toISOString();
+    try {
+      await env.DB.prepare(`insert into creative_workflow_revisions (
+        id, owner_id, workflow_id, version, parent_revision_id, format, content_hash, graph_json,
+        node_count, parameters_json, models_json, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        revisionId, ownerId, workflowId, version, base.id, inspection.format, contentHash, graphJson,
+        inspection.nodeCount, JSON.stringify(inspection.parameters), JSON.stringify(inspection.models), now,
+      ).run();
+      return {
+        ...workflow,
+        currentRevision: {
+          id: revisionId,
+          workflowId,
+          version,
+          parentRevisionId: base.id,
+          format: inspection.format,
+          contentHash,
+          nodeCount: inspection.nodeCount,
+          parameters: inspection.parameters,
+          models: inspection.models,
+          createdAt: now,
+        },
+      } satisfies WorkflowDefinition;
+    } catch (error) {
+      lastError = error;
+      const winner = await matchingRevision();
+      if (winner) return { ...workflow, currentRevision: parseRevision(winner) } satisfies WorkflowDefinition;
+    }
+  }
+  throw lastError;
+}
+
 export async function workflowContent(env: Env, ownerId: string, workflowId: string, requestedRevisionId: string | null) {
   const workflow = await env.DB.prepare(`select ${WORKFLOW_COLUMNS} from creative_workflows where id = ? and owner_id = ?`)
     .bind(workflowId, ownerId).first<WorkflowRow>();

@@ -56,6 +56,7 @@ import {
   type GenerationAspectRatio,
   type GenerationRecipe,
   type GenerationContinuitySelection,
+  type GenerationPromptReferenceSelection,
   type VideoSpeechMode,
   type VideoSpeechStamp,
   type VideoScriptUse,
@@ -67,6 +68,7 @@ import { compileProjectContext } from "./projectContext";
 import {
   preferredQuickWorkflow,
   quickAnimationDirection,
+  quickGenerationSourceUsage,
   quickInputBindings,
   quickParameterValue,
   workflowCreateIntent,
@@ -89,6 +91,7 @@ import type { VideoCreateEntryMode } from "./createEntry";
 import { VideoScriptBuilderSheet } from "./VideoScriptBuilderSheet";
 import { resolveCompletedVideoScriptEditor, restoredVideoScriptEditorIsDirty } from "./videoScriptEditorState";
 import { videoScriptErrorMessage } from "./videoScriptErrorMessage";
+import { directVideoEnhancementDecision, videoPairIdForOutputBatch } from "./directVideo";
 import "./GenerationView.css";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
@@ -701,9 +704,17 @@ export function GenerationView({
   const durationParameters = generationIntent === "video" ? videoWorkflowDurationParameters(scalarParameters) : [];
   const durationParameterIds = new Set(durationParameters.map((parameter) => parameter.id));
   const bindingSource = videoOperation && quickSource ? { ...quickSource, kind: "image" as const } : quickSource;
-  const effectiveInputBindings = quickInputBindings(mediaParameters, inputBindings, bindingSource);
-  const selectedSourceConnected = !quickSource || intent === "train" || Object.values(effectiveInputBindings).includes(quickSource.id);
+  const sourceUsage = quickGenerationSourceUsage(generationIntent, bindingSource);
+  const effectiveInputBindings = quickInputBindings(mediaParameters, inputBindings, sourceUsage.rendererSource);
+  const selectedSourceConnected = !quickSource || intent === "train" || sourceUsage.promptOnly || Object.values(effectiveInputBindings).includes(quickSource.id);
   const selectedSourceCompatibilityError = Boolean(quickSource && intent !== "train" && workflow && !selectedSourceConnected);
+  const promptReference: GenerationPromptReferenceSelection | undefined = sourceUsage.promptOnly && quickSource ? {
+    schemaVersion: "creative-studio-prompt-reference-request/1.0",
+    purpose: "music-prompt-inspiration",
+    sourceId: quickSource.id,
+    source: quickSource.source,
+    kind: quickSource.kind,
+  } : undefined;
   const effectiveVideoOperation = videoOperation && quickSource?.kind === "video"
     ? { ...videoOperation, sourceId: quickSource.id, source: quickSource.source } satisfies VideoGenerationOperation
     : null;
@@ -1863,14 +1874,14 @@ export function GenerationView({
             exactPrompt: exactAuthoredVideoDirection,
             enhancedPrompt: authoredProjectDirection,
             dimensions: dna.shared,
-            pairId: `video_pair_${attemptOutputBatchId.replace(/^output_batch_/, "")}_board`,
+            pairId: videoPairIdForOutputBatch(attemptOutputBatchId, "board"),
             boardSeed: generationBatchSeed(attemptOutputBatchId, 0),
             hasSource: Boolean(quickSource),
           })
           : Array.from({ length: Math.ceil(outputCount / 2) }, (_, pairIndex) => createVideoGenerationVersions({
             direction: authoredProjectDirection,
             dimensions: dna.shared,
-            pairId: `video_pair_${attemptOutputBatchId.replace(/^output_batch_/, "")}_${pairIndex + 1}`,
+            pairId: videoPairIdForOutputBatch(attemptOutputBatchId, pairIndex + 1),
             discoverySeed: generationBatchSeed(attemptOutputBatchId, pairIndex * 2 + 1),
             hasSource: Boolean(quickSource),
           })).flat().slice(0, outputCount);
@@ -1955,6 +1966,7 @@ export function GenerationView({
             index: index + 1,
             count: outputCount,
           } : undefined,
+          promptReference,
           continuity: continuitySelection,
         });
       }
@@ -2022,7 +2034,25 @@ export function GenerationView({
         stopAutoStart(`Gemma could not prepare the Enhanced version${activePromptEnhancement.error ? `: ${activePromptEnhancement.error}` : "."} Your image and exact prompt are unchanged.`);
         return;
       }
-      if (activePromptEnhancement?.status === "completed" && promptEnhancementMatchesWorkflow && activePromptEnhancement.enhancedPrompt) {
+      const completedEnhancementDecision = directVideoEnhancementDecision({
+        completed: activePromptEnhancement?.status === "completed",
+        contextMatches: promptEnhancementMatchesWorkflow,
+        sourcePrompt: activePromptEnhancement?.sourcePrompt ?? "",
+        enhancedPrompt: activePromptEnhancement?.enhancedPrompt,
+        currentPrompt: direction,
+      });
+      if (completedEnhancementDecision === "apply" && activePromptEnhancement?.enhancedPrompt) {
+        const completedEnhancement = activePromptEnhancement;
+        void Promise.resolve().then(() => {
+          setOriginalVideoDirection((current) => current ?? completedEnhancement.sourcePrompt);
+          setDirection(completedEnhancement.enhancedPrompt!);
+          setAppliedPromptEnhancementId(completedEnhancement.id);
+          setNotice("Gemma 4 enhancement applied. Preparing the four-way video board now.");
+        });
+        return;
+      }
+      if (completedEnhancementDecision === "stop-edited") {
+        stopAutoStart("Gemma finished the four-way enhancement, but your prompt changed while it was running. Your edit was kept. Use the enhanced prompt, or enhance your edited prompt again.");
         return;
       }
       if (!promptEnhancementPending && !autoEnhancementAttempted.current) {
@@ -2033,7 +2063,7 @@ export function GenerationView({
     }
     autoStartRequested.current = false;
     void queueWorkflowRef.current(true);
-  }, [activePromptEnhancement, busy, directionReady, fourWayEnhancementReady, outputCount, outputCountSeedBlocked, promptEnhancementAvailable, promptEnhancementMatchesWorkflow, promptEnhancementPending, snapshot, uiOnlyDevelopment, videoSpeechReady, workflow, workflowPromptParameter, workflowReady]);
+  }, [activePromptEnhancement, busy, direction, directionReady, fourWayEnhancementReady, outputCount, outputCountSeedBlocked, promptEnhancementAvailable, promptEnhancementMatchesWorkflow, promptEnhancementPending, snapshot, uiOnlyDevelopment, videoSpeechReady, workflow, workflowPromptParameter, workflowReady]);
 
   const startWorkflowGeneration = async () => {
     if (!fourWayBoardRequested || fourWayEnhancementReady) {
@@ -2053,8 +2083,20 @@ export function GenerationView({
     }
     autoStartRequested.current = true;
     autoEnhancementAttempted.current = false;
-    if (activePromptEnhancement?.status === "completed" && promptEnhancementMatchesWorkflow && activePromptEnhancement.enhancedPrompt) {
+    const completedEnhancementDecision = directVideoEnhancementDecision({
+      completed: activePromptEnhancement?.status === "completed",
+      contextMatches: promptEnhancementMatchesWorkflow,
+      sourcePrompt: activePromptEnhancement?.sourcePrompt ?? "",
+      enhancedPrompt: activePromptEnhancement?.enhancedPrompt,
+      currentPrompt: direction,
+    });
+    if (completedEnhancementDecision === "apply") {
       applyCompletedVideoPromptEnhancement();
+      return;
+    }
+    if (completedEnhancementDecision === "stop-edited") {
+      autoStartRequested.current = false;
+      setLocalError("Gemma finished the four-way enhancement, but your prompt changed while it was running. Your edit was kept. Use the enhanced prompt, or enhance your edited prompt again.");
       return;
     }
     if (!promptEnhancementPending) {
@@ -2455,7 +2497,10 @@ export function GenerationView({
             </div>
             {fourWayBoardRequested ? <div className="quick-four-way-roles" aria-label="Four-way video roles"><span><b>Exact</b> your motion</span><span><b>Enhanced</b> local Gemma</span><span><b>Left Field</b> new direction</span><span><b>Awe</b> beautiful strange</span></div> : null}
           </div> : null}
-          <div className="quick-generate-dock"><span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || !videoSpeechReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void startWorkflowGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button></div>
+          <div className={`quick-generate-dock${localError || error ? " has-error" : ""}`}>
+            {localError || error ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{localError || error}</small></span></div> : null}
+            <span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || !videoSpeechReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void startWorkflowGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button>
+          </div>
           {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
         </>}
       </section>

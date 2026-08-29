@@ -11,6 +11,7 @@ import { StudioView as StudioHub } from "../features/studio/StudioView";
 import type { ProductionCockpitAction } from "../../shared/contracts";
 import type { VideoCreateEntryMode } from "../features/generation/createEntry";
 import type { CreateIntent } from "../features/generation/quickCreate";
+import { MorningReviewSheet, OvernightSetupSheet } from "../features/overnight";
 
 const VIEWS = new Set<StudioView>(["portal", "dna", "work", "studio", "cockpit", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings", "system"]);
 
@@ -32,7 +33,7 @@ function useResponsive() {
 }
 
 export function App() {
-  const { snapshot, loading, error, activeProjectId, setActiveProjectId } = useStudio();
+  const { snapshot, loading, error, activeProjectId, activeDna, setActiveProjectId, createOvernightSession } = useStudio();
   const [view, setView] = useState<StudioView>(hashView);
   const [cockpitTarget, setCockpitTarget] = useState<ProductionCockpitAction | null>(null);
   const [videoExtensionArtifactId, setVideoExtensionArtifactId] = useState("");
@@ -43,6 +44,8 @@ export function App() {
   const [videoCreateEntryMode, setVideoCreateEntryMode] = useState<VideoCreateEntryMode>("standard");
   const [trainingSourceIds, setTrainingSourceIds] = useState<string[]>([]);
   const [trainingPath, setTrainingPath] = useState<"analyze" | "model">("analyze");
+  const [overnightOpen, setOvernightOpen] = useState(false);
+  const [overnightReviewSessionId, setOvernightReviewSessionId] = useState("");
   const mobile = useResponsive();
   useEffect(() => {
     const update = () => {
@@ -173,7 +176,7 @@ export function App() {
     />;
     if (!activeProjectId && view !== "work" && view !== "cockpit" && view !== "queue") return studio;
     switch (view) {
-      case "portal": return <PortalView navigate={navigate} onCreate={openHomeCreate} onTrain={openHomeTraining} />;
+      case "portal": return <PortalView navigate={navigate} onCreate={openHomeCreate} onTrain={openHomeTraining} onOvernight={() => setOvernightOpen(true)} onOvernightReview={setOvernightReviewSessionId} />;
       case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${createSourceId}:${createIntent ?? ""}:${createAutoStart}:${videoCreateEntryMode}:${trainingSourceIds.join(",")}:${trainingPath}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} initialSourceId={createSourceId || undefined} initialCreateIntent={createIntent} initialAutoStart={createAutoStart} initialVideoCreateMode={videoCreateEntryMode} initialTrainingAssetIds={trainingSourceIds} initialTrainingPath={trainingPath} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "work":
       case "cockpit":
@@ -190,6 +193,7 @@ export function App() {
         onEvolve={openEvolution}
         onAnimate={(sourceId) => openHomeCreate("video", sourceId, true)}
         onAnimateFourWay={openFourWayAnimation}
+        onReviewOvernight={setOvernightReviewSessionId}
       />;
       case "studio":
       case "media":
@@ -205,5 +209,9 @@ export function App() {
 
   if (loading) return <div className="studio-loading"><div className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></div><strong>Opening Creative Studio</strong></div>;
 
-  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-only metadata</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{content}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{content}</DesktopShell>}</>;
+  const reviewSession = (snapshot?.overnightSessions ?? []).find((session) => session.id === overnightReviewSessionId) ?? null;
+  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-only metadata</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{content}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{content}</DesktopShell>}
+    <OvernightSetupSheet open={overnightOpen} projectId={activeProjectId} dnaArtifactId={activeDna?.artifactId ?? null} onClose={() => setOvernightOpen(false)} onArm={createOvernightSession} />
+    <MorningReviewSheet open={Boolean(overnightReviewSessionId)} session={reviewSession} onClose={() => setOvernightReviewSessionId("")} />
+  </>;
 }
