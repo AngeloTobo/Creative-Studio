@@ -11,6 +11,8 @@ import {
   VIDEO_MEGAPIXEL_PRESETS,
   FAST_IMAGE_MAX_STEPS,
   assessImagePerformance,
+  assessVideoPerformance,
+  canonicalGenerationPerformanceParameters,
   analyzeGenerationWorkload,
   compileVideoPromptWithSpeech,
   createFourWayVideoGenerationVersions,
@@ -87,7 +89,14 @@ import {
   type GenerationGoal,
   type GenerationOutputCount,
 } from "./generationGoals";
-import type { VideoCreateEntryMode } from "./createEntry";
+import {
+  ONE_CLICK_VIDEO_MEGAPIXELS,
+  oneClickVideoSettings,
+  videoPerformanceModeForArmedConsent,
+  videoRenderConsentSignature,
+  videoRenderFrameCount,
+  type VideoCreateEntryMode,
+} from "./createEntry";
 import { VideoScriptBuilderSheet } from "./VideoScriptBuilderSheet";
 import { resolveCompletedVideoScriptEditor, restoredVideoScriptEditorIsDirty } from "./videoScriptEditorState";
 import { videoScriptErrorMessage } from "./videoScriptErrorMessage";
@@ -286,11 +295,13 @@ export function GenerationView({
     : initialEvolutionSource?.kind === "audio" ? "music" : "image");
   const autoAnimate = Boolean(initialAutoStart && initialIntent === "video" && initialDirectSource?.kind === "image");
   const autoFourWay = autoAnimate && initialVideoCreateMode === "four-way";
+  const initialVideoSettings = initialIntent === "video" ? oneClickVideoSettings(initialVideoCreateMode) : null;
   const initialDirection = autoAnimate
     ? quickAnimationDirection(initialDirectArtifact?.prompt ?? initialDirectDescription)
     : initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "";
   const autoStartRequested = useRef(autoAnimate);
   const autoEnhancementAttempted = useRef(false);
+  const armedVideoRenderSignature = useRef("");
   const queueWorkflowRef = useRef<(openQueueAfter?: boolean) => Promise<void>>(async () => undefined);
   const requestVideoPromptEnhancementRef = useRef<() => Promise<void>>(async () => undefined);
   const directionInitialized = useRef(Boolean(initialVideoSource || initialEvolutionSource || initialDirectSource));
@@ -326,10 +337,11 @@ export function GenerationView({
   const [workflowValues, setWorkflowValues] = useState<Record<string, WorkflowScalar>>({});
   const [valuesRevisionId, setValuesRevisionId] = useState("");
   const [imagePerformanceMode, setImagePerformanceMode] = useState<ImagePerformanceMode>("fast-default");
-  const [videoDurationSeconds, setVideoDurationSeconds] = useState<VideoDurationSeconds>(5);
-  const [outputCount, setOutputCount] = useState<GenerationOutputCount>(autoFourWay ? 4 : initialIntent === "video" ? 2 : 1);
+  const [videoDurationSeconds, setVideoDurationSeconds] = useState<VideoDurationSeconds>(initialVideoSettings?.durationSeconds ?? 5);
+  const [outputCount, setOutputCount] = useState<GenerationOutputCount>(initialVideoSettings?.outputCount ?? (autoFourWay ? 4 : initialIntent === "video" ? 2 : 1));
   const [canvasAspectRatio, setCanvasAspectRatio] = useState<GenerationAspectRatio | null>(null);
-  const [canvasMegapixels, setCanvasMegapixels] = useState<number | null>(null);
+  const [canvasMegapixels, setCanvasMegapixels] = useState<number | null>(initialVideoSettings?.megapixels ?? null);
+  const [heavyRenderConfirmationOpen, setHeavyRenderConfirmationOpen] = useState(false);
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [trainingEligible, setTrainingEligible] = useState(true);
@@ -440,7 +452,13 @@ export function GenerationView({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      const hasIncomingAction = Boolean(initialVideoSource || initialEvolutionSource || initialDirectSource || initialCreateIntent);
+      const hasIncomingAction = Boolean(
+        initialVideoExtensionArtifactId
+        || initialEvolutionSourceId
+        || initialSourceId
+        || initialCreateIntent
+        || initialAutoStart,
+      );
       if (!hasIncomingAction && latestSession) {
         const settings = latestSession.graphicalSettings;
         const restoredWorkflow = latestSession.workflowId
@@ -545,7 +563,22 @@ export function GenerationView({
       // replay to initialize the same project when the first microtask was cancelled.
       if (!sessionReadyRef.current && sessionProjectRef.current === activeProjectId) sessionProjectRef.current = "";
     };
-  }, [activeProjectId, initialCreateIntent, initialDirectSource, initialEvolutionSource, initialVideoSource, latestSession, workflows]);
+  }, [activeProjectId, initialAutoStart, initialCreateIntent, initialDirectSource, initialEvolutionSource, initialEvolutionSourceId, initialSourceId, initialVideoExtensionArtifactId, initialVideoSource, latestSession, workflows]);
+
+  useEffect(() => {
+    if (!autoAnimate) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const safe = oneClickVideoSettings(initialVideoCreateMode);
+      setVideoDurationSeconds(safe.durationSeconds);
+      setCanvasMegapixels(safe.megapixels);
+      setOutputCount(safe.outputCount);
+      armedVideoRenderSignature.current = "";
+      setHeavyRenderConfirmationOpen(false);
+    });
+    return () => { cancelled = true; };
+  }, [autoAnimate, initialVideoCreateMode]);
 
   const sourceIntent = intent === "train" ? "image" : intent;
   const compatibleSourceKinds = new Set<QuickSourceKind>(workflows
@@ -955,7 +988,8 @@ export function GenerationView({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [activePromptEnhancement, direction, promptEnhancementMatchesWorkflow]);
-  const performanceParameters = Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameterValue(parameter)]));
+  const displayedScalarParameters = scalarParameters.map((parameter) => ({ ...parameter, value: parameterValue(parameter) }));
+  const performanceParameters = canonicalGenerationPerformanceParameters(displayedScalarParameters);
   const imagePerformance = generationIntent === "image" && workflow ? assessImagePerformance(performanceParameters) : null;
   const fastImageBlocked = imagePerformanceMode === "fast-default" && Boolean(imagePerformance?.requiresExplicitCustom);
   const workflowWorkload = workflow ? analyzeGenerationWorkload({
@@ -967,7 +1001,7 @@ export function GenerationView({
     videoDurationSeconds: generationIntent === "video" ? videoDurationSeconds : undefined,
   }) : null;
   const baselineWorkload = workflow ? analyzeGenerationWorkload({
-    parameters: Object.fromEntries(scalarParameters.map((parameter) => [parameter.id, parameter.value])),
+    parameters: canonicalGenerationPerformanceParameters(scalarParameters),
     models: workflow.currentRevision.models,
     inputAssetIds: [],
     inputArtifactIds: [],
@@ -982,11 +1016,32 @@ export function GenerationView({
       : null;
   const estimatedOutputCount = generationGoalOutputCount(generationGoal, generationIntent, evolutionEnabled, outputCount);
   const runtimeEstimate = estimateGenerationRuntime(runtimeEvidence?.medianMs ?? null, workflowWorkload, baselineWorkload, estimatedOutputCount);
-  const displayedScalarParameters = scalarParameters.map((parameter) => ({ ...parameter, value: parameterValue(parameter) }));
   const displayedAspectRatio = inferGenerationAspectRatio(displayedScalarParameters);
   const displayedMegapixels = workflowWorkload?.megapixels ?? null;
   const stepsParameter = generationControls.steps[0] ?? null;
   const fpsParameter = generationControls.fps[0] ?? null;
+  const exposedVideoFps = fpsParameter && Number.isFinite(Number(parameterValue(fpsParameter)))
+    ? Number(parameterValue(fpsParameter))
+    : workflowWorkload?.fps ?? null;
+  const videoFrameCount = generationIntent === "video" ? videoRenderFrameCount({
+    durationSeconds: videoDurationSeconds,
+    fps: exposedVideoFps,
+    exposedFrames: workflowWorkload?.frames ?? null,
+  }) : null;
+  const currentVideoPerformance = generationIntent === "video" && workflow ? assessVideoPerformance({
+    parameters: performanceParameters,
+    models: workflow.currentRevision.models,
+    inputAssetIds: Object.values(effectiveInputBindings),
+    inputArtifactIds: [],
+    prompt: providerDirection,
+    videoDurationSeconds,
+  }) : null;
+  const heavyVideoRender = Boolean(currentVideoPerformance?.requiresExplicitHeavy);
+  const videoRenderSignature = generationIntent === "video" ? videoRenderConsentSignature({
+    workflowRevisionId: workflow?.currentRevision.id ?? null,
+    workload: currentVideoPerformance?.workload ?? null,
+    outputCount: estimatedOutputCount,
+  }) : "";
   const showAspectControls = generationControls.aspect.length > 0 || (generationControls.width.length > 0 && generationControls.height.length > 0);
   const showResolutionControls = generationControls.megapixels.length > 0 || (generationControls.width.length > 0 && generationControls.height.length > 0);
   const megapixelPresets = generationIntent === "video" ? VIDEO_MEGAPIXEL_PRESETS : IMAGE_MEGAPIXEL_PRESETS;
@@ -1204,6 +1259,8 @@ export function GenerationView({
     setCanvasMegapixels(null);
     setLyrics("");
     setNotice("");
+    armedVideoRenderSignature.current = "";
+    setHeavyRenderConfirmationOpen(false);
   };
 
   const chooseGraphicalValue = (parameter: WorkflowParameter, value: WorkflowScalar) => {
@@ -1257,6 +1314,9 @@ export function GenerationView({
     setVideoOperation(null);
     setSourceGalleryExpanded(false);
     resetWorkflowOverrides();
+    if (nextIntent === "video") setCanvasMegapixels(ONE_CLICK_VIDEO_MEGAPIXELS);
+    armedVideoRenderSignature.current = "";
+    setHeavyRenderConfirmationOpen(false);
   };
 
   const chooseGenerationGoal = (nextGoal: GenerationGoal) => {
@@ -1290,9 +1350,11 @@ export function GenerationView({
     setValuesRevisionId("");
     setImagePerformanceMode("fast-default");
     setCanvasAspectRatio(null);
-    setCanvasMegapixels(null);
+    setCanvasMegapixels(generationIntent === "video" ? ONE_CLICK_VIDEO_MEGAPIXELS : null);
     setLyrics("");
     setNotice("");
+    armedVideoRenderSignature.current = "";
+    setHeavyRenderConfirmationOpen(false);
   };
 
   const requestVideoPromptEnhancement = async () => {
@@ -1686,8 +1748,47 @@ export function GenerationView({
     });
   };
 
+  const requireHeavyRenderConfirmation = () => {
+    if (!heavyVideoRender || armedVideoRenderSignature.current === videoRenderSignature) return false;
+    autoStartRequested.current = false;
+    setHeavyRenderConfirmationOpen(true);
+    setLocalError("");
+    setNotice("Review and confirm this heavier local render before it enters the queue.");
+    return true;
+  };
+
+  const videoPerformanceModeForSubmission = (submittedWorkflow: WorkflowDefinition) => {
+    if (generationIntent !== "video") return undefined;
+    const submittedParameters = canonicalGenerationPerformanceParameters(submittedWorkflow.currentRevision.parameters);
+    const submittedPerformance = assessVideoPerformance({
+      parameters: submittedParameters,
+      models: submittedWorkflow.currentRevision.models,
+      inputAssetIds: Object.values(effectiveInputBindings),
+      inputArtifactIds: [],
+      prompt: providerDirection,
+      videoDurationSeconds,
+    });
+    const currentWorkload = currentVideoPerformance?.workload ?? null;
+    if (JSON.stringify(submittedPerformance.workload) !== JSON.stringify(currentWorkload)) {
+      throw new Error("video_performance_revision_mismatch");
+    }
+    const mode = videoPerformanceModeForArmedConsent({
+      requiresExplicitHeavy: submittedPerformance.requiresExplicitHeavy,
+      currentSignature: videoRenderSignature,
+      armedSignature: armedVideoRenderSignature.current,
+    });
+    if (!mode) throw new Error("video_heavy_mode_required");
+    return mode;
+  };
+
+  const clearHeavyRenderConfirmation = () => {
+    armedVideoRenderSignature.current = "";
+    setHeavyRenderConfirmationOpen(false);
+  };
+
   const queueWorkflow = async (openQueueAfter = false) => {
     if (!workflow || !workflowReady) return;
+    if (requireHeavyRenderConfirmation()) return;
     setLocalError("");
     if (continuityTooLarge) {
       setLocalError("This World continuity cannot fit without omitting canon. Select fewer elements, then generate again.");
@@ -1845,6 +1946,7 @@ export function GenerationView({
             dnaArtifactId: dna.artifactId,
             videoOperation: effectiveVideoOperation ?? undefined,
             performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
+            videoPerformanceMode: videoPerformanceModeForSubmission(branchWorkflow),
             videoVariant: variant,
             videoSpeech: compiledSpeech?.speech,
             videoScript: videoScriptUse,
@@ -1864,6 +1966,7 @@ export function GenerationView({
         videoBatchAttemptRef.current = { id: nextVideoPairId, signature: "" };
         setEvolutionStudyId(nextEvolutionStudyId);
         setVideoPairId(nextVideoPairId);
+        clearHeavyRenderConfirmation();
         completeCreativeSession();
         if (openQueueAfter) onQueued();
         return;
@@ -1914,6 +2017,7 @@ export function GenerationView({
             expectedPrompt: prompt,
             dnaArtifactId: dna.artifactId,
             videoOperation: effectiveVideoOperation ?? undefined,
+            videoPerformanceMode: videoPerformanceModeForSubmission(outputWorkflow),
             videoVariant: output.variant,
             videoSpeech: compiledSpeech.speech,
             videoScript: videoScriptUse,
@@ -1939,6 +2043,7 @@ export function GenerationView({
         const nextOutputBatchId = `output_batch_${crypto.randomUUID()}`;
         outputBatchAttemptRef.current = { id: nextOutputBatchId, signature: "" };
         setOutputBatchId(nextOutputBatchId);
+        clearHeavyRenderConfirmation();
         completeCreativeSession();
         if (openQueueAfter) onQueued();
         return;
@@ -1959,6 +2064,7 @@ export function GenerationView({
           expectedPrompt: providerDirection,
           dnaArtifactId: dna.artifactId,
           performanceMode: generationIntent === "image" ? imagePerformanceMode : undefined,
+          videoPerformanceMode: videoPerformanceModeForSubmission(outputWorkflow),
           idempotencyKey: generationBatchIdempotencyKey(attemptOutputBatchId, `output_${index + 1}`),
           outputBatch: generationIntent === "image" ? {
             schemaVersion: "creative-studio-output-batch/1.0",
@@ -2066,6 +2172,7 @@ export function GenerationView({
   }, [activePromptEnhancement, busy, direction, directionReady, fourWayEnhancementReady, outputCount, outputCountSeedBlocked, promptEnhancementAvailable, promptEnhancementMatchesWorkflow, promptEnhancementPending, snapshot, uiOnlyDevelopment, videoSpeechReady, workflow, workflowPromptParameter, workflowReady]);
 
   const startWorkflowGeneration = async () => {
+    if (requireHeavyRenderConfirmation()) return;
     if (!fourWayBoardRequested || fourWayEnhancementReady) {
       await queueWorkflow();
       return;
@@ -2183,6 +2290,15 @@ export function GenerationView({
     displayedMegapixels ? `${displayedMegapixels.toFixed(displayedMegapixels < 1 ? 2 : 1)} MP` : null,
     generationIntent === "image" ? imagePerformanceMode === "fast-default" ? "Fast" : "Custom" : null,
   ].filter(Boolean) as string[];
+  const videoResolutionSummary = workflowWorkload?.width && workflowWorkload.height
+    ? `${Math.round(workflowWorkload.width)}x${Math.round(workflowWorkload.height)} / ${displayedMegapixels?.toFixed(2) ?? "?"} MP`
+    : displayedMegapixels !== null ? `${displayedMegapixels.toFixed(2)} MP` : "Not exposed by model";
+  const videoFrameSummary = videoFrameCount !== null
+    ? `${videoFrameCount.toLocaleString()}${exposedVideoFps ? ` @ ${exposedVideoFps} fps` : ""}`
+    : exposedVideoFps ? `${exposedVideoFps} fps / frame total not exposed` : "Not exposed by model";
+  const heavyRenderTimeSummary = runtimeEstimate && runtimeEvidence
+    ? `${durationRange(runtimeEstimate.perOutputLowMs, runtimeEstimate.perOutputHighMs)} each / ${durationRange(runtimeEstimate.totalLowMs, runtimeEstimate.totalHighMs)} total`
+    : "No measured estimate yet; the first retained run will teach Creative Studio";
   const consentedAudioCount = projectMedia.filter((asset) => asset.kind === "audio" && asset.trainingEligible).length;
   const promptEnhancementApplied = Boolean(appliedPromptEnhancement && appliedPromptEnhancementId === appliedPromptEnhancement.id);
   const promptEnhancementContextChanged = promptEnhancementApplied && !appliedPromptEnhancementMatchesContext;
@@ -2497,6 +2613,17 @@ export function GenerationView({
             </div>
             {fourWayBoardRequested ? <div className="quick-four-way-roles" aria-label="Four-way video roles"><span><b>Exact</b> your motion</span><span><b>Enhanced</b> local Gemma</span><span><b>Left Field</b> new direction</span><span><b>Awe</b> beautiful strange</span></div> : null}
           </div> : null}
+          {heavyRenderConfirmationOpen && heavyVideoRender ? <section className="quick-heavy-render-confirmation" role="alert" aria-label="Confirm heavy video render">
+            <header><Icon name="analytics" size={17} /><span><strong>Confirm this longer local render</strong><small>These settings are intentionally outside the one-click 5s / 0.20 MP fast path.</small></span></header>
+            <div className="quick-heavy-render-facts">
+              <span><small>CLIP</small><strong>{videoDurationLabel(videoDurationSeconds)}</strong></span>
+              <span><small>FRAMES</small><strong>{videoFrameSummary}</strong></span>
+              <span><small>SIZE</small><strong>{videoResolutionSummary}</strong></span>
+              <span><small>VERSIONS</small><strong>{estimatedOutputCount}</strong></span>
+            </div>
+            <p><strong>{heavyRenderTimeSummary}</strong><small>The Local Runner renders these {estimatedOutputCount} versions one after another, so later versions wait for earlier ones to finish.</small></p>
+            <footer><button type="button" className="btn btn-ghost" onClick={() => { armedVideoRenderSignature.current = ""; setHeavyRenderConfirmationOpen(false); }}>Keep editing</button><button type="button" className="btn btn-primary" onClick={() => { armedVideoRenderSignature.current = videoRenderSignature; setHeavyRenderConfirmationOpen(false); void startWorkflowGeneration(); }}><Icon name="send" size={15} /> Confirm &amp; queue</button></footer>
+          </section> : null}
           <div className={`quick-generate-dock${localError || error ? " has-error" : ""}`}>
             {localError || error ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{localError || error}</small></span></div> : null}
             <span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || !videoSpeechReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void startWorkflowGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button>

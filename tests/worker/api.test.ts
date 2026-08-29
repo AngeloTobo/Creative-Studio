@@ -2608,6 +2608,7 @@ describe("Creative Studio Worker API", () => {
             projectId: project.id,
             dnaArtifactId: dna.artifactId,
             modality: "video",
+            videoPerformanceMode: "explicit-heavy",
             videoDurationSeconds: 10,
             idempotencyKey: `video_batch_${outputBatch.count}_${index + 1}_${outputBatch.batchId}`,
             workflow: {
@@ -2697,6 +2698,7 @@ describe("Creative Studio Worker API", () => {
       projectId: project.id,
       dnaArtifactId: dna.artifactId,
       modality: "video",
+      videoPerformanceMode: "explicit-heavy",
       videoDurationSeconds: 10,
       idempotencyKey: "video_batch_rejection_guard_001",
       workflow: {
@@ -2759,6 +2761,179 @@ describe("Creative Studio Worker API", () => {
 
     const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), local)) as { snapshot: { jobs: Array<{ projectId: string }> } };
     expect(snapshot.snapshot.jobs.filter((job) => job.projectId === project.id)).toHaveLength(7);
+  });
+
+  it("authoritatively requires exact-revision consent for heavy video workloads", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Heavy video consent");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Heavy motion direction",
+      directive: "A glass figure crosses a bright threshold while the camera holds low.",
+      targetModality: "image",
+    });
+    const local = workerEnv("development");
+    const compiled = compileVideoPromptWithSpeech(
+      "A glass figure crosses a bright threshold while the camera holds low.",
+      undefined,
+      videoPromptProfileForIdentity({ name: "LTX 2.5" }),
+    );
+    const graph = JSON.stringify({
+      "1": { class_type: "PrimitiveStringMultiline", inputs: { value: compiled.prompt }, _meta: { title: "Positive Prompt" } },
+      "2": { class_type: "LTXVideo", inputs: { prompt: ["1", 0] } },
+      "3": { class_type: "PrimitiveInt", inputs: { value: 30 }, _meta: { title: "Video Duration" } },
+      "4": { class_type: "PrimitiveFloat", inputs: { value: 0.5 }, _meta: { title: "Megapixels" } },
+      "5": { class_type: "PrimitiveInt", inputs: { value: 24 }, _meta: { title: "Frame Rate" } },
+      "6": { class_type: "PrimitiveInt", inputs: { value: 721 }, _meta: { title: "Frames" } },
+      "7": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("ltx-heavy-consent.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("LTX 2.5 Heavy Consent"),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+    const submission = (overrides: Record<string, unknown> = {}) => ({
+      projectId: project.id,
+      dnaArtifactId: dna.artifactId,
+      modality: "video",
+      idempotencyKey: "heavy_video_consent_base_001",
+      workflow: {
+        workflowId: imported.workflow.id,
+        revisionId: imported.workflow.currentRevision.id,
+        inputBindings: {},
+        expectedPrompt: compiled.prompt,
+      },
+      videoSpeech: compiled.speech,
+      ...overrides,
+    });
+
+    const staleClient = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission()),
+    }), local);
+    expect(staleClient.status).toBe(409);
+    expect(await result(staleClient)).toMatchObject({ error: "video_heavy_mode_required" });
+
+    const mismatchedDuration = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission({
+        idempotencyKey: "heavy_video_consent_mismatch_001",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 5,
+      })),
+    }), local);
+    expect(mismatchedDuration.status).toBe(400);
+    expect(await result(mismatchedDuration)).toMatchObject({ error: "video_duration_revision_mismatch" });
+
+    const importVariant = async (name: string, variantGraph: string) => result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent(`${name}.json`),
+        "x-cs-file-size": String(new TextEncoder().encode(variantGraph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent(`LTX 2.5 ${name}`),
+      },
+      body: variantGraph,
+    }), local)) as Promise<{ workflow: { id: string; currentRevision: { id: string } } }>;
+    const duplicateGraph = JSON.stringify({
+      ...JSON.parse(graph) as Record<string, unknown>,
+      "8": { class_type: "PrimitiveInt", inputs: { value: 5 }, _meta: { title: "Max Duration" } },
+    });
+    const duplicate = await importVariant("Duplicate Duration", duplicateGraph);
+    const duplicateDuration = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        ...submission({ idempotencyKey: "heavy_video_duplicate_duration_001", videoPerformanceMode: "explicit-heavy" }),
+        workflow: { workflowId: duplicate.workflow.id, revisionId: duplicate.workflow.currentRevision.id, inputBindings: {}, expectedPrompt: compiled.prompt },
+      }),
+    }), local);
+    expect(duplicateDuration.status).toBe(400);
+    expect(await result(duplicateDuration)).toMatchObject({ error: "video_duration_revision_mismatch" });
+
+    const frameHeavyGraph = JSON.parse(graph) as Record<string, { inputs?: Record<string, unknown> }>;
+    frameHeavyGraph["3"].inputs!.value = 5;
+    frameHeavyGraph["4"].inputs!.value = 0.2;
+    delete frameHeavyGraph["5"];
+    const frameHeavy = await importVariant("Frame Heavy", JSON.stringify(frameHeavyGraph));
+    const frameHeavyOldClient = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        ...submission({ idempotencyKey: "heavy_video_frame_guard_001" }),
+        workflow: { workflowId: frameHeavy.workflow.id, revisionId: frameHeavy.workflow.currentRevision.id, inputBindings: {}, expectedPrompt: compiled.prompt },
+      }),
+    }), local);
+    expect(frameHeavyOldClient.status).toBe(409);
+    expect(await result(frameHeavyOldClient)).toMatchObject({ error: "video_heavy_mode_required" });
+
+    const confirmed = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission({
+        idempotencyKey: "heavy_video_consent_confirmed_001",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 30,
+      })),
+    }), local);
+    expect(confirmed.status).toBe(202);
+    const confirmedPayload = await result(confirmed) as { job: { id: string; settingsStamp: { videoDurationSeconds: number; videoPerformance: { mode: string; workflowRevisionId: string; workload: { durationSeconds: number; megapixels: number; frames: number; fps: number; requiresExplicitHeavy: boolean } } } } };
+    expect(confirmedPayload.job.settingsStamp).toMatchObject({
+      videoDurationSeconds: 30,
+      videoPerformance: {
+        mode: "explicit-heavy",
+        workflowRevisionId: imported.workflow.currentRevision.id,
+        workload: { durationSeconds: 30, megapixels: 0.5, frames: 721, fps: 24, requiresExplicitHeavy: true },
+      },
+    });
+
+    const nonVideoMode = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        idempotencyKey: "heavy_video_non_video_mode_001",
+        provider: "development-preview",
+        videoPerformanceMode: "explicit-heavy",
+      }),
+    }), local);
+    expect(nonVideoMode.status).toBe(400);
+    expect(await result(nonVideoMode)).toMatchObject({ error: "invalid_video_performance_mode" });
+
+    const cancelled = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${confirmedPayload.job.id}/cancel`, { method: "POST" }), local);
+    expect(cancelled.status).toBe(200);
+    const retried = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${confirmedPayload.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "heavy_video_retry_explicit_001" }),
+    }), local);
+    expect(retried.status).toBe(202);
+    expect(await result(retried)).toMatchObject({ job: { settingsStamp: { videoDurationSeconds: 30, videoPerformance: { mode: "explicit-heavy" } } } });
+    const reused = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${confirmedPayload.job.id}/reuse`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "heavy_video_reuse_explicit_001" }),
+    }), local);
+    expect(reused.status).toBe(202);
+    expect(await result(reused)).toMatchObject({ job: { settingsStamp: { videoDurationSeconds: 30, videoPerformance: { mode: "explicit-heavy" } } } });
+
+    const legacy = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission({
+        idempotencyKey: "heavy_video_legacy_source_001",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 30,
+      })),
+    }), local);
+    const legacyPayload = await result(legacy) as { job: { id: string; settingsStamp: Record<string, unknown> } };
+    await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${legacyPayload.job.id}/cancel`, { method: "POST" }), local);
+    const legacyStamp = { ...legacyPayload.job.settingsStamp };
+    delete legacyStamp.videoPerformance;
+    await env.DB.prepare("update creative_jobs set settings_stamp_json = ? where id = ?").bind(JSON.stringify(legacyStamp), legacyPayload.job.id).run();
+    const legacyRetry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${legacyPayload.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "heavy_video_legacy_retry_001" }),
+    }), local);
+    expect(legacyRetry.status).toBe(409);
+    expect(await result(legacyRetry)).toMatchObject({ error: "video_heavy_mode_required" });
+    const legacyReuse = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${legacyPayload.job.id}/reuse`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "heavy_video_legacy_reuse_001" }),
+    }), local);
+    expect(legacyReuse.status).toBe(409);
+    expect(await result(legacyReuse)).toMatchObject({ error: "video_heavy_mode_required" });
   });
 
   it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
@@ -2835,6 +3010,7 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "video",
+        videoPerformanceMode: "explicit-heavy",
         videoDurationSeconds: 10,
         idempotencyKey: "runner_video_missing_speech_001",
         workflow: {
@@ -2860,6 +3036,7 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "video",
+        videoPerformanceMode: "explicit-heavy",
         videoDurationSeconds: 10,
         idempotencyKey: "runner_video_mismatch_speech_001",
         workflow: {
@@ -2881,6 +3058,7 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "video",
+        videoPerformanceMode: "explicit-heavy",
         videoDurationSeconds: 10,
         idempotencyKey: "runner_video_submit_001",
         workflow: {
@@ -2913,15 +3091,26 @@ describe("Creative Studio Worker API", () => {
     }), local);
     const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
-    }), local)) as { bundle: { job: { id: string; startedAt: string; executionStage: string }; graph: Record<string, unknown>; inputs: Array<{ id: string }> } };
+    }), local)) as { bundle: { job: { id: string; startedAt: string; executionStage: string; stageUpdatedAt: string }; graph: Record<string, unknown>; inputs: Array<{ id: string }> } };
     expect(claimed.bundle.job.id).toBe(created.job.id);
     expect(claimed.bundle.job).toMatchObject({ executionStage: "preparing-inputs" });
     expect(claimed.bundle.job.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(claimed.bundle.inputs.map((asset) => asset.id)).toEqual([uploaded.asset.id]);
     expect(claimed.bundle.graph).toMatchObject({ "1": { class_type: "LoadImage" } });
-    await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
+    const renderingWithoutObservation = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
       method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 18, upstreamId: "comfy-prompt-h3-001", stage: "rendering" }),
-    }), local);
+    }), local)) as { job: { stageUpdatedAt: string; updatedAt: string } };
+    expect(renderingWithoutObservation.job.stageUpdatedAt).toBe(claimed.bundle.job.stageUpdatedAt);
+    const comfyObservationAt = new Date().toISOString();
+    const renderingObserved = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 18, stage: "rendering", comfyObservationAt }),
+    }), local)) as { job: { stageUpdatedAt: string; updatedAt: string } };
+    expect(renderingObserved.job.stageUpdatedAt).toBe(comfyObservationAt);
+    const renderingUnreachable = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/heartbeat`, {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ progress: 18, stage: "rendering" }),
+    }), local)) as { job: { stageUpdatedAt: string; updatedAt: string } };
+    expect(renderingUnreachable.job.stageUpdatedAt).toBe(comfyObservationAt);
+    expect(renderingUnreachable.job.updatedAt >= renderingUnreachable.job.stageUpdatedAt).toBe(true);
     await env.DB.prepare("update creative_jobs set runner_lease_until = ? where id = ?").bind("2020-01-01T00:00:00.000Z", created.job.id).run();
     const resumed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
@@ -2961,8 +3150,8 @@ describe("Creative Studio Worker API", () => {
     }), local);
     expect(retainedThumbnail.status).toBe(200);
     expect(values.size).toBe(3);
-    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; name: string; kind: string; preview: { posterUrl: string | null }; retention: { state: string; size: number } }>; trainingExamples: Array<{ kind: string; status: string }> };
-    expect(history.artifacts[0]).toMatchObject({ name: "H3 Motion Study · Aligned", kind: "video", preview: { posterUrl: `/api/creative-studio/artifacts/artifact_${retried.job.id}/thumbnail` }, retention: { state: "retained", size: outputBytes.byteLength } });
+    const history = await result(await routeCreativeStudioApi(request("/api/creative-studio/artifacts"), local)) as { artifacts: Array<{ id: string; name: string; kind: string; preview: { posterUrl: string | null }; retention: { state: string; size: number }; settingsStamp: { videoDurationSeconds: number; videoPerformance: { mode: string; workflowRevisionId: string } } }>; trainingExamples: Array<{ kind: string; status: string }> };
+    expect(history.artifacts[0]).toMatchObject({ name: "H3 Motion Study · Aligned", kind: "video", preview: { posterUrl: `/api/creative-studio/artifacts/artifact_${retried.job.id}/thumbnail` }, retention: { state: "retained", size: outputBytes.byteLength }, settingsStamp: { videoDurationSeconds: 10, videoPerformance: { mode: "explicit-heavy", workflowRevisionId: imported.workflow.currentRevision.id } } });
     expect(history.trainingExamples[0]).toMatchObject({ kind: "video", status: "candidate" });
     const thumbnailResponse = await routeCreativeStudioApi(request(history.artifacts[0].preview.posterUrl!), local);
     expect(thumbnailResponse.headers.get("content-type")).toBe("image/jpeg");
@@ -2975,6 +3164,8 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 10,
         idempotencyKey: "runner_video_extension_001",
         workflow: {
           workflowId: imported.workflow.id,
@@ -3071,6 +3262,7 @@ describe("Creative Studio Worker API", () => {
       "10": { class_type: "VHS_LoadVideo", inputs: { video: "prior.mp4" }, _meta: { title: "Prior generated video" } },
       "11": { class_type: "SaveVideo", inputs: { video: ["10", 0] } },
       "12": { class_type: "PrimitiveStringMultiline", inputs: { value: chainedPrompt.prompt }, _meta: { title: "Prompt" } },
+      "13": { class_type: "PrimitiveInt", inputs: { value: 5 }, _meta: { title: "Video Duration" } },
     });
     const remixWorkflow = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
       method: "POST",
@@ -3092,6 +3284,8 @@ describe("Creative Studio Worker API", () => {
         projectId: project.id,
         dnaArtifactId: dna.artifactId,
         modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 5,
         idempotencyKey: "runner_video_chain_001",
         workflow: {
           workflowId: remixWorkflow.workflow.id,

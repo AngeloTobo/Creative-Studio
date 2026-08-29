@@ -7,6 +7,7 @@ import type {
   GenerationModality,
   GenerationExecutionStage,
   ImagePerformanceMode,
+  VideoPerformanceMode,
   Job,
   MediaAsset,
   Project,
@@ -316,6 +317,7 @@ export type SubmitJobRequest = {
     expectedPrompt: string;
   };
   performanceMode?: ImagePerformanceMode;
+  videoPerformanceMode?: VideoPerformanceMode;
   videoDurationSeconds?: VideoDurationSeconds;
   videoVariant?: VideoGenerationVariant;
   videoSpeech?: VideoSpeechStamp;
@@ -470,6 +472,8 @@ export type RunnerJobHeartbeatRequest = {
   progress: number;
   upstreamId?: string | null;
   stage?: GenerationExecutionStage;
+  /** Last time queue or history returned this exact Comfy prompt. Omitted while Comfy's API is unreachable. */
+  comfyObservationAt?: string | null;
   promptEnhancement?: SongPromptEnhancementStamp & { parameterId: string };
 };
 export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };

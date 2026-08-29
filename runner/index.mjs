@@ -17,12 +17,19 @@ import {
   prepareAceStepWorkspace,
 } from "./aceStepTraining.mjs";
 
-export const RUNNER_VERSION = "1.13.0";
+export const RUNNER_VERSION = "1.15.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
 export const LOCAL_ACTIVE_POLL_INTERVAL_MS = 500;
+export const STANDARD_MEDIA_EXECUTION_TIMEOUT_MS = 20 * 60_000;
+export const EXPLICIT_HEAVY_VIDEO_EXECUTION_TIMEOUT_MS = 24 * 60 * 60_000;
 const ACTIVE_HEARTBEAT_INTERVAL_MS = 60_000;
+const COMFY_POLL_INTERVAL_MS = 2_000;
+const COMFY_PROMPT_OBSERVABILITY_GRACE_MS = 10_000;
+const COMFY_RENDER_PROGRESS = 8;
+const COMFY_FREE_RETRY_DELAY_MS = 500;
+const COMFY_FREE_SETTLE_MS = 2_000;
 
 const GEMMA_DESCRIPTION_MODEL = "gemma4_e4b_it_fp8_scaled.safetensors";
 const GEMMA_DESCRIPTION_WORKFLOW_ID = "gemma4-multimodal-description";
@@ -72,6 +79,18 @@ const GEMMA_DESCRIPTION_SETTINGS = Object.freeze({
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+function writeRunnerLine(stream, message) {
+  try {
+    stream.write(`${message}\n`);
+  } catch {
+    // A closed console must not change durable job state.
+  }
+}
+
+function runnerLogLabel(value) {
+  return String(value || "resource handoff").replace(/[\r\n]+/g, " ").trim().slice(0, 180) || "resource handoff";
+}
+
 function configPath() {
   if (process.env.CS_RUNNER_CONFIG) return process.env.CS_RUNNER_CONFIG;
   const base = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
@@ -97,6 +116,14 @@ export function resolveRunnerPollInterval(apiBase, value) {
   const fallback = local ? LOCAL_IDLE_POLL_INTERVAL_MS : MIN_IDLE_POLL_INTERVAL_MS;
   const minimum = local ? 2_000 : MIN_IDLE_POLL_INTERVAL_MS;
   return Math.max(minimum, Math.min(5 * 60_000, Number(value) || fallback));
+}
+
+export function generationExecutionTimeoutMs(job) {
+  if (job?.modality === "video" && job?.settingsStamp?.videoPerformance?.mode === "explicit-heavy") {
+    return EXPLICIT_HEAVY_VIDEO_EXECUTION_TIMEOUT_MS;
+  }
+  if (job?.modality === "image" || job?.modality === "video") return STANDARD_MEDIA_EXECUTION_TIMEOUT_MS;
+  return EXPLICIT_HEAVY_VIDEO_EXECUTION_TIMEOUT_MS;
 }
 
 async function runnerRequest(config, path, init = {}) {
@@ -1181,25 +1208,79 @@ async function submitPrompt(config, graph, jobId, outputsToExecute = null) {
   return payload.prompt_id;
 }
 
-async function assertPromptSchedulesMediaOutput(config, promptId, graph, modality) {
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    const queueResponse = await fetch(`${config.comfyUrl}/queue`, { signal: AbortSignal.timeout(10_000) });
-    if (!queueResponse.ok) throw new Error(`comfyui_queue_${queueResponse.status}`);
-    const queue = await queueResponse.json();
-    const queued = [...(queue.queue_running || []), ...(queue.queue_pending || [])]
-      .find((record) => Array.isArray(record) && record[1] === promptId);
-    if (queued) {
-      if (!comfyPromptSchedulesMediaOutput(queued, graph, modality)) throw new Error("comfyui_media_output_not_scheduled");
-      return;
+async function comfyEndpointObservation(url, label, timeoutMs) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (response.status >= 500) return { reachable: false, error: `comfyui_${label}_${response.status}` };
+    if (!response.ok) throw new Error(`comfyui_${label}_${response.status}`);
+    try {
+      return { reachable: true, value: await response.json() };
+    } catch {
+      throw new Error(`comfyui_${label}_invalid_json`);
     }
-    const historyResponse = await fetch(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, { signal: AbortSignal.timeout(10_000) });
-    if (!historyResponse.ok) throw new Error(`comfyui_history_${historyResponse.status}`);
-    const history = await historyResponse.json();
-    if (history[promptId]) {
-      if (!comfyPromptSchedulesMediaOutput(history[promptId], graph, modality)) throw new Error("comfyui_media_output_not_scheduled");
-      return;
+  } catch (error) {
+    if (!isTransientComfyPollError(error)) throw error;
+    return { reachable: false, error: `comfyui_${label}_unreachable` };
+  }
+}
+
+export async function observeComfyPrompt(config, promptId, graph, modality, options = {}) {
+  const timeoutMs = Math.max(1, Number(options.timeoutMs) || 15_000);
+  const now = options.now || Date.now;
+  const [queueResult, historyResult] = await Promise.all([
+    comfyEndpointObservation(`${config.comfyUrl}/queue`, "queue", timeoutMs),
+    comfyEndpointObservation(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, "history", timeoutMs),
+  ]);
+  const queue = queueResult.reachable && queueResult.value && typeof queueResult.value === "object"
+    ? queueResult.value : {};
+  const queueRecord = [
+    ...(Array.isArray(queue.queue_running) ? queue.queue_running : []),
+    ...(Array.isArray(queue.queue_pending) ? queue.queue_pending : []),
+  ]
+    .find((record) => Array.isArray(record) && record[1] === promptId);
+  if (queueRecord) {
+    if (!comfyPromptSchedulesMediaOutput(queueRecord, graph, modality)) throw new Error("comfyui_media_output_not_scheduled");
+    return { state: "queue", observedAt: new Date(now()).toISOString(), entry: null, error: null };
+  }
+  const history = historyResult.reachable && historyResult.value && typeof historyResult.value === "object"
+    ? historyResult.value : {};
+  const entry = history[promptId];
+  if (entry) {
+    if (!comfyPromptSchedulesMediaOutput(entry, graph, modality)) throw new Error("comfyui_media_output_not_scheduled");
+    return { state: "history", observedAt: new Date(now()).toISOString(), entry, error: null };
+  }
+  if (queueResult.reachable && historyResult.reachable) {
+    return { state: "absent", observedAt: new Date(now()).toISOString(), entry: null, error: null };
+  }
+  return {
+    state: "unreachable",
+    observedAt: null,
+    entry: null,
+    error: [queueResult.error, historyResult.error].filter(Boolean).join(",") || "comfyui_api_unreachable",
+  };
+}
+
+export async function assertPromptSchedulesMediaOutput(config, promptId, graph, modality, options = {}) {
+  const now = options.now || Date.now;
+  const wait = options.sleep || sleep;
+  const pollIntervalMs = Math.max(0, Number(options.pollIntervalMs) || COMFY_POLL_INTERVAL_MS);
+  const absentGraceMs = Math.max(0, Number.isFinite(options.absentGraceMs)
+    ? Number(options.absentGraceMs) : COMFY_PROMPT_OBSERVABILITY_GRACE_MS);
+  const observe = options.observe || observeComfyPrompt;
+  let absentSince = null;
+  while (true) {
+    const observation = await observe(config, promptId, graph, modality, options);
+    if (observation.state === "queue" || observation.state === "history") return observation;
+    const observedAt = now();
+    if (observation.state === "absent") {
+      absentSince ??= observedAt;
+      if (observedAt - absentSince >= absentGraceMs) throw new Error("comfyui_prompt_not_observable");
+    } else {
+      // Submission already returned this prompt ID. If Comfy immediately saturates its HTTP
+      // event loop, defer proof to waitForOutput instead of failing a render we cannot cancel.
+      return observation;
     }
-    await sleep(200);
+    await wait(pollIntervalMs);
   }
 }
 
@@ -1209,6 +1290,29 @@ async function cancelComfyPrompt(config, promptId) {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok && response.status !== 404) throw new Error(`comfyui_cancel_${response.status}`);
+}
+
+async function releaseTimedOutComfyPrompt(config, bundle, promptId, executionTimeoutMs, options = {}) {
+  const cancelPrompt = options.cancelPrompt || cancelComfyPrompt;
+  const freeMemory = options.freeMemory || freeComfyMemory;
+  const jobId = runnerLogLabel(bundle?.job?.id || "unknown job");
+  const safePromptId = runnerLogLabel(promptId);
+  try {
+    await cancelPrompt(config, promptId);
+    writeRunnerLine(process.stdout,
+      `[Creative Studio Runner] watchdog cancelled ${jobId} ComfyUI prompt ${safePromptId} after ${Math.round(executionTimeoutMs / 60_000)} minutes`);
+  } catch (caught) {
+    const error = caught instanceof Error ? caught.message : "comfyui_cancel_failed";
+    writeRunnerLine(process.stderr,
+      `[Creative Studio Runner] watchdog could not cancel ${jobId} ComfyUI prompt ${safePromptId}: ${runnerLogLabel(error)}`);
+  }
+  try {
+    await freeMemory(config, `watchdog timeout for ${jobId}`);
+  } catch (caught) {
+    const error = caught instanceof Error ? caught.message : "comfyui_free_failed";
+    writeRunnerLine(process.stderr,
+      `[Creative Studio Runner] watchdog memory release failed for ${jobId}: ${runnerLogLabel(error)}`);
+  }
 }
 
 async function requireJobHeartbeat(config, jobId, payload, promptId = null) {
@@ -1338,38 +1442,61 @@ export function isTransientComfyPollError(error) {
   return error?.name === "TimeoutError" || error?.name === "AbortError" || error instanceof TypeError;
 }
 
-async function waitForOutput(config, bundle, promptId) {
-  const started = Date.now();
-  let lastHeartbeat = 0;
-  while (Date.now() - started < 24 * 60 * 60_000) {
-    const elapsed = Date.now() - started;
-    if (Date.now() - lastHeartbeat >= ACTIVE_HEARTBEAT_INTERVAL_MS) {
-      const progress = Math.min(90, 10 + Math.floor(elapsed / 30_000));
-      await requireJobHeartbeat(config, bundle.job.id, { progress, stage: "rendering" }, promptId);
-      lastHeartbeat = Date.now();
-    }
-    let history;
-    try {
-      const response = await fetch(`${config.comfyUrl}/history/${encodeURIComponent(promptId)}`, { signal: AbortSignal.timeout(15_000) });
-      if (response.status >= 500) {
-        await sleep(2_000);
-        continue;
+export async function waitForOutput(config, bundle, promptId, options = {}) {
+  const now = options.now || Date.now;
+  const wait = options.sleep || sleep;
+  const observe = options.observe || observeComfyPrompt;
+  const heartbeat = options.heartbeat || ((payload) => requireJobHeartbeat(config, bundle.job.id, payload, promptId));
+  const heartbeatIntervalMs = Math.max(0, Number.isFinite(options.heartbeatIntervalMs)
+    ? Number(options.heartbeatIntervalMs) : ACTIVE_HEARTBEAT_INTERVAL_MS);
+  const pollIntervalMs = Math.max(0, Number.isFinite(options.pollIntervalMs)
+    ? Number(options.pollIntervalMs) : COMFY_POLL_INTERVAL_MS);
+  const absentGraceMs = Math.max(0, Number.isFinite(options.absentGraceMs)
+    ? Number(options.absentGraceMs) : COMFY_PROMPT_OBSERVABILITY_GRACE_MS);
+  const executionTimeoutMs = Math.max(1, Number.isFinite(options.executionTimeoutMs)
+    ? Number(options.executionTimeoutMs) : generationExecutionTimeoutMs(bundle.job));
+  const started = now();
+  let lastHeartbeat = -Infinity;
+  let lastComfyObservationAt = options.initialObservationAt || null;
+  let absentSince = null;
+  while (now() - started < executionTimeoutMs) {
+    const current = now();
+    if (current - lastHeartbeat >= heartbeatIntervalMs) {
+      const result = await heartbeat({
+        progress: COMFY_RENDER_PROGRESS,
+        stage: "rendering",
+        ...(lastComfyObservationAt ? { comfyObservationAt: lastComfyObservationAt } : {}),
+      });
+      if (result?.continue === false) {
+        await cancelComfyPrompt(config, promptId).catch(() => undefined);
+        throw new Error("creative_studio_job_cancelled");
       }
-      if (!response.ok) throw new Error(`comfyui_history_${response.status}`);
-      history = await response.json();
-    } catch (error) {
-      if (!isTransientComfyPollError(error)) throw error;
-      await sleep(2_000);
-      continue;
+      lastHeartbeat = now();
     }
-    const entry = history[promptId];
-    const error = historyError(entry);
-    if (error) throw new Error(`comfyui_execution_failed:${error}`);
-    const output = findComfyOutput(entry, bundle.job.modality, bundle.graph);
-    if (output) return output;
-    if (comfyHistoryCompleted(entry)) throw new Error("comfyui_completed_without_media_output");
-    await sleep(2_000);
+    const observation = await observe(config, promptId, bundle.graph, bundle.job.modality, options);
+    if (observation.state === "queue" || observation.state === "history") {
+      lastComfyObservationAt = observation.observedAt;
+      absentSince = null;
+      if (observation.state === "history") {
+        const entry = observation.entry;
+        const error = historyError(entry);
+        if (error) throw new Error(`comfyui_execution_failed:${error}`);
+        const output = findComfyOutput(entry, bundle.job.modality, bundle.graph);
+        if (output) return output;
+        if (comfyHistoryCompleted(entry)) throw new Error("comfyui_completed_without_media_output");
+      }
+    } else if (observation.state === "absent") {
+      absentSince ??= now();
+      if (now() - absentSince >= absentGraceMs) throw new Error("comfyui_prompt_not_observable");
+    } else {
+      // A saturated Comfy process can keep rendering while its HTTP event loop is unavailable.
+      // Preserve the last successful observation time and keep checking the Creative Studio
+      // heartbeat so an owner cancellation still interrupts this exact prompt.
+      absentSince = null;
+    }
+    await wait(pollIntervalMs);
   }
+  await releaseTimedOutComfyPrompt(config, bundle, promptId, executionTimeoutMs, options);
   throw new Error("comfyui_execution_timed_out");
 }
 
@@ -1619,7 +1746,7 @@ export async function createFirstFrameThumbnail(bytes, contentTypeValue) {
   }
 }
 
-async function executeOvernightPlanBundle(config, bundle) {
+export async function executeOvernightPlanBundle(config, bundle, options = {}) {
   const session = bundle.session;
   let promptId = null;
   let planRegistered = false;
@@ -1656,19 +1783,21 @@ async function executeOvernightPlanBundle(config, bundle) {
     }
     process.stderr.write(`[Creative Studio Runner] overnight planning failed ${session.id}: ${error}\n`);
   } finally {
-    await machineHeartbeat(config, null).catch(() => undefined);
+    if (promptId) await (options.freeMemory || freeComfyMemory)(config, `overnight planning ${session.id}`);
+    await (options.machineHeartbeat || machineHeartbeat)(config, null).catch(() => undefined);
   }
 }
 
-async function executeVideoScriptDraftBundle(config, bundle) {
+export async function executeVideoScriptDraftBundle(config, bundle, options = {}) {
   const draft = bundle.videoScriptDraft;
+  let promptId = null;
   try {
     const filename = await materializeGemmaVideoSource(config, bundle.source ?? null, draft.inputMode ?? "text-to-video", draft.id);
     const graph = buildGemmaVideoScriptGraph(draft, {
       seed: stableVideoScriptDraftSeed(draft.id),
       filename,
     });
-    const promptId = await submitPrompt(config, graph, `${draft.id}-video-script`);
+    promptId = await submitPrompt(config, graph, `${draft.id}-video-script`);
     const rawOutput = await waitForTextOutput(config, graph, promptId, async () => {
       await runnerRequest(config, `/api/creative-studio/runner/video-scripts/${draft.id}/heartbeat`, {
         method: "POST",
@@ -1694,7 +1823,8 @@ async function executeVideoScriptDraftBundle(config, bundle) {
     }
     process.stderr.write(`[Creative Studio Runner] video script failed ${draft.id}: ${error}\n`);
   } finally {
-    await machineHeartbeat(config, null).catch(() => undefined);
+    if (promptId) await (options.freeMemory || freeComfyMemory)(config, `video script generation ${draft.id}`);
+    await (options.machineHeartbeat || machineHeartbeat)(config, null).catch(() => undefined);
   }
 }
 
@@ -1717,8 +1847,9 @@ async function materializeGemmaVideoSource(config, source, inputMode, requestId)
     `cs_${requestId}_first-frame${extname(source.originalFileName) || ".png"}`);
 }
 
-async function executePromptEnhancementBundle(config, bundle) {
+export async function executePromptEnhancementBundle(config, bundle, options = {}) {
   const enhancement = bundle.promptEnhancement;
+  let promptId = null;
   try {
     const filename = await materializeGemmaVideoSource(config, bundle.source ?? null, enhancement.inputMode, enhancement.id);
     const graph = buildGemmaVideoPromptGraph(enhancement.sourcePrompt, {
@@ -1729,7 +1860,7 @@ async function executePromptEnhancementBundle(config, bundle) {
       outputFormat: enhancement.outputFormat,
       seed: stableVideoPromptEnhancementSeed(enhancement.id),
     });
-    const promptId = await submitPrompt(config, graph, `${enhancement.id}-video-prompt-enhancement`);
+    promptId = await submitPrompt(config, graph, `${enhancement.id}-video-prompt-enhancement`);
     const output = await waitForTextOutput(config, graph, promptId, async () => {
       await runnerRequest(config, `/api/creative-studio/runner/prompt-enhancements/${enhancement.id}/heartbeat`, {
         method: "POST",
@@ -1753,7 +1884,8 @@ async function executePromptEnhancementBundle(config, bundle) {
     }
     process.stderr.write(`[Creative Studio Runner] video prompt enhancement failed ${enhancement.id}: ${error}\n`);
   } finally {
-    await machineHeartbeat(config, null).catch(() => undefined);
+    if (promptId) await (options.freeMemory || freeComfyMemory)(config, `video prompt enhancement ${enhancement.id}`);
+    await (options.machineHeartbeat || machineHeartbeat)(config, null).catch(() => undefined);
   }
 }
 
@@ -1781,9 +1913,22 @@ async function executeBundle(config, bundle) {
     await requireJobHeartbeat(config, bundle.job.id, { progress: 7, stage: "submitting" });
     const mediaOutputIds = validateComfyMediaOutputGraph(graph, bundle.job.modality);
     const promptId = bundle.job.upstreamId || await submitPrompt(config, graph, bundle.job.id, mediaOutputIds);
-    await requireJobHeartbeat(config, bundle.job.id, { progress: 8, upstreamId: promptId, stage: "rendering" }, promptId);
-    await assertPromptSchedulesMediaOutput(config, promptId, graph, bundle.job.modality);
-    const output = await waitForOutput(config, { ...bundle, graph }, promptId);
+    await requireJobHeartbeat(config, bundle.job.id, { progress: 8, upstreamId: promptId, stage: "submitting" }, promptId);
+    let firstObservation;
+    try {
+      firstObservation = await assertPromptSchedulesMediaOutput(config, promptId, graph, bundle.job.modality);
+    } catch (error) {
+      await cancelComfyPrompt(config, promptId).catch(() => undefined);
+      throw error;
+    }
+    await requireJobHeartbeat(config, bundle.job.id, {
+      progress: COMFY_RENDER_PROGRESS,
+      stage: "rendering",
+      ...(firstObservation.observedAt ? { comfyObservationAt: firstObservation.observedAt } : {}),
+    }, promptId);
+    const output = await waitForOutput(config, { ...bundle, graph }, promptId, {
+      initialObservationAt: firstObservation.observedAt,
+    });
     await requireJobHeartbeat(config, bundle.job.id, { progress: 92, stage: "downloading-output" }, promptId);
     let retained = await fetchOutput(config, output);
     let outputFileName = output.filename;
@@ -2045,18 +2190,43 @@ async function prepareAceStepDataset(config, bundle) {
   process.stdout.write(`[Creative Studio Runner] prepared ${items.length} ACE-Step captions for owner review (${job.id})\n`);
 }
 
-async function freeComfyMemory(config) {
-  try {
-    await fetch(`${config.comfyUrl}/free`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ unload_models: true, free_memory: true }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    await sleep(2_000);
-  } catch {
-    // Training can continue when ComfyUI is offline, but the NVIDIA preflight remains authoritative.
+export async function freeComfyMemory(config, reason = "resource handoff", options = {}) {
+  const wait = options.sleep || sleep;
+  const stdout = options.stdout || process.stdout;
+  const stderr = options.stderr || process.stderr;
+  const attempts = Math.max(1, Math.min(3, Number(options.attempts) || 2));
+  const retryDelayMs = Math.max(0, Number.isFinite(options.retryDelayMs)
+    ? Number(options.retryDelayMs) : COMFY_FREE_RETRY_DELAY_MS);
+  const settleMs = Math.max(0, Number.isFinite(options.settleMs)
+    ? Number(options.settleMs) : COMFY_FREE_SETTLE_MS);
+  const label = runnerLogLabel(reason);
+  let lastStatus = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${config.comfyUrl}/free`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ unload_models: true, free_memory: true }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      lastStatus = response.status;
+      if (response.ok) {
+        if (settleMs) await wait(settleMs);
+        writeRunnerLine(stdout,
+          `[Creative Studio Runner] ComfyUI models and memory released after ${label} (HTTP ${response.status}, attempt ${attempt})`);
+        return { released: true, status: response.status, attempts: attempt, error: null };
+      }
+      lastError = `comfyui_free_${response.status}`;
+    } catch (caught) {
+      lastError = caught instanceof Error ? caught.message : "comfyui_free_failed";
+    }
+    if (attempt < attempts && retryDelayMs) await wait(retryDelayMs);
   }
+  const detail = lastStatus === null ? lastError : `HTTP ${lastStatus}`;
+  writeRunnerLine(stderr,
+    `[Creative Studio Runner] ComfyUI memory release unavailable after ${label} (${detail || "unknown error"}, ${attempts} attempts); durable task state is unchanged`);
+  return { released: false, status: lastStatus, attempts, error: lastError || "comfyui_free_failed" };
 }
 
 async function executeModelTrainingBundle(config, bundle) {

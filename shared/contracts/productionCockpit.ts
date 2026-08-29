@@ -65,6 +65,8 @@ export type ProductionCockpitRun = {
   queueMs: number | null;
   executionMs: number | null;
   stageLabel: string;
+  comfyObservationAgeMs: number | null;
+  comfyApiUnresponsive: boolean;
   workloadFacts: string[];
   models: string[];
   retainedBytes: number;
@@ -189,6 +191,8 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       queueMs: timing.queueMs,
       executionMs: timing.executionMs,
       stageLabel: timing.stageLabel,
+      comfyObservationAgeMs: timing.comfyObservationAgeMs,
+      comfyApiUnresponsive: timing.comfyApiUnresponsive,
       workloadFacts: workload.facts,
       models: job.settingsStamp.models,
       retainedBytes: artifact?.retention.size ?? 0,
@@ -228,6 +232,8 @@ export function deriveProductionCockpit(input: ProductionCockpitInput): Producti
       queueMs: null,
       executionMs: null,
       stageLabel: job.status === "waiting-for-runner" ? "Waiting for Local Runner" : job.status === "running" ? "Training locally" : job.status === "completed" ? "Training complete" : job.status === "failed" ? "Training failed" : "Training cancelled",
+      comfyObservationAgeMs: null,
+      comfyApiUnresponsive: false,
       workloadFacts: [
         `${job.assetIds.length} upload${job.assetIds.length === 1 ? "" : "s"}`,
         `${job.trainingExampleIds.length} accepted example${job.trainingExampleIds.length === 1 ? "" : "s"}`,

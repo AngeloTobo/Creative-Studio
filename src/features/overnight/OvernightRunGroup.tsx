@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { OvernightSession, OvernightTask } from "../../../shared/contracts";
+import { generationTiming, type OvernightSession, type OvernightTask } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import {
@@ -46,6 +46,10 @@ export function OvernightRunGroup({ session, onReview }: OvernightRunGroupProps)
     ?? tasks.find((task) => task.status === "queued")
     ?? tasks.find((task) => task.status === "planned")
     ?? null;
+  const activeJob = activeTask?.jobId ? jobs.get(activeTask.jobId) ?? null : null;
+  const activeJobTiming = activeJob
+    ? generationTiming(activeJob, snapshot?.productionCockpit.computedAt ?? new Date().toISOString())
+    : null;
   const total = Math.max(session.progress.planned, session.outputCount, 1);
   const finished = session.progress.completed + session.progress.failed + session.progress.cancelled;
   const progress = Math.max(0, Math.min(100, Math.round(finished / total * 100)));
@@ -85,7 +89,7 @@ export function OvernightRunGroup({ session, onReview }: OvernightRunGroupProps)
     {activeTask ? <div className="overnight-current-task">
       <Icon name={taskIcon(activeTask)} size={17} />
       <span><small>{activeTask.status} · {TASK_LABELS[activeTask.role]}</small><strong>{taskTitle(activeTask)}</strong></span>
-      {activeTask.jobId && jobs.get(activeTask.jobId) ? <em>{jobs.get(activeTask.jobId)?.progress}%</em> : null}
+      {activeJobTiming ? <em title={activeJobTiming.stageLabel}>{activeJobTiming.comfyApiUnresponsive ? "Comfy API unavailable" : activeJobTiming.stageLabel}</em> : null}
     </div> : null}
 
     {(actionError || session.error) ? <p className="overnight-run-error" role="alert"><Icon name="shield" size={15} /> {actionError || session.error}</p> : null}

@@ -2,9 +2,15 @@ import type { GenerationExecutionStage, GenerationSettingsStamp, Job } from "./d
 import type { WorkflowParameter, WorkflowScalar } from "./workflows";
 
 export const GENERATION_LONG_RUN_THRESHOLD_MS = 20 * 60_000;
+export const COMFY_OBSERVATION_STALE_THRESHOLD_MS = 45_000;
+export const RUNNER_HEARTBEAT_FRESH_THRESHOLD_MS = 3 * 60_000;
 export const FAST_IMAGE_MAX_PIXELS = 512 * 512;
 export const FAST_IMAGE_MAX_STEPS = 8;
 export const FAST_IMAGE_MAX_BATCH = 1;
+export const FAST_VIDEO_MAX_DURATION_SECONDS = 5;
+export const FAST_VIDEO_MAX_MEGAPIXELS = 0.2;
+export const FAST_VIDEO_MEGAPIXEL_TOLERANCE = 0.035;
+export const FAST_VIDEO_MAX_FPS = 30;
 
 export type GenerationWorkload = {
   width: number | null;
@@ -43,6 +49,8 @@ export type GenerationTiming = {
   isLongRunning: boolean;
   stage: GenerationExecutionStage;
   stageLabel: string;
+  comfyObservationAgeMs: number | null;
+  comfyApiUnresponsive: boolean;
 };
 
 export type ImagePerformanceAssessment = {
@@ -50,7 +58,14 @@ export type ImagePerformanceAssessment = {
   reasons: string[];
 };
 
-type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt" | "videoDurationSeconds">;
+export type VideoPerformanceAssessment = {
+  requiresExplicitHeavy: boolean;
+  reasons: string[];
+  workload: Pick<GenerationWorkload, "durationSeconds" | "width" | "height" | "megapixels" | "frames" | "fps">;
+};
+
+type WorkloadSource = Pick<GenerationSettingsStamp, "parameters" | "models" | "inputAssetIds" | "inputArtifactIds" | "prompt">
+  & { videoDurationSeconds?: number };
 
 const AFDFW_Z_IMAGE_PROFILE: GenerationProviderWorkloadProfile = {
   profileId: "afdfw-z-image-bridge-v1",
@@ -136,6 +151,38 @@ function roundedDimension(value: number) {
   return Math.max(64, Math.floor(value / 8) * 8);
 }
 
+function workflowParameterIdentity(parameter: WorkflowParameter) {
+  const inputName = parameter.binding.format === "comfyui-api" ? parameter.binding.inputName : "";
+  return `${parameter.id} ${parameter.label} ${inputName}`.replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase();
+}
+
+function semanticParameterMaximum(parameters: WorkflowParameter[], names: string[]) {
+  const expressions = names.map((name) => new RegExp(`(?:^|\\s)${name.replaceAll("_", "[ _]")}(?:$|\\s)`, "i"));
+  const values = parameters
+    .filter((parameter) => expressions.some((expression) => expression.test(workflowParameterIdentity(parameter))))
+    .map((parameter) => finiteNumber(parameter.value))
+    .filter((value): value is number => value !== null);
+  return values.length ? Math.max(...values) : null;
+}
+
+/** Projects semantically labelled Comfy primitive controls into stable aliases before workload analysis. */
+export function canonicalGenerationPerformanceParameters(parameters: WorkflowParameter[]) {
+  const values: GenerationSettingsStamp["parameters"] = Object.fromEntries(parameters.map((parameter) => [parameter.id, parameter.value]));
+  const aliases = {
+    width: semanticParameterMaximum(parameters, ["width"]),
+    height: semanticParameterMaximum(parameters, ["height"]),
+    megapixels: semanticParameterMaximum(parameters, ["megapixels"]),
+    fps: semanticParameterMaximum(parameters, ["fps", "frame_rate"]),
+    frames: semanticParameterMaximum(parameters, ["frames", "frame_count", "num_frames"]),
+    steps: semanticParameterMaximum(parameters, ["steps", "sampling_steps"]),
+    batch_size: semanticParameterMaximum(parameters, ["batch", "batch_size"]),
+  };
+  for (const [name, value] of Object.entries(aliases)) {
+    if (value !== null) values[`creative-studio::${name}`] = value;
+  }
+  return values;
+}
+
 /** Returns only safe workload overrides; creative controls such as prompt, seed, model, sampler, CFG, and denoise are unchanged. */
 export function fastImageParameterOverrides(parameters: WorkflowParameter[]) {
   const overrides: Record<string, WorkflowScalar> = {};
@@ -196,11 +243,66 @@ export function assessImagePerformance(parameters: GenerationSettingsStamp["para
   return { requiresExplicitCustom: reasons.length > 0, reasons };
 }
 
+/**
+ * The single authoritative fast-video boundary used by both browser and Worker.
+ * It evaluates only immutable workflow-revision parameters plus the normalized
+ * requested duration. A small megapixel tolerance covers rounded 0.2 MP
+ * portrait/widescreen dimensions without admitting the 0.5 MP tier.
+ */
+export function assessVideoPerformance(source: WorkloadSource): VideoPerformanceAssessment {
+  const analyzed = analyzeGenerationWorkload(source);
+  const inferredDuration = analyzed.durationSeconds === null && analyzed.frames !== null && analyzed.fps !== null && analyzed.fps > 0
+    ? Math.max(0, (analyzed.frames - 1) / analyzed.fps)
+    : null;
+  const durationSeconds = analyzed.durationSeconds ?? inferredDuration;
+  const reasons: string[] = [];
+  if (durationSeconds === null) reasons.push("duration is not exposed by this workflow");
+  else if (durationSeconds > FAST_VIDEO_MAX_DURATION_SECONDS) {
+    reasons.push(`${compactNumber(durationSeconds)}s exceeds the ${FAST_VIDEO_MAX_DURATION_SECONDS}s fast limit`);
+  }
+  if (analyzed.megapixels === null) reasons.push("resolution is not exposed by this workflow");
+  else if (analyzed.megapixels
+    && analyzed.megapixels > FAST_VIDEO_MAX_MEGAPIXELS + FAST_VIDEO_MEGAPIXEL_TOLERANCE) {
+    reasons.push(`${compactNumber(analyzed.megapixels)} MP exceeds the ${compactNumber(FAST_VIDEO_MAX_MEGAPIXELS)} MP fast limit`);
+  }
+  if (analyzed.fps !== null && analyzed.fps > FAST_VIDEO_MAX_FPS) {
+    reasons.push(`${compactNumber(analyzed.fps)} fps exceeds the ${FAST_VIDEO_MAX_FPS} fps fast limit`);
+  }
+  if (analyzed.frames !== null && durationSeconds !== null && analyzed.fps !== null && analyzed.fps > 0) {
+    const expectedFrames = Math.round(durationSeconds * analyzed.fps) + 1;
+    const tolerance = Math.max(2, Math.ceil(expectedFrames * 0.05));
+    if (analyzed.frames > expectedFrames + tolerance) {
+      reasons.push(`${compactNumber(analyzed.frames)} frames exceeds the ${compactNumber(durationSeconds)}s at ${compactNumber(analyzed.fps)} fps timeline`);
+    }
+  } else if (analyzed.frames !== null && durationSeconds !== null) {
+    const safeFrames = Math.round(durationSeconds * FAST_VIDEO_MAX_FPS) + 1;
+    const tolerance = Math.max(2, Math.ceil(safeFrames * 0.05));
+    if (analyzed.frames > safeFrames + tolerance) {
+      reasons.push(`${compactNumber(analyzed.frames)} frames exceeds the ${compactNumber(durationSeconds)}s fast timeline without exposed fps`);
+    }
+  }
+  return {
+    requiresExplicitHeavy: reasons.length > 0,
+    reasons,
+    workload: {
+      durationSeconds,
+      width: analyzed.width,
+      height: analyzed.height,
+      megapixels: analyzed.megapixels,
+      frames: analyzed.frames,
+      fps: analyzed.fps,
+    },
+  };
+}
+
 export function analyzeGenerationWorkload(source: WorkloadSource): GenerationWorkload {
   const width = maximumParameter(source.parameters, ["width"]);
   const height = maximumParameter(source.parameters, ["height"]);
   const declaredMegapixels = maximumParameter(source.parameters, ["megapixels"]);
-  const megapixels = width && height ? width * height / 1_000_000 : declaredMegapixels;
+  const computedMegapixels = width && height ? width * height / 1_000_000 : null;
+  const megapixels = computedMegapixels !== null && declaredMegapixels !== null
+    ? Math.max(computedMegapixels, declaredMegapixels)
+    : computedMegapixels ?? declaredMegapixels;
   const steps = maximumParameter(source.parameters, ["steps", "sampling_steps"]);
   const frames = maximumParameter(source.parameters, ["frames", "frame_count", "num_frames"]);
   const durationSeconds = source.videoDurationSeconds ?? maximumParameter(source.parameters, ["seconds", "duration", "max_duration"]);
@@ -259,13 +361,29 @@ export function generationTiming(job: Job, now = new Date().toISOString()): Gene
   const active = job.status === "queued" || job.status === "running";
   const longElapsed = executionMs ?? totalMs;
   const stage = inferredStage(job);
+  const updatedAt = new Date(job.updatedAt).getTime();
+  const stageUpdatedAt = job.stageUpdatedAt ? new Date(job.stageUpdatedAt).getTime() : Number.NaN;
+  const observationAgeMs = stage === "rendering" && Number.isFinite(stageUpdatedAt)
+    ? Math.max(0, ended - stageUpdatedAt)
+    : null;
+  const observationLagMs = Number.isFinite(updatedAt) && Number.isFinite(stageUpdatedAt)
+    ? Math.max(0, updatedAt - stageUpdatedAt)
+    : 0;
+  const runnerHeartbeatFresh = Number.isFinite(updatedAt)
+    && Math.max(0, ended - updatedAt) <= RUNNER_HEARTBEAT_FRESH_THRESHOLD_MS;
+  const comfyApiUnresponsive = active
+    && stage === "rendering"
+    && runnerHeartbeatFresh
+    && observationLagMs >= COMFY_OBSERVATION_STALE_THRESHOLD_MS;
   return {
     totalMs,
     queueMs,
     executionMs,
     isLongRunning: active && longElapsed >= GENERATION_LONG_RUN_THRESHOLD_MS,
     stage,
-    stageLabel: STAGE_LABELS[stage],
+    stageLabel: comfyApiUnresponsive ? "ComfyUI API unresponsive; GPU may still be rendering" : STAGE_LABELS[stage],
+    comfyObservationAgeMs: observationAgeMs,
+    comfyApiUnresponsive,
   };
 }
 

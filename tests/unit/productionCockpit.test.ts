@@ -238,4 +238,22 @@ describe("production cockpit", () => {
     }));
     expect(cockpit.runs.find((run) => run.id === running.id)).toMatchObject({ status: "running", durationMs: 25 * 60_000 });
   });
+
+  it("surfaces a stale Comfy observation without calling an active runner failed", () => {
+    const running = {
+      ...job("job_comfy_unresponsive", "running"),
+      createdAt: "2026-08-16T19:39:00.000Z",
+      startedAt: "2026-08-16T19:40:00.000Z",
+      updatedAt: "2026-08-16T20:04:00.000Z",
+      stageUpdatedAt: "2026-08-16T20:01:00.000Z",
+      executionStage: "rendering" as const,
+    };
+    const run = deriveProductionCockpit(input([running])).runs.find((item) => item.id === running.id);
+    expect(run).toMatchObject({
+      status: "running",
+      comfyApiUnresponsive: true,
+      comfyObservationAgeMs: 4 * 60_000,
+      stageLabel: "ComfyUI API unresponsive; GPU may still be rendering",
+    });
+  });
 });

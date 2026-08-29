@@ -1,5 +1,7 @@
 import {
   assessImagePerformance,
+  assessVideoPerformance,
+  canonicalGenerationPerformanceParameters,
   compileCreativeTasteMemory,
   deriveEvolutionStudies,
   deriveProjectProductionLoop,
@@ -31,6 +33,9 @@ import {
   type SaveWorkflowRevisionRequest,
   type StudioSnapshot,
   type SubmitJobRequest,
+  type VideoDurationSeconds,
+  type VideoPerformanceMode,
+  type VideoPerformanceStamp,
   type UpdateProjectRequest,
   type UpdateCanonReferenceRequest,
   type UpdateContinuityRuleRequest,
@@ -236,7 +241,9 @@ function statusFor(error: string) {
     || error === "model_training_job_not_cancellable" || error === "model_training_dataset_not_ready"
     || error === "model_adapter_already_reviewed" || error === "recipe_evidence_settings_immutable"
     || error === "generation_recipe_archived") return 409;
-  if (error === "runner_job_not_completable" || error === "image_custom_mode_required") return 409;
+  if (error === "runner_job_not_completable" || error === "image_custom_mode_required"
+    || error === "video_heavy_mode_required" || error === "video_heavy_mode_not_required"
+    || error === "video_performance_revision_mismatch") return 409;
   if (error === "prompt_enhancement_not_completable" || error === "prompt_enhancement_not_ready"
     || error === "prompt_enhancement_idempotency_conflict" || error === "prompt_enhancement_context_mismatch"
     || error === "prompt_enhancement_applied_prompt_mismatch") return 409;
@@ -296,6 +303,64 @@ function workflowJobModality(value: string): GenerationModality {
   if (value === "audio" || value === "music") return "music";
   if (value === "image" || value === "video") return value;
   throw new Error("workflow_modality_not_supported");
+}
+
+function videoPerformanceForWorkflow(
+  workflow: Awaited<ReturnType<typeof workflowExecutionPlan>>["workflow"],
+  requestedDuration: VideoDurationSeconds | undefined,
+  requestedMode: VideoPerformanceMode | undefined,
+): { stamp: VideoPerformanceStamp; effectiveDuration: VideoDurationSeconds | undefined } {
+  const revisionDurationValues = videoWorkflowDurationParameters(workflow.currentRevision.parameters)
+    .map((parameter) => Number(parameter.value));
+  if (!revisionDurationValues.length || revisionDurationValues.some((value) => normalizeVideoDurationSeconds(value) === null)) {
+    throw new Error("video_duration_control_missing");
+  }
+  if (new Set(revisionDurationValues).size !== 1) throw new Error("video_duration_revision_mismatch");
+  const revisionDuration = normalizeVideoDurationSeconds(revisionDurationValues[0])!;
+  if (requestedDuration !== undefined && requestedDuration !== revisionDuration) throw new Error("video_duration_revision_mismatch");
+  if (!workflowSupportsVideoDuration(workflow, revisionDuration)) throw new Error("video_duration_not_supported_by_model");
+  const effectiveDuration = requestedDuration ?? revisionDuration;
+  const parameters = canonicalGenerationPerformanceParameters(workflow.currentRevision.parameters);
+  const assessment = assessVideoPerformance({
+    parameters,
+    models: workflow.currentRevision.models,
+    inputAssetIds: [],
+    inputArtifactIds: [],
+    prompt: "",
+    videoDurationSeconds: effectiveDuration,
+  });
+  const mode = requestedMode ?? "fast-default";
+  if (assessment.requiresExplicitHeavy && mode !== "explicit-heavy") throw new Error("video_heavy_mode_required");
+  if (!assessment.requiresExplicitHeavy && mode !== "fast-default") throw new Error("video_heavy_mode_not_required");
+  return {
+    effectiveDuration,
+    stamp: {
+      schemaVersion: "creative-studio-video-performance/1.0",
+      mode,
+      workflowRevisionId: workflow.currentRevision.id,
+      workload: {
+        ...assessment.workload,
+        requiresExplicitHeavy: assessment.requiresExplicitHeavy,
+        reasons: [...assessment.reasons],
+      },
+    },
+  };
+}
+
+async function revalidatedVideoPerformance(env: Env, ownerId: string, job: Job) {
+  if (job.modality !== "video") return undefined;
+  const workflow = job.settingsStamp.workflow;
+  if (!workflow) throw new Error("runner_workflow_missing");
+  const plan = await workflowExecutionPlan(env, ownerId, workflow.workflowId, workflow.revisionId);
+  const stamped = job.settingsStamp.videoPerformance;
+  if (stamped && stamped.workflowRevisionId !== plan.workflow.currentRevision.id) {
+    throw new Error("video_performance_revision_mismatch");
+  }
+  return videoPerformanceForWorkflow(
+    plan.workflow,
+    job.settingsStamp.videoDurationSeconds,
+    stamped?.mode,
+  );
 }
 
 async function assertReusableLocalWorkflowPrompt(env: Env, ownerId: string, job: Job) {
@@ -957,6 +1022,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         throw new Error("invalid_image_performance_mode");
       }
       if (input.performanceMode !== undefined && modality !== "image") throw new Error("invalid_image_performance_mode");
+      if (input.videoPerformanceMode !== undefined
+        && input.videoPerformanceMode !== "fast-default"
+        && input.videoPerformanceMode !== "explicit-heavy") throw new Error("invalid_video_performance_mode");
+      if (input.videoPerformanceMode !== undefined && modality !== "video") throw new Error("invalid_video_performance_mode");
       if (input.provider !== undefined && input.provider !== "afdfw" && input.provider !== "development-preview") {
         throw new Error("invalid_generation_provider");
       }
@@ -1019,6 +1088,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         if (modality === "image" && assessImagePerformance(parameterValues).requiresExplicitCustom && performanceMode !== "explicit-custom") {
           throw new Error("image_custom_mode_required");
         }
+        const videoPerformance = modality === "video"
+          ? videoPerformanceForWorkflow(plan.workflow, videoDurationSeconds, input.videoPerformanceMode)
+          : undefined;
         const promptParameters = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
         const workflowPromptParameter = primaryWorkflowPromptParameter(plan.workflow.currentRevision.parameters, plan.workflow.modality);
         const exactExpectedPrompt = String(input.workflow.expectedPrompt ?? "").trim();
@@ -1140,7 +1212,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             provider: "local-comfyui",
             modality,
             performanceMode,
-            videoDurationSeconds,
+            videoPerformance: videoPerformance?.stamp,
+            videoDurationSeconds: videoPerformance?.effectiveDuration ?? videoDurationSeconds,
             workflow: {
               workflowId: plan.workflow.id,
               revisionId: plan.workflow.currentRevision.id,
@@ -1220,6 +1293,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (localWorkflow) await assertReusableLocalWorkflowPrompt(env, session.userId, original);
       if (localWorkflow && original.modality === "image" && assessImagePerformance(original.settingsStamp.parameters).requiresExplicitCustom
         && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
+      const videoPerformance = localWorkflow ? await revalidatedVideoPerformance(env, session.userId, original) : undefined;
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
         projectId: original.projectId,
@@ -1238,6 +1312,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           reusedFromJobId: original.id,
           provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
           evolution: undefined,
+          videoPerformance: videoPerformance?.stamp,
+          videoDurationSeconds: videoPerformance?.effectiveDuration ?? original.settingsStamp.videoDurationSeconds,
         },
       });
       if (!developmentMode(env) && !localWorkflow) {
@@ -1263,6 +1339,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       if (localWorkflow) await assertReusableLocalWorkflowPrompt(env, session.userId, original);
       if (localWorkflow && original.modality === "image" && assessImagePerformance(original.settingsStamp.parameters).requiresExplicitCustom
         && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
+      const videoPerformance = localWorkflow ? await revalidatedVideoPerformance(env, session.userId, original) : undefined;
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
         && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
       const createdAt = new Date().toISOString();
@@ -1283,6 +1360,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           ...original.settingsStamp,
           createdAt,
           reusedFromJobId: original.id,
+          videoPerformance: videoPerformance?.stamp,
+          videoDurationSeconds: videoPerformance?.effectiveDuration ?? original.settingsStamp.videoDurationSeconds,
         },
       });
       if (!developmentMode(env) && !localWorkflow) {

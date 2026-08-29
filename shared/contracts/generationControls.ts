@@ -15,7 +15,7 @@ export const GENERATION_STEP_PRESETS = [8, 16, 24, 32] as const;
 export const GENERATION_FPS_PRESETS = [16, 24, 30] as const;
 
 export type GenerationAspectRatio = typeof GENERATION_ASPECT_PRESETS[number]["id"];
-export type GenerationControlKind = "aspect" | "megapixels" | "width" | "height" | "steps" | "fps" | "seed";
+export type GenerationControlKind = "aspect" | "megapixels" | "width" | "height" | "steps" | "fps" | "frames" | "seed";
 
 export type GenerationControlSet = {
   aspect: WorkflowParameter[];
@@ -24,6 +24,7 @@ export type GenerationControlSet = {
   height: WorkflowParameter[];
   steps: WorkflowParameter[];
   fps: WorkflowParameter[];
+  frames: WorkflowParameter[];
   seed: WorkflowParameter[];
   parameterIds: Set<string>;
 };
@@ -55,6 +56,7 @@ export function generationControlSet(parameters: WorkflowParameter[]): Generatio
     height: parameters.filter((parameter) => matches(parameter, ["height"])),
     steps: parameters.filter((parameter) => matches(parameter, ["steps", "sampling_steps"])),
     fps: parameters.filter((parameter) => matches(parameter, ["fps", "frame_rate"])),
+    frames: parameters.filter((parameter) => matches(parameter, ["frames", "frame_count", "num_frames"])),
     seed: parameters.filter((parameter) => matches(parameter, ["seed", "noise_seed"])),
   };
   return {

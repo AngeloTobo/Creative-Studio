@@ -19,6 +19,7 @@ const SOURCE_ID = "media_retained_frame";
 const IMAGE_PARAMETER_ID = "398:350::image";
 const PROMPT_PARAMETER_ID = "398:376::prompt";
 const SEED_PARAMETER_ID = "398:365::seed";
+const MEGAPIXELS_PARAMETER_ID = "398:364::megapixels";
 
 let httpAdapterServer: ChildProcess | null = null;
 
@@ -123,6 +124,7 @@ function initialWorkflow(): WorkflowDefinition {
         { id: PROMPT_PARAMETER_ID, label: "LTX Positive Prompt", kind: "text", promptRole: "positive", value: "Initial prompt", mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:376", inputName: "prompt" } },
         { id: "398:362::value", label: "Duration", kind: "number", value: 5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:362", inputName: "value" } },
         { id: "398:361::value", label: "Frame Rate", kind: "number", value: 24, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:361", inputName: "value" } },
+        { id: MEGAPIXELS_PARAMETER_ID, label: "Megapixels", kind: "number", value: 0.5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:364", inputName: "megapixels" } },
         { id: SEED_PARAMETER_ID, label: "Noise Seed", kind: "number", value: 42, mediaKind: null, binding: { format: "comfyui-api", nodeId: "398:365", inputName: "seed" } },
       ],
     },
@@ -219,6 +221,7 @@ function baseSnapshot(
 type MockVideoBackend = {
   jobs: SubmitJobRequest[];
   enhancementRequests: CreateVideoPromptEnhancementRequest[];
+  revisionRequests: Array<{ baseRevisionId: string; values: Record<string, WorkflowScalar> }>;
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -231,6 +234,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
   const jobs: Job[] = [];
   const jobRequests: SubmitJobRequest[] = [];
   const enhancementRequests: CreateVideoPromptEnhancementRequest[] = [];
+  const revisionRequests: MockVideoBackend["revisionRequests"] = [];
   let promptEnhancement: VideoPromptEnhancement | null = null;
   let createdDna: CreativeDnaArtifact | null = null;
 
@@ -271,6 +275,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
 
     if (request.method() === "POST" && /^\/api\/creative-studio\/workflows\/[^/]+\/revisions$/.test(pathname)) {
       const input = request.postDataJSON() as { baseRevisionId: string; values: Record<string, WorkflowScalar> };
+      revisionRequests.push(input);
       const previous = workflow.currentRevision;
       revision += 1;
       workflow = {
@@ -325,6 +330,21 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
           prompt,
           provider: "local-comfyui",
           modality: "video",
+          videoPerformance: input.videoPerformanceMode ? {
+            schemaVersion: "creative-studio-video-performance/1.0",
+            mode: input.videoPerformanceMode,
+            workflowRevisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
+            workload: {
+              durationSeconds: input.videoDurationSeconds ?? null,
+              width: null,
+              height: null,
+              megapixels: Number(workflow.currentRevision.parameters.find((parameter) => parameter.id === MEGAPIXELS_PARAMETER_ID)?.value ?? 0),
+              frames: null,
+              fps: 24,
+              requiresExplicitHeavy: input.videoPerformanceMode === "explicit-heavy",
+              reasons: [],
+            },
+          } : undefined,
           videoDurationSeconds: input.videoDurationSeconds,
           workflow: {
             workflowId: workflow.id,
@@ -401,7 +421,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     await json(route, { error: `unhandled_e2e_api_route:${request.method()}:${pathname}` }, 500);
   });
 
-  return { jobs: jobRequests, enhancementRequests };
+  return { jobs: jobRequests, enhancementRequests, revisionRequests };
 }
 
 async function openRetainedMedia(page: Page) {
@@ -410,12 +430,41 @@ async function openRetainedMedia(page: Page) {
   await expect(page.getByText("Retained city frame", { exact: true })).toBeVisible();
 }
 
-test("Standard animate queues two durable video variants from one retained image", async ({ page }) => {
+test("Standard animate ignores a stored heavy draft and queues the speed-safe workload", async ({ page }) => {
   const backend = await installVideoBackend(page, false);
+  await page.addInitScript(({ now, sourceId, workflowId, revisionId, megapixelsParameterId }) => {
+    localStorage.setItem("creative-studio:create-sessions", JSON.stringify({
+      schemaVersion: 2,
+      sessions: [{
+        schemaVersion: 2,
+        id: "session_previous_heavy_video",
+        projectId: "project_video_e2e",
+        sourceAssetIds: [sourceId],
+        retainedArtifactId: null,
+        direction: "A previous intentionally slow video draft.",
+        mediaKind: "video",
+        workflowId,
+        graphicalSettings: {
+          workflowRevisionId: revisionId,
+          videoDurationSeconds: 30,
+          canvasMegapixels: 0.5,
+          outputCount: 4,
+          [`value:${megapixelsParameterId}`]: 0.5,
+        },
+        intentTier: "explore",
+        updatedAt: now,
+      }],
+    }));
+  }, {
+    now: NOW,
+    sourceId: SOURCE_ID,
+    workflowId: "workflow_ltx_i2v_e2e",
+    revisionId: "workflowrev_ltx_i2v_e2e_1",
+    megapixelsParameterId: MEGAPIXELS_PARAMETER_ID,
+  });
   await openRetainedMedia(page);
 
-  await page.locator(".media-action-menu > summary").click();
-  await page.getByRole("menuitem", { name: "Standard animate" }).click();
+  await page.locator(".media-animate").click();
 
   await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
   await expect(page).toHaveURL(/#\/queue$/);
@@ -431,6 +480,9 @@ test("Standard animate queues two durable video variants from one retained image
   ]);
   expect(new Set(backend.jobs.map((job) => job.outputBatch?.batchId)).size).toBe(1);
   expect(backend.jobs.every((job) => job.workflow?.inputBindings[IMAGE_PARAMETER_ID] === SOURCE_ID)).toBe(true);
+  expect(backend.jobs.every((job) => job.videoDurationSeconds === 5)).toBe(true);
+  expect(backend.jobs.every((job) => job.videoPerformanceMode === "fast-default")).toBe(true);
+  expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
   await expect(page.getByText(/Invalid video variant/i)).toHaveCount(0);
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
 });
@@ -440,7 +492,8 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   const backend = await installVideoBackend(page, true);
   await openRetainedMedia(page);
 
-  await page.locator(".media-animate-four").click();
+  await page.locator(".media-action-menu > summary").click();
+  await page.getByRole("menuitem", { name: "Animate 4 ways" }).click();
 
   await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(1);
   await expect.poll(() => backend.jobs.length, { timeout: 20_000 }).toBe(4);
@@ -465,6 +518,38 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
     requestId: "promptenh_e2e_four_way",
   });
   expect(backend.jobs.every((job) => job.workflow?.inputBindings[IMAGE_PARAMETER_ID] === SOURCE_ID)).toBe(true);
+  expect(backend.jobs.every((job) => job.videoDurationSeconds === 5)).toBe(true);
+  expect(backend.jobs.every((job) => job.videoPerformanceMode === "fast-default")).toBe(true);
+  expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
   await expect(page.getByText(/Invalid video variant/i)).toHaveCount(0);
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
+});
+
+test("Longer video settings require an explicit workload confirmation", async ({ page }) => {
+  const backend = await installVideoBackend(page, false);
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  await page.locator(".quick-compose-source > summary").click();
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
+  await page.getByLabel("Describe the video").fill("The figure turns toward the moving skyline as rain rises around them.");
+  await page.locator(".quick-duration-panel > summary").click();
+  await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
+
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.jobs.length).toBe(0);
+  const confirmation = page.getByRole("alert", { name: "Confirm heavy video render" });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText("10s");
+  await expect(confirmation).toContainText("241 @ 24 fps");
+  await expect(confirmation).toContainText("0.20 MP");
+  await expect(confirmation).toContainText("2");
+  await expect(confirmation).toContainText("one after another");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await confirmation.getByRole("button", { name: "Confirm & queue" }).click();
+  await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
+  expect(backend.jobs.every((job) => job.videoDurationSeconds === 10)).toBe(true);
+  expect(backend.jobs.every((job) => job.videoPerformanceMode === "explicit-heavy")).toBe(true);
+  expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
 });

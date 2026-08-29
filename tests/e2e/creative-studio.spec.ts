@@ -81,7 +81,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.getByText(/A luminous embryo-like form floats in a dark violet field/)).toBeVisible();
   await expect(page.locator(".orb-stage")).toHaveCount(0);
 
-  await page.getByRole("button", { name: /^Animate 4 ways/ }).click();
+  await page.getByRole("button", { name: /^Animate 2 fast versions/ }).click();
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
@@ -91,7 +91,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
   await expect(page.getByRole("button", { name: "Local Gemma offline" })).toBeDisabled();
   const outputCount = page.getByRole("group", { name: "Number of video outputs" });
-  await expect(outputCount.getByRole("button", { name: "4", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(outputCount.getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(outputCount.getByRole("button", { name: "2", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "1", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "4", exact: true })).toBeDisabled();

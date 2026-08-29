@@ -249,7 +249,7 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
           <span className="cockpit-run-primary"><span className="cockpit-run-context"><small>{run.projectName} · {timestamp(run.createdAt)}</small>{videoRole ? <span className="video-context-chip role">{videoRole}</span> : null}{videoSpeech ? <span className="video-context-chip speech" aria-label={videoSpeechSummary(videoSpeech)} title={videoSpeechSummary(videoSpeech)}>{videoSpeechLabel(videoSpeech)}</span> : null}</span><strong>{run.title}</strong><p>{run.detail}</p></span>
           <strong className={`state-pill ${run.status}`}>{run.status.replaceAll("-", " ")}</strong>
           <div className="cockpit-run-facts">
-            <span><small>Stage</small><b>{run.stageLabel}{run.queuePosition ? ` · #${run.queuePosition}` : ""}</b></span>
+            <span className={run.comfyApiUnresponsive ? "comfy-unresponsive" : undefined}><small>Stage</small><b>{run.stageLabel}{run.queuePosition ? ` · #${run.queuePosition}` : ""}</b>{run.comfyApiUnresponsive && run.comfyObservationAgeMs !== null ? <small>Last Comfy response {duration(run.comfyObservationAgeMs)} ago; runner heartbeat is still active.</small> : null}</span>
             <span><small>Time</small><b>{duration(run.durationMs)}</b></span>
             <span><small>Output</small><b>{run.retainedBytes ? bytes(run.retainedBytes) : run.decision.replaceAll("-", " ")}</b></span>
             {run.workloadFacts.slice(0, 3).map((fact) => <em key={fact}>{fact}</em>)}

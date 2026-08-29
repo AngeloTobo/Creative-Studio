@@ -1354,6 +1354,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .cockpit-run-facts > span { display: flex; flex: none; align-items: baseline; gap: 5px; border-right: 1px solid var(--border-soft); padding-right: 8px; }
 .cockpit-run-facts > span small { font-size: 6.5px; }
 .cockpit-run-facts > span b { color: var(--text-soft); font-size: 8px; font-weight: 700; white-space: nowrap; }
+.cockpit-run-facts > span.comfy-unresponsive { align-items: flex-start; flex-direction: column; gap: 1px; }
+.cockpit-run-facts > span.comfy-unresponsive b { color: #b45309; }
+.cockpit-run-facts > span.comfy-unresponsive small:last-child { max-width: 310px; color: var(--text-muted); font-size: 7px; line-height: 1.35; }
 .cockpit-run-facts em { flex: none; border-radius: 999px; padding: 3px 6px; background: rgba(124,58,237,.08); color: var(--text-faint); font-family: var(--font-mono); font-size: 7px; font-style: normal; white-space: nowrap; }
 .cockpit-run-details { grid-column: 2 / -1; }
 .cockpit-run-details > summary { width: max-content; cursor: pointer; color: var(--cyan); font-size: 8px; font-weight: 800; list-style-position: inside; }

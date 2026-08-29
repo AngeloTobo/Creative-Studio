@@ -312,8 +312,8 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
     onQueued();
   };
   const disabled = busy || artifact.status === "retaining";
-  const animateAction = artifact.kind === "image" ? <button className="btn btn-ghost artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)}><Icon name="video" size={16} /> Standard animate</button> : null;
-  const animateFourWayAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate-four" disabled={disabled} onClick={() => onAnimateFourWay(artifact.id)} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="star" size={16} /> Animate ×4</button> : null;
+  const animateAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)} title="Queue two speed-safe 5-second versions"><Icon name="video" size={16} /> Animate</button> : null;
+  const animateFourWayAction = artifact.kind === "image" ? <button className="btn btn-ghost artifact-animate-four" disabled={disabled} onClick={() => onAnimateFourWay(artifact.id)} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="star" size={16} /> Animate ×4</button> : null;
   const evolveAction = <button className="btn artifact-evolve" disabled={disabled} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>;
   const reuseAction = <button className="btn btn-ghost artifact-reuse" disabled={disabled} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>;
   const acceptAction = <button className="btn artifact-accept" disabled={disabled} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>;
@@ -366,15 +366,15 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
         {hasLongPrompt ? <button type="button" className="artifact-prompt-toggle" aria-expanded={promptExpanded} onClick={() => setPromptExpanded((value) => !value)}>{promptExpanded ? "Show less" : "Read full prompt"}</button> : null}
         <div className="artifact-meta"><span>{artifact.provider}</span><span>{new Date(artifact.createdAt).toLocaleString()}</span></div>
         {artifact.kind !== "image" ? <ArtifactMediaReview artifact={artifact} onInspect={() => undefined} onExtend={artifact.kind === "video" ? () => onExtendVideo(artifact.id) : undefined} /> : null}
-        {compact ? <div className={`artifact-compact-actions${artifact.kind === "image" ? " has-four-way" : ""}`} aria-label={`Actions for ${artifact.name}`}>
-          {artifact.kind === "image" ? animateFourWayAction : artifact.status === "ready" ? acceptAction : evolveAction}
+        {compact ? <div className={`artifact-compact-actions${artifact.kind === "image" ? " has-animation" : ""}`} aria-label={`Actions for ${artifact.name}`}>
+          {artifact.kind === "image" ? animateAction : artifact.status === "ready" ? acceptAction : evolveAction}
           {artifact.kind === "image" ? artifact.status === "ready" ? acceptAction : evolveAction : null}
           <details>
             <summary className="btn btn-ghost"><Icon name="more" size={16} /> More actions</summary>
             <div>
               {artifact.status !== "ready" ? acceptAction : null}
               {rejectAction}
-              {animateAction}
+              {animateFourWayAction}
               {artifact.status === "ready" ? evolveAction : null}
               {reuseAction}
               {promotionAction}
@@ -384,8 +384,8 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
           </details>
         </div> : <>
           <div className="artifact-actions artifact-create-actions" aria-label={`Create from ${artifact.name}`}>
-            {animateFourWayAction}
             {animateAction}
+            {animateFourWayAction}
             {evolveAction}
             {reuseAction}
           </div>

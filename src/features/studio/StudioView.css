@@ -101,7 +101,7 @@
 .media-audio-cover strong { color: var(--text-soft); font-size: 10px; text-transform: uppercase; }
 .media-audio-cover small { max-width: 100%; overflow: hidden; color: var(--text-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .media-smart-actions { display: grid; grid-template-columns: 1fr 42px; }
-.media-animate-four { background: linear-gradient(135deg,rgba(139,92,246,.2),rgba(217,70,239,.16)); color: var(--text-main); }
+.media-animate { background: linear-gradient(135deg,rgba(139,92,246,.2),rgba(217,70,239,.16)); color: var(--text-main); }
 .media-action-menu > summary.btn { width: 100%; min-width: 0; padding: 0; }
 .media-action-menu > div { bottom: calc(100% + 5px); }
 .media-inspector { width: min(920px,calc(100% - 28px)); max-height: calc(100dvh - 28px); border: 1px solid var(--border-mid); border-radius: 18px; padding: 16px; background: rgba(8,7,22,.98); color: var(--text-main); box-shadow: 0 30px 90px rgba(0,0,0,.65); }

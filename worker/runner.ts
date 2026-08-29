@@ -236,7 +236,14 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
   const upstreamId = boundedText(input.upstreamId, 120) || null;
   const stage = RUNNER_STAGES.has(input.stage as NonNullable<Job["executionStage"]>) ? input.stage as NonNullable<Job["executionStage"]> : null;
   const now = new Date();
-  if (!await automationJobMayContinue(env, runner, jobId, now.toISOString())) {
+  const nowValue = now.toISOString();
+  const observationValue = boundedText(input.comfyObservationAt, 40);
+  const observationTime = Date.parse(observationValue);
+  const comfyObservationAt = stage === "rendering" && Number.isFinite(observationTime) && observationTime <= now.getTime() + 60_000
+    ? new Date(Math.min(observationTime, now.getTime())).toISOString()
+    : null;
+  const stageUpdatedAt = stage === "rendering" ? comfyObservationAt : stage ? nowValue : null;
+  if (!await automationJobMayContinue(env, runner, jobId, nowValue)) {
     const job = await jobById(env, runner.ownerId, jobId);
     if (!job) throw new Error("job_not_found");
     return { continue: false, job };
@@ -327,18 +334,22 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
   }
   const [changed] = await env.DB.batch([
     env.DB.prepare(`update creative_jobs set progress = max(progress, ?), upstream_id = coalesce(upstream_id, ?),
-      execution_stage = coalesce(?, execution_stage), stage_updated_at = case when ? is null then stage_updated_at else ? end,
+      execution_stage = coalesce(?, execution_stage), stage_updated_at = case
+        when ? is null then stage_updated_at
+        when stage_updated_at is null or ? > stage_updated_at then ?
+        else stage_updated_at end,
       runner_lease_until = ?, updated_at = ?
       where id = ? and owner_id = ? and runner_id = ? and execution_target = 'local-comfyui' and status = 'running'
         and (automation_session_id is null or exists (
           select 1 from creative_overnight_sessions s where s.id = creative_jobs.automation_session_id
             and s.owner_id = creative_jobs.owner_id and s.status = 'running' and s.cutoff_at > ?
         ))`)
-      .bind(progress, upstreamId, stage, stage, now.toISOString(), new Date(now.getTime() + 2 * 60_000).toISOString(), now.toISOString(), jobId, runner.ownerId, runner.id, now.toISOString()),
+      .bind(progress, upstreamId, stage, stageUpdatedAt, stageUpdatedAt, stageUpdatedAt,
+        new Date(now.getTime() + 2 * 60_000).toISOString(), nowValue, jobId, runner.ownerId, runner.id, nowValue),
     env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null")
-      .bind(jobId, now.toISOString(), runner.id, runner.ownerId),
+      .bind(jobId, nowValue, runner.id, runner.ownerId),
   ]);
-  if (!changed.meta.changes) await automationJobMayContinue(env, runner, jobId, now.toISOString());
+  if (!changed.meta.changes) await automationJobMayContinue(env, runner, jobId, nowValue);
   const job = await jobById(env, runner.ownerId, jobId);
   if (!job) throw new Error("job_not_found");
   return { continue: Boolean(changed.meta.changes), job };

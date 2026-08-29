@@ -606,7 +606,7 @@
 .overnight-current-task small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overnight-current-task strong { color: var(--text-main); font-size: 9px; }
 .overnight-current-task small { color: var(--text-muted); font-size: 7px; text-transform: capitalize; }
-.overnight-current-task em { font-family: var(--font-mono); font-size: 8px; font-style: normal; }
+.overnight-current-task em { overflow: hidden; max-width: 130px; font-family: var(--font-mono); font-size: 8px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .overnight-run-error {
   display: flex;

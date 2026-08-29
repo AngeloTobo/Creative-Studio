@@ -125,6 +125,7 @@ export function PortalView({
   const selectedSource = sourceAssets.find((asset) => asset.id === selectedSourceId) ?? sourceAssets[0] ?? null;
   const analysisMatch = selectedSource && snapshot ? sourceAnalysis(snapshot.dnaArtifacts, selectedSource.id) : null;
   const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && !job.settingsStamp.overnight && (job.status === "queued" || job.status === "running")) ?? [];
+  const productionRunsById = new Map((snapshot?.productionCockpit.runs ?? []).map((run) => [run.id, run]));
   const recentArtifacts = (snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && !artifact.settingsStamp.overnight) ?? [])
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
     .slice(0, 4);
@@ -208,15 +209,15 @@ export function PortalView({
             const detail = !selectedSource || !sourceCompatible
               ? "Start without this source"
               : action.intent === "video"
-                ? selectedSource.kind === "image" ? "Exact · Enhanced · Left field · Awe" : "Open video controls"
+                ? selectedSource.kind === "image" ? "2 fast versions · 5 seconds" : "Open video controls"
                 : action.intent === "music" && selectedSource.kind === "audio" ? "Use as an audio source" : action.detail;
-            const fourWayVideo = action.intent === "video" && selectedSource?.kind === "image";
-            const label = fourWayVideo ? "Animate 4 ways" : action.label;
-            return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, fourWayVideo, fourWayVideo ? "four-way" : "standard")}><span><Icon name={action.icon} size={20} /></span><strong>{label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
+            const autoAnimate = action.intent === "video" && selectedSource?.kind === "image";
+            return <button key={action.intent} className={`home-action ${action.intent}`} onClick={() => onCreate(action.intent, sourceCompatible ? selectedSource.id : undefined, autoAnimate, "standard")}><span><Icon name={action.icon} size={20} /></span><strong>{action.label}</strong><small>{detail}</small><Icon name="arrow" size={15} /></button>;
           })}
         </div>
         <OvernightHomeTile onOpen={onOvernight} onManage={() => navigate("work")} onReview={onOvernightReview} />
         <div className="home-action-footer">
+          {selectedSource?.kind === "image" ? <button onClick={() => onCreate("video", selectedSource.id, true, "four-way")} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="star" size={14} /> Animate 4 ways</button> : null}
           <button disabled={!selectedSource?.trainingEligible} onClick={() => selectedSource && onTrain(selectedSource.id)}><Icon name="dna" size={14} /> {selectedSource ? analysisMatch ? "Train DNA again" : "Analyze this work" : "Train DNA"}</button>
           <button onClick={() => navigate("dna")}>Open Create <Icon name="chevron" size={14} /></button>
         </div>
@@ -228,7 +229,10 @@ export function PortalView({
     <section className="home-continue glass" aria-label="Continue working">
       <header><span><small>CONTINUE</small><strong>{activeJobs.length ? `${activeJobs.length} ${activeJobs.length === 1 ? "run" : "runs"} active` : latestSession ? `Resume ${latestSession.intentTier} ${latestSession.mediaKind}` : recentArtifacts.length ? "Newest work" : "Ready to make"}</strong></span><button className="link-btn" onClick={() => navigate("work")}>Open Work <Icon name="arrow" size={13} /></button></header>
       <div className="home-continue-rail">
-        {activeJobs.slice(0, 3).map((job) => <button className="home-run-chip" key={job.id} onClick={() => navigate("queue")}><StatusDot status={job.status} /><span><strong>{job.prompt.trim() || (job.modality === "music" ? "Song" : job.modality)}</strong><small>{job.status} · {job.progress}%</small></span></button>)}
+        {activeJobs.slice(0, 3).map((job) => {
+          const run = productionRunsById.get(job.id);
+          return <button className="home-run-chip" key={job.id} onClick={() => navigate("queue")}><StatusDot status={job.status} /><span><strong>{job.prompt.trim() || (job.modality === "music" ? "Song" : job.modality)}</strong><small>{run?.stageLabel ?? job.status}{run?.comfyApiUnresponsive ? " · runner still active" : ""}</small></span></button>;
+        })}
         {latestSession ? <button className="home-run-chip home-draft-chip" onClick={() => navigate("dna")}><Icon name="wand" size={17} /><span><strong>{latestSession.direction || `Untitled ${latestSession.mediaKind}`}</strong><small>{latestSession.intentTier} draft · saved {new Date(latestSession.updatedAt).toLocaleString()}</small></span><Icon name="arrow" size={14} /></button> : null}
         {recentArtifacts.map((artifact) => <button className="home-artifact-chip" key={artifact.id} onClick={() => navigate("gallery")}><ArtifactThumb artifact={artifact} compact /><span><strong>{artifact.name}</strong><small>{artifact.kind} · {artifact.status}</small></span></button>)}
         {!activeJobs.length && !latestSession && !recentArtifacts.length ? <button className="home-empty-continue" onClick={() => navigate("dna")}><Icon name="wand" size={17} /><span><strong>Create the first result</strong><small>Choose a model and begin.</small></span><Icon name="arrow" size={14} /></button> : null}

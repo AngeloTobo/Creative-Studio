@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   GENERATION_LONG_RUN_THRESHOLD_MS,
   assessImagePerformance,
+  assessVideoPerformance,
   analyzeGenerationWorkload,
+  canonicalGenerationPerformanceParameters,
   fastImageParameterOverrides,
   generationProviderWorkloadProfile,
   generationTiming,
   withGenerationProviderWorkload,
   workflowRuntimeHistory,
   type Job,
+  type GenerationSettingsStamp,
+  type SubmitJobRequest,
   type WorkflowParameter,
 } from "../../shared/contracts";
 
@@ -64,6 +68,78 @@ function job(id: string, startedAt: string, completedAt: string): Job {
 }
 
 describe("generation performance evidence", () => {
+  it("types video consent separately in the submission and immutable durable stamp", () => {
+    const request = {
+      projectId: "project_video",
+      dnaArtifactId: "dna_video",
+      modality: "video",
+      idempotencyKey: "video_contract_0001",
+      videoPerformanceMode: "explicit-heavy",
+    } satisfies SubmitJobRequest;
+    const durable = {
+      schemaVersion: 1,
+      source: "comfyui-workflow",
+      createdAt: "2026-08-29T00:00:00.000Z",
+      reusedFromJobId: null,
+      prompt: "A figure crosses the frame.",
+      provider: "local-comfyui",
+      modality: "video",
+      videoDurationSeconds: 30,
+      videoPerformance: {
+        schemaVersion: "creative-studio-video-performance/1.0",
+        mode: request.videoPerformanceMode,
+        workflowRevisionId: "workflowrev_video_30s",
+        workload: { durationSeconds: 30, width: 352, height: 624, megapixels: 0.5, frames: 721, fps: 24, requiresExplicitHeavy: true, reasons: ["30s exceeds the 5s fast limit"] },
+      },
+      workflow: { workflowId: "workflow_video", revisionId: "workflowrev_video_30s", version: 2, name: "LTX 2.5", format: "comfyui-api", contentHash: "abc" },
+      parameters: {}, models: [], inputAssetIds: [],
+    } satisfies GenerationSettingsStamp;
+    expect(durable.videoPerformance.mode).toBe("explicit-heavy");
+    expect(durable.videoPerformance.workflowRevisionId).toBe(durable.workflow.revisionId);
+  });
+
+  it("uses semantic Comfy primitive labels and the worst exposed video controls", () => {
+    const parameters: WorkflowParameter[] = [
+      { id: "10::value", label: "Width", kind: "number", value: 448, mediaKind: null, binding: { format: "comfyui-api", nodeId: "10", inputName: "value" } },
+      { id: "11::value", label: "Height", kind: "number", value: 448, mediaKind: null, binding: { format: "comfyui-api", nodeId: "11", inputName: "value" } },
+      { id: "12::value", label: "Megapixels", kind: "number", value: 0.5, mediaKind: null, binding: { format: "comfyui-api", nodeId: "12", inputName: "value" } },
+      { id: "13::value", label: "Frame Rate", kind: "number", value: 24, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "value" } },
+      { id: "14::value", label: "Frames", kind: "number", value: 721, mediaKind: null, binding: { format: "comfyui-api", nodeId: "14", inputName: "value" } },
+    ];
+    const projected = canonicalGenerationPerformanceParameters(parameters);
+    expect(projected).toMatchObject({
+      "creative-studio::width": 448,
+      "creative-studio::height": 448,
+      "creative-studio::megapixels": 0.5,
+      "creative-studio::fps": 24,
+      "creative-studio::frames": 721,
+    });
+    const assessment = assessVideoPerformance({
+      parameters: projected,
+      models: [], inputAssetIds: [], inputArtifactIds: [], prompt: "", videoDurationSeconds: 5,
+    });
+    expect(assessment.requiresExplicitHeavy).toBe(true);
+    expect(assessment.workload.megapixels).toBe(0.5);
+    expect(assessment.reasons).toEqual(expect.arrayContaining([
+      expect.stringContaining("0.5 MP"),
+      expect.stringContaining("721 frames"),
+    ]));
+  });
+
+  it("keeps the proven 5s 0.2 MP timeline fast and requires explicit consent for costly or unknown evidence", () => {
+    const source = (parameters: Record<string, string | number | boolean>, durationSeconds?: number) => ({
+      parameters, models: [], inputAssetIds: [], inputArtifactIds: [], prompt: "", videoDurationSeconds: durationSeconds,
+    });
+    expect(assessVideoPerformance(source({ megapixels: 0.2, fps: 24, frames: 121 }, 5)).requiresExplicitHeavy).toBe(false);
+    expect(assessVideoPerformance(source({ megapixels: 0.5, fps: 24, frames: 721 }, 30)).requiresExplicitHeavy).toBe(true);
+    expect(assessVideoPerformance(source({ megapixels: 0.2, frames: 721 }, 5)).reasons).toEqual(expect.arrayContaining([expect.stringContaining("without exposed fps")]));
+    expect(assessVideoPerformance(source({ megapixels: 0.2, fps: 60, frames: 301 }, 5)).reasons).toEqual(expect.arrayContaining([expect.stringContaining("60 fps")]));
+    expect(assessVideoPerformance(source({}, undefined)).reasons).toEqual(expect.arrayContaining([
+      "duration is not exposed by this workflow",
+      "resolution is not exposed by this workflow",
+    ]));
+  });
+
   it("reduces a costly image workflow to the proven fast local target without changing creative controls", () => {
     const parameters: WorkflowParameter[] = [
       { id: "13::width", label: "Width", kind: "number", value: 1024, mediaKind: null, binding: { format: "comfyui-api", nodeId: "13", inputName: "width" } },
@@ -130,7 +206,23 @@ describe("generation performance evidence", () => {
     const timing = generationTiming(active, "2026-08-18T12:21:00.000Z");
     expect(timing.executionMs).toBe(21 * 60_000);
     expect(timing.executionMs).toBeGreaterThan(GENERATION_LONG_RUN_THRESHOLD_MS);
-    expect(timing).toMatchObject({ isLongRunning: true, stageLabel: "Rendering in ComfyUI" });
+    expect(timing).toMatchObject({ isLongRunning: true, stageLabel: "Rendering in ComfyUI", comfyApiUnresponsive: false });
+  });
+
+  it("distinguishes a live runner heartbeat from a stale Comfy observation", () => {
+    const active = {
+      ...job("unresponsive", "2026-08-18T12:00:00.000Z", "2026-08-18T12:21:00.000Z"),
+      status: "running" as const,
+      completedAt: null,
+      executionStage: "rendering" as const,
+      stageUpdatedAt: "2026-08-18T12:18:00.000Z",
+      updatedAt: "2026-08-18T12:21:00.000Z",
+    };
+    expect(generationTiming(active, "2026-08-18T12:21:00.000Z")).toMatchObject({
+      comfyApiUnresponsive: true,
+      comfyObservationAgeMs: 3 * 60_000,
+      stageLabel: "ComfyUI API unresponsive; GPU may still be rendering",
+    });
   });
 
   it("uses only completed runs from the exact immutable workflow revision", () => {

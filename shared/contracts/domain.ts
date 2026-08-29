@@ -38,6 +38,23 @@ export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
 
 export type GenerationModality = "music" | "image" | "video";
 export type ImagePerformanceMode = "fast-default" | "explicit-custom";
+export type VideoPerformanceMode = "fast-default" | "explicit-heavy";
+
+export type VideoPerformanceStamp = Readonly<{
+  schemaVersion: "creative-studio-video-performance/1.0";
+  mode: VideoPerformanceMode;
+  workflowRevisionId: string;
+  workload: Readonly<{
+    durationSeconds: number | null;
+    width: number | null;
+    height: number | null;
+    megapixels: number | null;
+    frames: number | null;
+    fps: number | null;
+    requiresExplicitHeavy: boolean;
+    reasons: readonly string[];
+  }>;
+}>;
 export type GenerationCapability = "MUSIC_GENERATE" | "IMAGE_GENERATE" | "VIDEO_GENERATE";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type GenerationExecutionStage =
@@ -86,6 +103,7 @@ export type GenerationSettingsStamp = {
   provider: string;
   modality: string;
   performanceMode?: ImagePerformanceMode;
+  videoPerformance?: VideoPerformanceStamp;
   videoDurationSeconds?: import("./videoDuration").VideoDurationSeconds;
   workflow: null | {
     workflowId: string;
