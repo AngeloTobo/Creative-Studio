@@ -5,9 +5,9 @@ import { Icon, type IconName } from "./Icon";
 import { ProjectAvatar } from "./Visuals";
 
 const NAV_MAIN: Array<{ id: StudioView; label: string; icon: IconName; badge?: string }> = [
-  { id: "portal", label: "Home", icon: "portal" },
   { id: "dna", label: "Create", icon: "wand" },
-  { id: "work", label: "Work", icon: "analytics", badge: "LIVE" },
+  { id: "portal", label: "Ideas", icon: "portal" },
+  { id: "work", label: "Work", icon: "analytics" },
   { id: "studio", label: "Studio", icon: "projects" },
 ];
 
@@ -27,7 +27,7 @@ function Sidebar({ view, navigate }: { view: StudioView; navigate: (view: Studio
   const project = snapshot?.projects.find((item) => item.id === activeProjectId);
   const activeView = primaryView(view);
   return <aside className="sidebar scroll">
-    <button className="brand" onClick={() => navigate("portal")}><span className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></span><span className="brand-txt"><b className="bt-1">CREATIVE</b><strong className="bt-2">STUDIO</strong><small className="bt-3">private creative workstation</small></span></button>
+    <button className="brand" onClick={() => navigate("dna")}><span className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></span><span className="brand-txt"><b className="bt-1">CREATIVE</b><strong className="bt-2">STUDIO</strong><small className="bt-3">private creative workstation</small></span></button>
     <div className="nav-cap eyebrow">Studio</div><nav className="nav">{NAV_MAIN.map((item) => <NavItem key={item.id} item={item} active={activeView === item.id} navigate={navigate} />)}</nav>
     <div className="sb-spacer" />
     {project ? <div className="sb-proj"><div className="sb-proj-btn sb-project-switch"><button className="sb-project-manage" aria-label={`Manage ${project.name}`} onClick={() => navigate("projects")}><ProjectAvatar project={project} size={40} /></button><label className="sp-meta"><span className="sp-sub">Active project</span><select aria-label="Active project" value={activeProjectId} onChange={(event) => setActiveProjectId(event.target.value)}>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Icon className="sp-chev" name="chevronDown" size={16} /></div></div> : null}
@@ -53,8 +53,8 @@ export function DesktopShell({ view, navigate, children }: { view: StudioView; n
 }
 
 const MOBILE_TABS: Array<{ id: StudioView; label: string; icon: IconName }> = [
-  { id: "portal", label: "Home", icon: "portal" },
   { id: "dna", label: "Create", icon: "wand" },
+  { id: "portal", label: "Ideas", icon: "portal" },
   { id: "work", label: "Work", icon: "analytics" },
   { id: "studio", label: "Studio", icon: "projects" },
 ];
@@ -66,5 +66,5 @@ export function MobileShell({ view, navigate, children }: { view: StudioView; na
   const activeView = primaryView(view);
   const showHeading = view !== "portal" && !CONTENT_OWNS_MOBILE_HEADING.has(activeView);
   const projects = snapshot?.projects.filter((project) => project.status !== "archived") ?? [];
-  return <div className="mshell"><header className="mtop"><button className="mt-brand" aria-label="Home" onClick={() => navigate("portal")}><span className="mt-mark"><i className="bm-orb" /></span><strong className="mt-name">Creative <b>Studio</b></strong></button><span className="mt-sp" />{projects.length ? <label className="mobile-project-switch"><span className="visually-hidden">Active project</span><select aria-label="Active project" value={activeProjectId} onChange={(event) => setActiveProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><Icon name="chevronDown" size={13} /></label> : null}<NotificationButton navigate={navigate} size={19} /></header><main className={`mbody scroll mbody-${view}`}>{showHeading ? <div className="mview-head"><h1>{VIEW_TITLES[view][0]}</h1><p>{VIEW_TITLES[view][1]}</p></div> : null}{children}</main><nav className="mtabbar" aria-label="Primary navigation">{MOBILE_TABS.map((tab) => <button key={tab.id} className={`mtab${activeView === tab.id ? " on" : ""}`} aria-current={activeView === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}><span className="mtab-ic"><Icon name={tab.icon} size={22} /></span>{tab.label}</button>)}</nav></div>;
+  return <div className="mshell"><header className="mtop"><button className="mt-brand" aria-label="Create" onClick={() => navigate("dna")}><span className="mt-mark"><i className="bm-orb" /></span><strong className="mt-name">Creative <b>Studio</b></strong></button><span className="mt-sp" />{projects.length ? <label className="mobile-project-switch"><span className="visually-hidden">Active project</span><select aria-label="Active project" value={activeProjectId} onChange={(event) => setActiveProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><Icon name="chevronDown" size={13} /></label> : null}<NotificationButton navigate={navigate} size={19} /></header><main className={`mbody scroll mbody-${view}`}>{showHeading ? <div className="mview-head"><h1>{VIEW_TITLES[view][0]}</h1><p>{VIEW_TITLES[view][1]}</p></div> : null}{children}</main><nav className="mtabbar" aria-label="Primary navigation">{MOBILE_TABS.map((tab) => <button key={tab.id} className={`mtab${activeView === tab.id ? " on" : ""}`} aria-current={activeView === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}><span className="mtab-ic"><Icon name={tab.icon} size={22} /></span>{tab.label}</button>)}</nav></div>;
 }

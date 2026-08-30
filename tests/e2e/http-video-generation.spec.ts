@@ -37,6 +37,11 @@ async function openCreativeControls(page: Page) {
   if (await control.getAttribute("aria-expanded") !== "true") await control.click();
 }
 
+async function openCreatePlan(page: Page) {
+  const plan = page.locator("details.quick-create-plan");
+  if (await plan.getAttribute("open") === null) await plan.locator(":scope > summary").click();
+}
+
 let httpAdapterServer: ChildProcess | null = null;
 
 test.beforeAll(async () => {
@@ -541,7 +546,7 @@ test("Standard animate ignores a stored heavy draft and queues the speed-safe wo
   await page.locator(".media-animate").click();
 
   await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
-  await expect(page).toHaveURL(/#\/queue$/);
+  await expect(page).toHaveURL(/#\/dna$/);
 
   expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["aligned", "discovery"]);
   expect(backend.batchRequests).toHaveLength(1);
@@ -573,7 +578,7 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
 
   await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(1);
   await expect.poll(() => backend.jobs.length, { timeout: 20_000 }).toBe(4);
-  await expect(page).toHaveURL(/#\/queue$/);
+  await expect(page).toHaveURL(/#\/dna$/);
 
   expect(backend.enhancementRequests[0]).toMatchObject({
     workflowId: "workflow_ltx_i2v_e2e",
@@ -603,7 +608,7 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
 });
 
-test("Mobile video creation keeps the direct composer ahead of secondary controls", async ({ page }) => {
+test("Mobile video creation keeps prompt and Create ahead of optional controls", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installVideoBackend(page, false);
   await page.goto(`${HTTP_STUDIO}/#/dna`);
@@ -616,18 +621,17 @@ test("Mobile video creation keeps the direct composer ahead of secondary control
       ".quick-create-stage",
       ":scope > .quick-compose-source",
       ":scope > .quick-direction",
-      ":scope > .quick-video-essentials",
+      ":scope > .quick-create-plan",
       ":scope > .quick-generate-dock",
       ":scope > .quick-more-toggle",
-      ":scope > .quick-create-results",
     ];
     return selectors.map((selector) => Array.from(card.children).indexOf(card.querySelector(selector)!));
   });
   expect(composerOrder).toEqual([...composerOrder].sort((left, right) => left - right));
-  await expect(page.getByRole("group", { name: "Video duration" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "Canvas shape" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "Number of video outputs" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Create canvas" })).toBeVisible();
+  await expect(page.locator("details.quick-create-plan")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Video duration" })).toBeHidden();
+  await expect(page.getByRole("region", { name: "Source and creation type" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Change source: Retained city frame" })).toBeVisible();
   await expect(page.locator(".quick-video-speech")).toBeHidden();
   await expect(page.locator(".quick-compose-model")).toBeHidden();
   await expect(page.getByRole("button", { name: /More creative controls/ })).toHaveAttribute("aria-expanded", "false");
@@ -638,17 +642,16 @@ test("Mobile video creation keeps the direct composer ahead of secondary control
   await expect(page.getByRole("button", { name: /Hide creative controls/ })).toHaveAttribute("aria-controls", "creative-studio-power-tools");
   await expect(page.locator(".quick-generation-goal-options button:not(:disabled)").first()).toBeFocused();
   await page.getByRole("button", { name: /Hide creative controls/ }).click();
-  const stageUpload = page.getByRole("region", { name: "Create canvas" }).getByRole("button", { name: "Upload", exact: true });
-  await stageUpload.focus();
+  await page.getByLabel("Describe the video").focus();
   await page.keyboard.press("Tab");
-  await expect(page.getByLabel("Describe the video")).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "5s", exact: true })).toBeFocused();
+  await expect(page.locator("details.quick-create-plan > summary")).toBeFocused();
+  await openCreatePlan(page);
+  await expect(page.getByRole("group", { name: "Video duration" })).toBeVisible();
   for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 700 }]) {
     await page.setViewportSize(viewport);
     const [promptBounds, setupBounds, generateBounds] = await Promise.all([
       page.locator(".quick-direction").boundingBox(),
-      page.locator(".quick-video-essentials").boundingBox(),
+      page.locator(".quick-create-plan").boundingBox(),
       page.locator(".quick-generate-dock").boundingBox(),
     ]);
     expect(promptBounds).not.toBeNull();
@@ -656,13 +659,13 @@ test("Mobile video creation keeps the direct composer ahead of secondary control
     expect(generateBounds).not.toBeNull();
     expect(promptBounds!.y + promptBounds!.height).toBeLessThanOrEqual(setupBounds!.y + 1);
     expect(setupBounds!.y + setupBounds!.height).toBeLessThanOrEqual(generateBounds!.y + 1);
-    const sourceNameSizing = await page.locator(".quick-create-stage > footer strong").evaluate((element) => ({
+    const sourceNameSizing = await page.locator(".quick-orb-copy strong").evaluate((element) => ({
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
       whiteSpace: getComputedStyle(element).whiteSpace,
     }));
-    expect(sourceNameSizing.whiteSpace).toBe("normal");
-    expect(sourceNameSizing.scrollWidth).toBeLessThanOrEqual(sourceNameSizing.clientWidth + 1);
+    expect(sourceNameSizing.whiteSpace).toBe("nowrap");
+    expect(sourceNameSizing.scrollWidth).toBeGreaterThanOrEqual(sourceNameSizing.clientWidth);
     if (viewport.width === 320) {
       const [sourceNameBounds, sourceActionsBounds] = await Promise.all([
         page.locator(".quick-create-stage > footer > span").boundingBox(),
@@ -771,7 +774,7 @@ test("Simple Create uploads a source in place and preserves the authored prompt 
   await direction.fill(authoredPrompt);
 
   const fileChooser = page.waitForEvent("filechooser");
-  await page.getByRole("region", { name: "Create canvas" }).getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("region", { name: "Source and creation type" }).getByRole("button", { name: "Upload an optional source" }).click();
   await (await fileChooser).setFiles({
     name: "new-sculpt.png",
     mimeType: "image/png",
@@ -780,7 +783,7 @@ test("Simple Create uploads a source in place and preserves the authored prompt 
 
   await expect.poll(() => backend.uploads.length).toBe(1);
   expect(backend.uploads[0]).toMatchObject({ fileName: "new-sculpt.png", contentType: "image/png" });
-  await expect(page.getByRole("region", { name: "Create canvas" }).getByRole("img", { name: "new-sculpt source" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Source and creation type" }).getByRole("img", { name: "new-sculpt source" })).toBeVisible();
   await expect(direction).toHaveValue(authoredPrompt);
   await expect(page).toHaveURL(/#\/dna$/);
 
@@ -798,6 +801,7 @@ test("Longer video settings require an explicit workload confirmation", async ({
   await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   await page.getByLabel("Describe the video").fill("The figure turns toward the moving skyline as rain rises around them.");
+  await openCreatePlan(page);
   await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
 
   await page.locator(".quick-primary").click();
@@ -831,6 +835,7 @@ test("Retained-image Fast 30s remains an explicit single-render choice and queue
 
   // Choose an unsaved seed before selecting Fast 30s. The explicit recipe must
   // retain the authored source, direction, and seed.
+  await openCreatePlan(page);
   await openCreativeControls(page);
   await page.locator("details.quick-create-advanced > summary").click();
   await page.locator("details.quick-render-panel > summary").click();
@@ -922,6 +927,7 @@ test("Fast 30s exits cleanly to the standard Aligned and Discovery pair", async 
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   await page.getByLabel("Describe the video").fill("A glass figure discovers a ribbon of light and follows it through the upright city.");
 
+  await openCreatePlan(page);
   await openCreativeControls(page);
   await page.locator("details.quick-create-advanced > summary").click();
   await page.locator("details.quick-render-panel > summary").click();

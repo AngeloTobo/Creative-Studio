@@ -2,6 +2,17 @@
 
 Last verified: 2026-08-30 (America/Chicago)
 
+## Focused Create simplification and operations audit - local source only
+
+- The product now opens on **Create** from an empty URL or brand click. **Ideas** remains a first-class destination for story directions, overnight work, and CreativeDNA context; Work and Studio remain unchanged routes.
+- Create has one functional orb-centered entry: choose Image, Video, Song, or Train, optionally upload/drop/choose retained work, describe the outcome, and Create. Plan, More creative controls, source playback, experimental prompt assistance, exact settings, and recent results use contextual disclosure instead of competing with the prompt.
+- All approved behavior is preserved. Standard Animate is still the two-output Aligned/Discovery pair, Animate x4 still creates four named lanes after its required enhancement, and Fast 30 remains one explicit output. Prompts, seeds, model selection, workflow revisions, settings stamps, queueing, retention, review, lineage, and artifact behavior are unchanged.
+- One-click Animate stays on Create after durable submission rather than performing a second redirect to Work. The existing active-job control opens Work when requested. Common runner errors are humanized while the exact raw code remains under **Technical detail**.
+- The small-phone first-project form and video composer now keep their primary actions above the fixed navigation. The functional center orb, Plan summary, and Create action were visually inspected at 1440 by 900 and 360 by 640; browser coverage also retains 320 by 700 and 390 by 844 layout checks.
+- The complete local gate passed lint, 268 app/runner tests across 46 files, 64 Worker tests across four files, the unchanged Local Runner self-test, all TypeScript targets, environment/free-tier guards, the production build, a clean 244-file secret scan, and 60 applicable desktop/mobile Playwright checks with six intentional device-shape skips.
+- `docs/UX_AND_OPERATIONS_AUDIT_2026-08-30.md` records the measured UX baseline, prompt-enhancement evidence, cold/warm LTX and ComfyUI findings, disk/resource risks, and separately approvable experiments. No runner, Worker, ComfyUI, model, queue, graph, prompt-payload, output, process, migration, or deployment change was made in this pass.
+- This UX source is not committed, pushed, or deployed. A final recheck found local `HEAD`, `origin/main`, and GitHub synchronized at documentation commit `84ecb10`; the live Worker remains `08f90cae-50e7-4165-9f7d-806868e09264`, deployed from the preceding executable commit `e234b3b`. The uncommitted UX therefore is not live. At the read-only runtime snapshot, ComfyUI was unreachable and four existing LTX jobs were queued. Runtime observations can drift and no live state was changed by this pass.
+
 ## RTX 3090 exclusive video scheduling and continuity repair - production deployed
 
 - Local Runner `1.18.0` gives the workstation GPU one machine-local owner. An atomic lock prevents duplicate Creative Studio runner processes from competing for ComfyUI, including across Scheduled Task restarts; a live PID blocks the second process and a dead-owner lock is recovered without deleting a newly initializing lock.

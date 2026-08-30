@@ -21,6 +21,7 @@ const VIEWS = new Set<StudioView>(["portal", "dna", "work", "studio", "cockpit",
 function hashView(): StudioView {
   const raw = window.location.hash.replace(/^#\/?/, "");
   if (raw === "generate") return "dna";
+  if (!raw) return "dna";
   const candidate = raw as StudioView;
   return VIEWS.has(candidate) ? candidate : "portal";
 }

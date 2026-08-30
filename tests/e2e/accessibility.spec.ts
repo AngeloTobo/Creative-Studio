@@ -27,7 +27,7 @@ test("the consolidated shell exposes four primary destinations without repeated 
 
   const navigation = page.locator(".sidebar .nav-item");
   await expect(navigation).toHaveCount(4);
-  await expect(navigation).toHaveText(["Home", "Create", "WorkLIVE", "Studio"]);
+  await expect(navigation).toHaveText(["Create", "Ideas", "Work", "Studio"]);
   await expect(page.locator(".rightpanel")).toHaveCount(0);
   await expect(page.locator(".player")).toHaveCount(0);
 

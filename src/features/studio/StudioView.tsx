@@ -92,7 +92,7 @@ export function StudioView({
       {SECTIONS.map((item) => {
         const disabled = !activeProject && (item.id === "media" || item.id === "memory");
         const count = countFor(item.id);
-        return <button key={item.id} id={`studio-tab-${item.id}`} role="tab" aria-controls={`studio-panel-${item.id}`} aria-selected={activeSection === item.id} disabled={disabled} className={activeSection === item.id ? "on" : ""} onClick={() => changeSection(item.id)} title={disabled ? "Create a project first" : item.label}><Icon name={item.icon} size={17} /><span>{item.label}</span>{count || item.id === "system" ? <b className={item.id === "system" && count ? "warning" : ""}>{count}</b> : null}</button>;
+        return <button key={item.id} id={`studio-tab-${item.id}`} role="tab" aria-controls={`studio-panel-${item.id}`} aria-selected={activeSection === item.id} disabled={disabled} className={activeSection === item.id ? "on" : ""} onClick={() => changeSection(item.id)} title={disabled ? "Create a project first" : item.label}><Icon name={item.icon} size={17} /><span>{item.label}</span>{activeProject && (count || item.id === "system") ? <b className={item.id === "system" && count ? "warning" : ""}>{count}</b> : null}</button>;
       })}
     </nav>
 

@@ -14,7 +14,7 @@
 .studio-hub-tabs { position: sticky; z-index: 12; top: 0; display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 4px; padding: 5px; border-radius: 16px; backdrop-filter: blur(22px); }
 .studio-hub-tabs button { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 7px; border-radius: 11px; padding: 10px 8px; color: var(--text-muted); font-size: 10px; font-weight: 750; }
 .studio-hub-tabs button:hover:not(:disabled) { color: var(--text-main); background: rgba(255,255,255,.035); }
-.studio-hub-tabs button.on { color: #fff; background: linear-gradient(135deg,rgba(217,70,239,.15),rgba(34,211,238,.08)); box-shadow: inset 0 0 0 1px rgba(217,70,239,.2); }
+.studio-hub-tabs button.on { color: var(--text-main); background: linear-gradient(135deg,rgba(217,70,239,.15),rgba(34,211,238,.08)); box-shadow: inset 0 0 0 1px rgba(217,70,239,.2); }
 .studio-hub-tabs button:disabled { cursor: not-allowed; opacity: .36; }
 .studio-hub-tabs button b { min-width: 18px; border-radius: 999px; padding: 2px 5px; color: var(--text-faint); background: rgba(255,255,255,.05); font-family: var(--font-mono); font-size: 7px; text-align: center; }
 .studio-hub-tabs button b.warning { color: #fde68a; background: rgba(251,191,36,.12); }
@@ -145,6 +145,9 @@
 .runner-pair > .runner-settings { border-top: 1px solid var(--border-soft); }
 .runner-pair .runner-settings { border-radius: 0; background: transparent; }
 .settings-view-compact .runner-list > header p { margin-top: 4px; color: var(--text-muted); font-size: 9px; }
+.runner-issue { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.runner-issue details > summary { width: max-content; color: var(--text-faint); font-size: 8px; cursor: pointer; }
+.runner-issue code { display: block; overflow-wrap: anywhere; margin-top: 4px; color: var(--text-muted); font-size: 8px; }
 .revoked-runners { margin-top: 12px; border-top: 1px solid var(--border-soft); padding-top: 10px; }
 .revoked-runners > summary { color: var(--text-muted); cursor: pointer; font-size: 9px; }
 .revoked-runners > div > article { opacity: .58; }
@@ -178,6 +181,7 @@
 
 @media (max-width: 760px) {
   .studio-hub { gap: 10px; }
+  .project-onboarding { min-height: 0; justify-content: flex-start; }
   .studio-hub-context { padding: 10px 11px; }
   .studio-hub-context > .project-avatar { width: 40px !important; height: 40px !important; }
   .studio-hub-facts { display: none; }

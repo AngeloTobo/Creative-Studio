@@ -8,10 +8,17 @@ function heartbeat(value: string | null) {
   return `Last heartbeat ${new Date(value).toLocaleString()}`;
 }
 
+function runnerIssue(value: string) {
+  if (value.startsWith("comfyui_queue_unreachable")) return "ComfyUI is not reachable on this machine. Start it, then let the runner reconnect.";
+  if (value.startsWith("comfyui_")) return "ComfyUI reported a problem. Open Work for the saved run details before trying again.";
+  if (value.startsWith("runner_")) return "The Local Runner needs attention. Check this machine before sending more local work.";
+  return value.replaceAll("_", " ");
+}
+
 function RunnerRow({ runner, busy, onRevoke }: { runner: LocalRunner; busy: boolean; onRevoke: (id: string) => void }) {
   return <article>
     <span className={`runner-state ${runner.state}`}><i />{runner.state}</span>
-    <div><strong>{runner.name}</strong><small>{runner.device || "Device details arrive with the first heartbeat"}</small><small>{heartbeat(runner.lastHeartbeatAt)}{runner.comfyVersion ? ` · ComfyUI ${runner.comfyVersion}` : ""}</small>{runner.lastError ? <em>{runner.lastError.replaceAll("_", " ")}</em> : null}</div>
+    <div><strong>{runner.name}</strong><small>{runner.device || "Device details arrive with the first heartbeat"}</small><small>{heartbeat(runner.lastHeartbeatAt)}{runner.comfyVersion ? ` · ComfyUI ${runner.comfyVersion}` : ""}</small>{runner.lastError ? <span className="runner-issue"><em>{runnerIssue(runner.lastError)}</em><details><summary>Technical detail</summary><code>{runner.lastError}</code></details></span> : null}</div>
     <code>{runner.version ? `runner v${runner.version}` : runner.id}</code>
     {!runner.revokedAt ? <button className="btn btn-ghost" disabled={busy} onClick={() => onRevoke(runner.id)}>Revoke</button> : null}
   </article>;
