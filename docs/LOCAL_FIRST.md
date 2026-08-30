@@ -14,7 +14,7 @@ npm run local
 
 3. Open the localhost URL printed by the launcher (`http://127.0.0.1:5173` by default; it selects the next free port when needed).
 
-The command applies local D1 migrations, starts or reuses the Wrangler-local BFF on port 8787, enrolls a localhost-only runner credential, starts Local Runner 1.13, and starts the Vite UI. The credential is stored outside the repository at `%LOCALAPPDATA%\Creative Studio Runner\local-config.json` with a current-user/SYSTEM ACL.
+The command applies local D1 migrations, starts or reuses the Wrangler-local BFF on port 8787, enrolls a localhost-only runner credential, starts Local Runner 1.18, and starts the Vite UI. The credential is stored outside the repository at `%LOCALAPPDATA%\Creative Studio Runner\local-config.json` with a current-user/SYSTEM ACL.
 
 Press `Ctrl+C` in that terminal to stop the processes started by the command. A previously running local BFF is reused and is not stopped.
 
@@ -33,6 +33,8 @@ Press `Ctrl+C` in that terminal to stop the processes started by the command. A 
 | ACE-Step music LoRA training | Local Runner, pinned ACE-Step 1.5 runtime under `D:\AI`, reviewed local audio/captions, and RTX 3090 |
 
 Local mode has no development generation fallback. Image, music/audio, and video generation require a real imported ComfyUI API-format workflow. Every result still receives its immutable workflow, model, prompt, parameter, input, and lineage stamp before being retained locally.
+
+The RTX 3090 is an exclusive local resource. One machine lock permits only one Creative Studio runner process. High-VRAM generation verifies that external LM Studio models are unloaded before submission and during video heartbeats. Standalone Gemma helper work waits behind media generation and crosses a verified ComfyUI release boundary before and after use; model components inside the selected LTX workflow remain part of that render. If LM Studio is installed in a nonstandard location, set `CS_LM_STUDIO_CLI` to the exact `lms` executable path for the runner process.
 
 The local browser refreshes active work every two seconds and the local runner claims work every five seconds. These are localhost calls and consume no Cloudflare Worker allowance. Hidden tabs still pause browser polling.
 
