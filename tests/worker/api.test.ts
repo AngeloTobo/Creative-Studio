@@ -120,6 +120,8 @@ async function clearData() {
     env.DB.prepare("delete from creative_training_examples"),
     env.DB.prepare("delete from creative_generation_recipe_evidence"),
     env.DB.prepare("delete from creative_generation_recipes"),
+    env.DB.prepare("delete from creative_prompt_enhancements"),
+    env.DB.prepare("delete from creative_video_script_drafts"),
     env.DB.prepare("delete from creative_workflow_revisions"),
     env.DB.prepare("delete from creative_workflows"),
     env.DB.prepare("delete from creative_media_assets"),
@@ -1036,6 +1038,83 @@ describe("Creative Studio Worker API", () => {
     });
     expect(JSON.stringify(submittedPayload.job.settingsStamp.continuity)).toContain("Protected Franchise Name");
     expect((submittedPayload.job.settingsStamp.continuity.directive as { text: string }).text).not.toContain("Protected Franchise Name");
+
+    const videoDirective = compileContinuityDirective({
+      world,
+      entities: [entity],
+      rules: [rule, videoOnlyRule],
+      references: [canonical],
+      selectedEntityIds: [entity.id],
+      selectedRuleIds: [rule.id, videoOnlyRule.id],
+      selectedReferenceIds: [canonical.id],
+      modality: "video",
+    });
+    const videoProfile = videoPromptProfileForIdentity({ name: "LTX 2.5 Text to Video", inputMode: "text-to-video" });
+    const videoAuthoredPrompt = "Iria turns toward an amber signal while the camera crosses the archive in three deliberate beats";
+    const videoCompiled = compileVideoPromptWithSpeech(`${videoAuthoredPrompt}. ${videoDirective.text}`, undefined, videoProfile);
+    expect(videoCompiled.prompt).toContain(videoDirective.text);
+    expect(videoCompiled.prompt).toMatch(/No dialogue/i);
+    expect(videoCompiled.prompt.endsWith(videoDirective.text)).toBe(false);
+    const videoGraph = JSON.stringify({
+      "1": { class_type: "PrimitiveStringMultiline", inputs: { value: videoCompiled.prompt }, _meta: { title: "Positive Prompt" } },
+      "2": { class_type: "LTXVideo", inputs: { prompt: ["1", 0], seed: 72 } },
+      "3": { class_type: "PrimitiveInt", inputs: { value: 5 }, _meta: { title: "Video Duration" } },
+      "4": { class_type: "PrimitiveFloat", inputs: { value: 0.2 }, _meta: { title: "Megapixels" } },
+      "5": { class_type: "PrimitiveInt", inputs: { value: 24 }, _meta: { title: "Frame Rate" } },
+      "6": { class_type: "PrimitiveInt", inputs: { value: 121 }, _meta: { title: "Frames" } },
+      "7": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    const videoWorkflow = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("continuity-ltx-video.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(videoGraph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("LTX 2.5 Continuity Video"),
+      },
+      body: videoGraph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+    const videoSelection = {
+      schemaVersion: "creative-studio-generation-continuity-selection/1.0",
+      modality: "video",
+      world: { id: world.id, version: world.version },
+      entities: [{ id: entity.id, version: entity.version }],
+      rules: [
+        { id: rule.id, version: rule.version },
+        { id: videoOnlyRule.id, version: videoOnlyRule.version },
+      ],
+      references: [{ id: canonical.id, version: canonical.version }],
+    } satisfies GenerationContinuitySelection;
+    const videoSubmitted = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "fast-default",
+        idempotencyKey: "continuity_video_speech_tail_0001",
+        workflow: {
+          workflowId: videoWorkflow.workflow.id,
+          revisionId: videoWorkflow.workflow.currentRevision.id,
+          inputBindings: {},
+          expectedPrompt: videoCompiled.prompt,
+        },
+        videoSpeech: videoCompiled.speech,
+        continuity: videoSelection,
+      }),
+    }), local);
+    expect(videoSubmitted.status).toBe(202);
+    expect(await result(videoSubmitted)).toMatchObject({
+      job: {
+        prompt: videoCompiled.prompt,
+        settingsStamp: {
+          videoSpeech: { directive: videoCompiled.speech.directive },
+          continuity: { selection: videoSelection, directive: { text: videoDirective.text } },
+        },
+      },
+    });
   });
 
   it("validates JSON, project ownership, and commercial-reference provenance", async () => {
@@ -1650,6 +1729,21 @@ describe("Creative Studio Worker API", () => {
     await env.DB.prepare("update creative_generation_batches set next_attempt_at = ? where id = ?").bind("2000-01-01T00:00:00.000Z", batchId).run();
     await env.DB.prepare("update creative_jobs set status = 'completed', updated_at = ? where idempotency_key = ?")
       .bind(new Date().toISOString(), "durable_pair_lane_one_001").run();
+    const waitingEnhancement = await result(await routeCreativeStudioApi(request("/api/creative-studio/prompt-enhancements", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        workflowId: imported.workflow.id,
+        workflowRevisionId: secondRevision.workflow.currentRevision.id,
+        sourcePrompt: "A glass figure crosses the room while the camera follows one precise transformation.",
+        inputMode: "text-to-video",
+        sourceId: null,
+        videoDurationSeconds: 5,
+        idempotencyKey: "video_waits_ahead_of_gemma_0001",
+      }),
+    }), local)) as { promptEnhancement: { id: string; status: string } };
+    expect(waitingEnhancement.promptEnhancement.status).toBe("waiting-for-runner");
     const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1661,6 +1755,8 @@ describe("Creative Studio Worker API", () => {
       body: JSON.stringify({ version: "1.16.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, comfyVersion: "0.33.0", device: "RTX 3090", activeJobId: null, error: null, modelTrainingProviders: [] }),
     }), local)) as { kind: string; bundle: { job: { id: string; settingsStamp: { outputBatch: { index: number } } } } };
     expect(claimed).toMatchObject({ kind: "generation", bundle: { job: { settingsStamp: { outputBatch: { index: 2 } } } } });
+    expect(await env.DB.prepare("select status from creative_prompt_enhancements where id = ?")
+      .bind(waitingEnhancement.promptEnhancement.id).first()).toMatchObject({ status: "waiting-for-runner" });
 
     const failed = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${claimed.bundle.job.id}/fail`, {
       method: "POST",

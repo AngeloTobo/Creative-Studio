@@ -107,6 +107,7 @@ Local and remote stores are intentionally separate. Nothing synchronizes or publ
 - Windows PowerShell and the repository checkout.
 - Node.js 24 and npm. The current verified toolchain is Node `24.16.0` and npm `11.13.0`.
 - ComfyUI available at `http://127.0.0.1:8188`.
+- LM Studio's local CLI at its normal Windows location when LM Studio/Qwen is used. Before an LTX or other high-VRAM video render, Local Runner verifies that external LM Studio models are unloaded; standalone Gemma work waits behind generation and uses a verified ComfyUI release boundary before and after inference. The Gemma/text encoders that are part of the selected LTX workflow remain available to that workflow.
 - The model files and custom nodes required by the workflows you intend to execute.
 - At least one ComfyUI **API-format** workflow for real generation. A UI-format graph may be retained and edited, but it is not executable until exported in API format.
 - Chrome installed when running the configured Playwright suite.
@@ -118,7 +119,7 @@ npm ci
 npm run local
 ```
 
-Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.17.1, and starts Vite.
+Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.18.0, and starts Vite. A machine-local process lock prevents a second Creative Studio runner from competing for the same GPU.
 
 Then:
 

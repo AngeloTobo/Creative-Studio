@@ -42,6 +42,7 @@ import {
   type VideoDurationSeconds,
   type VideoPerformanceMode,
   type VideoPerformanceStamp,
+  type VideoSpeechStamp,
   type UpdateProjectRequest,
   type UpdateCanonReferenceRequest,
   type UpdateContinuityRuleRequest,
@@ -365,6 +366,23 @@ function reconciliationEmail(request: Request) {
 
 function generationBatchErrorIsPermanent(error: string) {
   return /^(?:invalid_|unknown_|creative_dna_not_found|dna_project_mismatch|project_not_found|project_archived|workflow_.*(?:required|missing|mismatch|not_found|not_supported)|runner_input_.*(?:not_found|mismatch)|video_.*(?:required|missing|mismatch|not_supported)|generation_batch_conflict)/i.test(error);
+}
+
+function authoredPromptBeforeContinuity(prompt: string, suffix: string, videoSpeech?: VideoSpeechStamp) {
+  const marker = ` ${suffix}`;
+  const markerIndex = prompt.lastIndexOf(marker);
+  if (markerIndex < 0) return "";
+  const trailing = prompt.slice(markerIndex + marker.length).trim();
+  if (trailing) {
+    if (!videoSpeech) return "";
+    const allowedTrustedSpeechTails = new Set([
+      videoSpeech.directive,
+      `Audio: ${videoSpeech.directive}`,
+      `${videoSpeech.directive}\nAudio: Soundscape follows the visible action.`,
+    ]);
+    if (!allowedTrustedSpeechTails.has(trailing)) return "";
+  }
+  return prompt.slice(0, markerIndex).replace(/[.\s]+$/, "").trim();
 }
 
 function internalBatchLaneRequest(incoming: Request, batch: GenerationBatchRecord, input: SubmitJobRequest) {
@@ -844,13 +862,16 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (input.comfyReady !== true) return json({ ok: true, kind: null, bundle: null });
     await reconcileLoveLoops(env, currentRunner.ownerId);
     await reconcileOvernightSessions(env, currentRunner.ownerId);
+    // Ready/resumable media work owns the single workstation GPU. Reconcile a
+    // durable multi-output lane and claim generation before any standalone
+    // Gemma helper can replace a warm LTX/H3 model family.
+    await reconcileGenerationBatch(request, env, currentRunner.ownerId);
+    const generation = await claimLocalRunnerJob(env, currentRunner);
+    if (generation) return json({ ok: true, kind: "generation", bundle: generation });
     const promptEnhancement = await claimVideoPromptEnhancement(env, currentRunner);
     if (promptEnhancement) return json({ ok: true, kind: "prompt-enhancement", bundle: promptEnhancement });
     const videoScript = await claimVideoScriptDraft(env, currentRunner);
     if (videoScript) return json({ ok: true, kind: "video-script", bundle: videoScript });
-    await reconcileGenerationBatch(request, env, currentRunner.ownerId);
-    const generation = await claimLocalRunnerJob(env, currentRunner);
-    if (generation) return json({ ok: true, kind: "generation", bundle: generation });
     const training = await claimLocalRunnerTrainingJob(env, currentRunner);
     if (training) return json({ ok: true, kind: "training", bundle: training });
     const modelTraining = await claimModelTrainingJob(env, currentRunner, input.modelTrainingProviders ?? []);
@@ -1499,9 +1520,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         if (continuity) {
           if (modality === "music") throw new Error("music_continuity_not_supported");
           const suffix = continuity.directive.text;
-          const authoredPrompt = prompt.endsWith(` ${suffix}`)
-            ? prompt.slice(0, -(suffix.length + 1)).replace(/[.\s]+$/, "").trim()
-            : "";
+          const authoredPrompt = authoredPromptBeforeContinuity(prompt, suffix, videoSpeech);
           if (authoredPrompt.length < 4) throw new Error("workflow_continuity_prompt_mismatch");
         }
         const createdAt = new Date().toISOString();

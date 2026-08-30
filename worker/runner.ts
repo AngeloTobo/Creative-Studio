@@ -216,7 +216,7 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
           and l.owner_id = creative_jobs.owner_id and l.status = 'active'
       ))
     order by case when status = 'running' and runner_id = ? then 0 when status = 'running' then 1 else 2 end,
-      priority desc, created_at limit 1`)
+      case when modality = 'video' then 0 else 1 end, priority desc, created_at limit 1`)
     .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, runner.id, nowValue, runner.id, nowValue, nowValue, nowValue, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();

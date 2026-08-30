@@ -52,6 +52,6 @@ describe("Local Runner Comfy image input normalization", () => {
   });
 
   it("reports the orientation-safe runner source version", () => {
-    expect(RUNNER_VERSION).toBe("1.17.1");
+    expect(RUNNER_VERSION).toBe("1.18.0");
   });
 });

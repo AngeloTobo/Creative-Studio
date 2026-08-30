@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The Local Runner is intentionally plain ESM so Windows can launch it directly with Node.
 // @ts-expect-error TypeScript does not emit declarations for the runtime-only runner module.
-import { createComfyModelResidencyState, enhanceSongPrompt, freeComfyMemory, generationModelResidencyProfile, prepareAceStepDataset, prepareGenerationModelHandoff, recordGenerationModelResidency } from "../../runner/index.mjs";
+import { createComfyModelResidencyState, enhanceSongPrompt, freeComfyMemory, generationModelResidencyProfile, prepareAceStepDataset, prepareGemmaModelHandoff, prepareGenerationGpuHandoff, prepareGenerationModelHandoff, recordGenerationModelResidency } from "../../runner/index.mjs";
 
 const config = {
   apiBase: "https://runner.example.test",
@@ -70,6 +70,69 @@ describe("Local Runner Comfy model-family residency", () => {
     expect(freeMemory).not.toHaveBeenCalled();
     expect(observeQueue).not.toHaveBeenCalled();
     expect(output.join(" ")).toContain("reusing warm ltx model set");
+  });
+
+  it("unloads external LM Studio before reusing a warm LTX model", async () => {
+    const state = createComfyModelResidencyState();
+    recordGenerationModelResidency(state, generationModelResidencyProfile(ltx));
+    const ensureLmStudioUnloaded = vi.fn(async () => ({ verified: true, unloadedCount: 1 }));
+    const freeMemory = vi.fn();
+
+    await expect(prepareGenerationGpuHandoff(config, ltx, {
+      modelResidencyState: state,
+      ensureLmStudioUnloaded,
+      freeMemory,
+      stdout: { write: () => undefined },
+    })).resolves.toMatchObject({ action: "warm", profile: { family: "ltx" } });
+
+    expect(ensureLmStudioUnloaded).toHaveBeenCalledOnce();
+    expect(freeMemory).not.toHaveBeenCalled();
+  });
+
+  it("proves idle, frees warm LTX, and proves idle again before standalone Gemma", async () => {
+    const state = createComfyModelResidencyState();
+    recordGenerationModelResidency(state, generationModelResidencyProfile(ltx));
+    const events: string[] = [];
+    const ensureLmStudioUnloaded = vi.fn(async () => {
+      events.push("lm-studio-empty");
+      return { verified: true, unloadedCount: 0 };
+    });
+    const observeQueue = vi.fn(async () => {
+      events.push("comfy-idle");
+      return idle;
+    });
+    const freeMemory = vi.fn(async () => {
+      events.push("comfy-free");
+      return { released: true, status: 200 };
+    });
+
+    await expect(prepareGemmaModelHandoff(config, "promptenh-test", {
+      modelResidencyState: state,
+      ensureLmStudioUnloaded,
+      observeQueue,
+      freeMemory,
+      stdout: { write: () => undefined },
+    })).resolves.toMatchObject({
+      action: "released",
+      profile: { family: "gemma4", highVram: true },
+      previous: { family: "ltx" },
+    });
+
+    expect(events).toEqual(["lm-studio-empty", "comfy-idle", "comfy-free", "comfy-idle"]);
+  });
+
+  it("never submits standalone Gemma when the warm LTX release is unconfirmed", async () => {
+    const state = createComfyModelResidencyState();
+    recordGenerationModelResidency(state, generationModelResidencyProfile(ltx));
+    const freeMemory = vi.fn(async () => ({ released: false, error: "comfyui_free_failed" }));
+
+    await expect(prepareGemmaModelHandoff(config, "promptenh-blocked", {
+      modelResidencyState: state,
+      ensureLmStudioUnloaded: async () => ({ verified: true }),
+      observeQueue: async () => idle,
+      freeMemory,
+      stdout: { write: () => undefined },
+    })).rejects.toThrow("comfyui_model_handoff_unconfirmed");
   });
 
   it("releases and verifies Comfy before switching H3 to LTX, then permits warm LTX reuse", async () => {
@@ -284,8 +347,12 @@ describe("Local Runner Comfy model-family residency", () => {
     await expect(enhanceSongPrompt(config, musicBundle, { id: "music::prompt" }, "", {
       modelResidencyState: state,
       freeMemory,
+      ensureLmStudioUnloaded: async () => ({ verified: true }),
+      observeQueue: async () => idle,
     })).resolves.toMatchObject({ enhancedPrompt: enhanced, comfyPromptId: promptId });
 
+    expect(freeMemory).toHaveBeenCalledTimes(2);
+    expect(freeMemory).toHaveBeenCalledWith(config, "model handoff stable-audio to gemma4", undefined);
     expect(freeMemory).toHaveBeenCalledWith(config, `song prompt enhancement ${musicBundle.job.id}`, undefined);
     expect(state).toEqual({ status: "empty", family: null, signature: null, highVram: null });
   });
@@ -328,9 +395,15 @@ describe("Local Runner Comfy model-family residency", () => {
     await prepareAceStepDataset(config, {
       modelTrainingJob: { id: "train-ace-cleanup", instrumental: true },
       assets: [{ id: "asset-audio", name: "Test track", originalFileName: "test.mp3" }],
-    }, { modelResidencyState: state, freeMemory });
+    }, {
+      modelResidencyState: state,
+      freeMemory,
+      ensureLmStudioUnloaded: async () => ({ verified: true }),
+      observeQueue: async () => idle,
+    });
 
-    expect(events).toEqual(["dataset", "free"]);
+    expect(events).toEqual(["free", "dataset", "free"]);
+    expect(freeMemory).toHaveBeenCalledWith(config, "model handoff ltx to gemma4", undefined);
     expect(freeMemory).toHaveBeenCalledWith(config, "ACE-Step dataset captioning train-ace-cleanup", undefined);
     expect(state).toEqual({ status: "empty", family: null, signature: null, highVram: null });
   });

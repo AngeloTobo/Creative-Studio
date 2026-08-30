@@ -221,7 +221,7 @@ function message(error: unknown) {
     return "Creative Studio could not prepare this video batch. No render started; refresh Create and try again.";
   }
   if (error.message === "generation_batch_terminal") {
-    return "The set stopped before every version could be queued. Completed versions remain retained. Open Work to see the failed version and correction guidance.";
+    return "The set stopped before every version could be queued. Any result that actually finished remains retained; no unfinished version is presented as complete. Open Work for the exact correction guidance.";
   }
   if (error.message === "image_custom_mode_required") {
     return "This image setup exceeds the fast limits. Open Create and choose Custom · can be slow only when you want that longer render.";

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The Local Runner is intentionally plain ESM so Windows can launch it directly with Node.
 // @ts-expect-error TypeScript does not emit declarations for the runtime-only runner module.
-import { executeOvernightPlanBundle, executePromptEnhancementBundle, executeVideoScriptDraftBundle } from "../../runner/index.mjs";
+import { createComfyModelResidencyState, executeOvernightPlanBundle, executePromptEnhancementBundle, executeVideoScriptDraftBundle } from "../../runner/index.mjs";
 
 const config = {
   apiBase: "https://runner.example.test",
@@ -137,15 +137,18 @@ describe("Local Runner standalone Gemma cleanup", () => {
     }));
 
     await run({
+      modelResidencyState: createComfyModelResidencyState(),
+      ensureLmStudioUnloaded: async () => ({ verified: true }),
+      observeQueue: async () => ({ state: "idle", runningCount: 0, pendingCount: 0 }),
       freeMemory: async (_config: unknown, reason: string) => {
         events.push("free");
-        expect(reason).toBe(releaseReason);
-        return { released: false, status: 503, attempts: 2, error: "comfyui_free_503" };
+        expect([`model handoff unknown to gemma4`, releaseReason]).toContain(reason);
+        return { released: true, status: 200, attempts: 1, error: null };
       },
       machineHeartbeat: async () => undefined,
     });
 
-    expect(events).toEqual(["complete", "free"]);
+    expect(events).toEqual(["free", "complete", "free"]);
   });
 
   it.each(cases.slice(0, 2))("cancels and drains an exact Comfy prompt before reporting a failed $name", async ({ releaseReason, run }) => {
@@ -173,6 +176,9 @@ describe("Local Runner standalone Gemma cleanup", () => {
     }));
 
     await run({
+      modelResidencyState: createComfyModelResidencyState(),
+      ensureLmStudioUnloaded: async () => ({ verified: true }),
+      observeQueue: async () => ({ state: "idle", runningCount: 0, pendingCount: 0 }),
       cancelPrompt: async (_config: unknown, cancelledPromptId: string) => {
         expect(cancelledPromptId).toBe(promptId);
         events.push("cancel");
@@ -189,6 +195,6 @@ describe("Local Runner standalone Gemma cleanup", () => {
       machineHeartbeat: async () => undefined,
     });
 
-    expect(events).toEqual(["cancel", "drain", "fail", "free"]);
+    expect(events).toEqual(["free", "cancel", "drain", "fail", "free"]);
   });
 });

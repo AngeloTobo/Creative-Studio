@@ -17,8 +17,12 @@ import {
   executeAceStepTraining,
   prepareAceStepWorkspace,
 } from "./aceStepTraining.mjs";
+import {
+  acquireRunnerGpuLock,
+  ensureLmStudioUnloaded,
+} from "./gpuCoordinator.mjs";
 
-export const RUNNER_VERSION = "1.17.1";
+export const RUNNER_VERSION = "1.18.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -174,6 +178,7 @@ export function generationModelResidencyProfile(bundle) {
   else if (/\bhunyuan(?:video)?\b/i.test(text)) family = "hunyuan-video";
   else if (/\bcogvideo\b/i.test(text)) family = "cogvideo";
   else if (/\bmochi\b/i.test(text)) family = "mochi";
+  else if (/\bgemma[\s_.-]*4\b|gemma4/i.test(text)) family = "gemma4";
   else if (/\bz[\s_.-]*image\b/i.test(text)) family = "z-image";
   else if (/\bflux\b/i.test(text)) family = "flux";
   else if (/\bsdxl\b|stable[\s_.-]*diffusion[\s_.-]*xl/i.test(text)) family = "sdxl";
@@ -184,7 +189,7 @@ export function generationModelResidencyProfile(bundle) {
 
   const recognizedHighVramFamilies = new Set([
     "minimax-h3", "ltx", "wan", "hunyuan-video", "cogvideo", "mochi",
-    "z-image", "flux", "sdxl", "minimax-music", "ace-step", "stable-audio",
+    "gemma4", "z-image", "flux", "sdxl", "minimax-music", "ace-step", "stable-audio",
   ]);
   const highVram = modality === "video" || recognizedHighVramFamilies.has(family);
   const signatureParts = models.length ? models : [family];
@@ -292,6 +297,45 @@ export async function prepareGenerationModelHandoff(config, bundle, options = {}
   writeRunnerLine(stdout,
     `[Creative Studio Runner] verified ComfyUI model handoff ${runnerLogLabel(from)} -> ${profile.family} for ${runnerLogLabel(bundle?.job?.id)}`);
   return { action: "released", profile, previous, release };
+}
+
+function gemmaResidencyBundle(taskId) {
+  return {
+    job: {
+      id: taskId,
+      modality: "analysis",
+      upstreamId: null,
+      settingsStamp: { models: [GEMMA_DESCRIPTION_MODEL] },
+    },
+    workflow: {
+      name: "Creative Studio standalone Gemma 4",
+      description: "Bounded local prompt and media analysis",
+      sourceFileName: GEMMA_DESCRIPTION_WORKFLOW_ID,
+      modality: "analysis",
+      currentRevision: { models: [GEMMA_DESCRIPTION_MODEL] },
+    },
+    graph: { "1": { class_type: "TextGeneration", inputs: {} } },
+  };
+}
+
+async function releaseExternalLmStudioForGpu(options = {}) {
+  const release = options.ensureLmStudioUnloaded || ensureLmStudioUnloaded;
+  return release(options.lmStudioOptions || {});
+}
+
+export async function prepareGemmaModelHandoff(config, taskId, options = {}) {
+  await releaseExternalLmStudioForGpu(options);
+  return prepareGenerationModelHandoff(config, gemmaResidencyBundle(taskId), options);
+}
+
+export function recordGemmaModelResidency(state = PROCESS_COMFY_MODEL_RESIDENCY) {
+  return recordGenerationModelResidency(state, generationModelResidencyProfile(gemmaResidencyBundle("gemma")));
+}
+
+export async function prepareGenerationGpuHandoff(config, bundle, options = {}) {
+  const profile = generationModelResidencyProfile(bundle);
+  if (profile.highVram) await releaseExternalLmStudioForGpu(options);
+  return prepareGenerationModelHandoff(config, bundle, options);
 }
 
 async function runnerRequest(config, path, init = {}) {
@@ -1933,6 +1977,7 @@ export async function waitForOutput(config, bundle, promptId, options = {}) {
   while (now() - started < executionTimeoutMs) {
     const current = now();
     if (current - lastHeartbeat >= heartbeatIntervalMs) {
+      if (options.gpuGuard) await options.gpuGuard();
       const result = await heartbeat({
         progress: COMFY_RENDER_PROGRESS,
         stage: "rendering",
@@ -2013,10 +2058,9 @@ export async function enhanceSongPrompt(config, bundle, parameter, lyricsValue, 
   let comfyPromptId = null;
   let safeToRelease = false;
   try {
+    await prepareGemmaModelHandoff(config, `${bundle.job.id}-song-prompt-enhancement`, options);
     comfyPromptId = await submitPrompt(config, graph, `${bundle.job.id}-song-prompt-enhancement`);
-    // Gemma is now the most recently requested model, so any earlier media-family
-    // signature is stale until this exact prompt is terminal and /free succeeds.
-    invalidateComfyModelResidency(residencyState);
+    recordGemmaModelResidency(residencyState);
     const output = await waitForTextOutput(config, graph, comfyPromptId, async () => {
       await requireJobHeartbeat(config, bundle.job.id, { progress: 6, stage: "enhancing-prompt" }, comfyPromptId);
     }, "song_prompt_enhancement");
@@ -2054,8 +2098,9 @@ export async function enhanceSongPrompt(config, bundle, parameter, lyricsValue, 
 export async function describeTrainingMedia(config, trainingJobId, specification, media, progress, heartbeat, options = {}) {
   const filename = await uploadTrainingComfyInput(config, specification.sourceId, media);
   const graph = buildGemmaDescriptionGraph(specification.kind, filename, specification.label);
+  await prepareGemmaModelHandoff(config, `${trainingJobId}-${specification.sourceId}`, options);
   const promptId = await submitPrompt(config, graph, `${trainingJobId}-${specification.sourceId}`);
-  invalidateComfyModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
+  recordGemmaModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
   options.onGemmaPrompt?.(promptId);
   try {
     const text = await waitForTextOutput(config, graph, promptId, async () => {
@@ -2253,7 +2298,9 @@ export async function executeOvernightPlanBundle(config, bundle, options = {}) {
   let planRegistered = false;
   try {
     const graph = buildGemmaOvernightPlanGraph(bundle);
+    await prepareGemmaModelHandoff(config, `${session.id}-overnight-plan`, options);
     promptId = await submitPrompt(config, graph, `${session.id}-overnight-plan`);
+    recordGemmaModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
     const rawOutput = await waitForTextOutput(config, graph, promptId, async () => {
       await runnerRequest(config, `/api/creative-studio/runner/overnight/${session.id}/heartbeat`, {
         method: "POST",
@@ -2295,7 +2342,9 @@ export async function executeStoryPlanBundle(config, bundle, options = {}) {
   let planRegistered = false;
   try {
     const graph = buildGemmaStoryPlanGraph(bundle);
+    await prepareGemmaModelHandoff(config, `${refresh.id}-story-bank`, options);
     promptId = await submitPrompt(config, graph, `${refresh.id}-story-bank`);
+    recordGemmaModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
     const rawOutput = await waitForTextOutput(config, graph, promptId, async () => {
       await runnerRequest(config, `/api/creative-studio/runner/story-plans/${refresh.id}/heartbeat`, {
         method: "POST",
@@ -2340,7 +2389,9 @@ export async function executeVideoScriptDraftBundle(config, bundle, options = {}
       seed: stableVideoScriptDraftSeed(draft.id),
       filename,
     });
+    await prepareGemmaModelHandoff(config, `${draft.id}-video-script`, options);
     promptId = await submitPrompt(config, graph, `${draft.id}-video-script`);
+    recordGemmaModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
     const rawOutput = await waitForTextOutput(config, graph, promptId, async () => {
       await runnerRequest(config, `/api/creative-studio/runner/video-scripts/${draft.id}/heartbeat`, {
         method: "POST",
@@ -2411,7 +2462,9 @@ export async function executePromptEnhancementBundle(config, bundle, options = {
       outputFormat: enhancement.outputFormat,
       seed: stableVideoPromptEnhancementSeed(enhancement.id),
     });
+    await prepareGemmaModelHandoff(config, `${enhancement.id}-video-prompt-enhancement`, options);
     promptId = await submitPrompt(config, graph, `${enhancement.id}-video-prompt-enhancement`);
+    recordGemmaModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
     const output = await waitForTextOutput(config, graph, promptId, async () => {
       await runnerRequest(config, `/api/creative-studio/runner/prompt-enhancements/${enhancement.id}/heartbeat`, {
         method: "POST",
@@ -2470,7 +2523,7 @@ async function executeBundle(config, bundle, options = {}) {
       }
       graph = applySongPromptToGraph(graph, promptParameter, enhancement.enhancedPrompt);
     }
-    const handoff = await prepareGenerationModelHandoff(config, bundle, options);
+    const handoff = await prepareGenerationGpuHandoff(config, bundle, options);
     await requireJobHeartbeat(config, bundle.job.id, {
       progress: 7,
       stage: "submitting",
@@ -2497,6 +2550,9 @@ async function executeBundle(config, bundle, options = {}) {
     }, promptId);
     const output = await waitForOutput(config, { ...bundle, graph }, promptId, {
       initialObservationAt: firstObservation.observedAt,
+      ...(bundle.job.modality === "video" ? {
+        gpuGuard: () => releaseExternalLmStudioForGpu(options),
+      } : {}),
     });
     // History now contains a terminal media output, so this prompt can no longer overlap
     // the next claimed job even if retaining the file fails later.
@@ -2734,10 +2790,11 @@ export async function prepareAceStepDataset(config, bundle, options = {}) {
     const media = await downloadTrainingMedia(config, asset.id);
     const filename = await uploadTrainingComfyInput(config, asset.id, media);
     const graph = buildAceStepCaptionGraph(filename, `Training track ${index + 1}`);
+    await prepareGemmaModelHandoff(config, `${job.id}-${asset.id}-ace-caption`, options);
     const promptId = await submitPrompt(config, graph, `${job.id}-${asset.id}-ace-caption`);
     activePromptId = promptId;
     gemmaUsed = true;
-    invalidateComfyModelResidency(residencyState);
+    recordGemmaModelResidency(residencyState);
     const output = await waitForTextOutput(config, graph, promptId, async () => {
       const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
         method: "POST",
@@ -2755,6 +2812,11 @@ export async function prepareAceStepDataset(config, bundle, options = {}) {
       durationSeconds = Math.max(1, Math.min(240, Math.round(Number(metadata.format.duration || 1) * 100) / 100));
     } catch {
       durationSeconds = 1;
+    }
+    if (!job.instrumental) {
+      const released = await releaseComfyTaskResidency(config, `ACE-Step caption before transcription ${job.id}`, options);
+      if (!released?.released) throw new Error("ace_step_gpu_handoff_unconfirmed");
+      gemmaUsed = false;
     }
     const lyrics = job.instrumental ? "[Instrumental]" : await transcribeAceStepLyrics(media, asset.id, async () => {
       const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
@@ -2868,7 +2930,9 @@ async function executeModelTrainingBundle(config, bundle, options = {}) {
       if (!response.continue) throw new Error("model_training_cancelled");
     };
     await heartbeat(30, "preflight");
-    await releaseComfyTaskResidency(config, `ACE-Step training ${job.id}`, options);
+    await releaseExternalLmStudioForGpu(options);
+    const released = await releaseComfyTaskResidency(config, `ACE-Step training ${job.id}`, options);
+    if (!released?.released) throw new Error("ace_step_gpu_handoff_unconfirmed");
     const gpu = await aceStepGpuPreflight();
     await heartbeat(34, "preflight", `${gpu.name}:${gpu.freeMiB}MiB-free`);
     const workspace = await prepareAceStepWorkspace(
@@ -2926,22 +2990,22 @@ export async function runOnce(config, options = {}) {
   });
   if (work.kind === "overnight-plan" && work.bundle) {
     process.stdout.write(`[Creative Studio Runner] claimed overnight plan ${work.bundle.session.id}\n`);
-    await executeOvernightPlanBundle(config, work.bundle);
+    await executeOvernightPlanBundle(config, work.bundle, options);
     return true;
   }
   if (work.kind === "story-plan" && work.bundle) {
     process.stdout.write(`[Creative Studio Runner] claimed Story Bank plan ${work.bundle.refresh.id}\n`);
-    await executeStoryPlanBundle(config, work.bundle);
+    await executeStoryPlanBundle(config, work.bundle, options);
     return true;
   }
   if (work.kind === "video-script" && work.bundle) {
     process.stdout.write(`[Creative Studio Runner] claimed video script ${work.bundle.videoScriptDraft.id}\n`);
-    await executeVideoScriptDraftBundle(config, work.bundle);
+    await executeVideoScriptDraftBundle(config, work.bundle, options);
     return true;
   }
   if (work.kind === "prompt-enhancement" && work.bundle) {
     process.stdout.write(`[Creative Studio Runner] claimed video prompt enhancement ${work.bundle.promptEnhancement.id}\n`);
-    await executePromptEnhancementBundle(config, work.bundle);
+    await executePromptEnhancementBundle(config, work.bundle, options);
     return true;
   }
   if (work.kind === "generation" && work.bundle) {
@@ -3519,21 +3583,26 @@ async function main() {
   if (process.argv.includes("--self-test")) return selfTest();
   const config = loadConfig();
   const once = process.argv.includes("--once");
+  const gpuLock = await acquireRunnerGpuLock();
   process.stdout.write(`[Creative Studio Runner] v${RUNNER_VERSION} · ${config.apiBase} · ${config.comfyUrl}\n`);
-  do {
-    let nextDelay = config.pollIntervalMs;
-    try {
-      const didWork = await runOnce(config);
-      if (didWork) nextDelay = resolveRunnerFollowUpInterval(config.apiBase);
-    } catch (caught) {
-      const error = caught instanceof Error ? caught.message : "runner_loop_failed";
-      process.stderr.write(`[Creative Studio Runner] ${error}\n`);
-      const cloudflareLimited = error === "runner_api_429" || error.includes("rate_limit");
-      if (cloudflareLimited) nextDelay = 15 * 60_000;
-      else await machineHeartbeat(config, null, error).catch(() => undefined);
-    }
-    if (!once) await sleep(nextDelay);
-  } while (!once);
+  try {
+    do {
+      let nextDelay = config.pollIntervalMs;
+      try {
+        const didWork = await runOnce(config);
+        if (didWork) nextDelay = resolveRunnerFollowUpInterval(config.apiBase);
+      } catch (caught) {
+        const error = caught instanceof Error ? caught.message : "runner_loop_failed";
+        process.stderr.write(`[Creative Studio Runner] ${error}\n`);
+        const cloudflareLimited = error === "runner_api_429" || error.includes("rate_limit");
+        if (cloudflareLimited) nextDelay = 15 * 60_000;
+        else await machineHeartbeat(config, null, error).catch(() => undefined);
+      }
+      if (!once) await sleep(nextDelay);
+    } while (!once);
+  } finally {
+    await gpuLock.release();
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
