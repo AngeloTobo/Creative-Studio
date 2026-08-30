@@ -1224,6 +1224,12 @@ function containsIdentity(value: string, identities: string[]) {
   return identities.some((identity) => identity && redacted(value, [identity], value.length + 1) !== boundedText(value, value.length + 1));
 }
 
+function isStructuredMusicPrompt(value: string) {
+  const normalized = value.replace(/\r\n?/g, "\n").trim();
+  const match = /^### Global Metadata\n([\s\S]*?)\n### Vocal Details\n([\s\S]*?)\n### Arrangement\n([\s\S]*)$/i.exec(normalized);
+  return Boolean(match && match.slice(1).every((section) => section.trim().length > 0));
+}
+
 function assertStoryPlanMatchesWorkflowProfiles(plan: StoryPlan, workflows: StoryPlannerWorkflow[]) {
   const video = workflows.find((item) => item.modality === "video");
   const music = workflows.find((item) => item.modality === "music");
@@ -1237,8 +1243,7 @@ function assertStoryPlanMatchesWorkflowProfiles(plan: StoryPlan, workflows: Stor
         throw new Error("story_plan_video_format_invalid");
       }
     }
-    if (music.promptOutputFormat === "structured-caption"
-      && !/^### Global Metadata\s*\n[\s\S]+?^### Vocal Details\s*\n[\s\S]+?^### Arrangement\s*\n/im.test(story.music.prompt)) {
+    if (music.promptOutputFormat === "structured-caption" && !isStructuredMusicPrompt(story.music.prompt)) {
       throw new Error("story_plan_music_format_invalid");
     }
   }

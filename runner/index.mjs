@@ -18,7 +18,7 @@ import {
   prepareAceStepWorkspace,
 } from "./aceStepTraining.mjs";
 
-export const RUNNER_VERSION = "1.17.0";
+export const RUNNER_VERSION = "1.17.1";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -1108,7 +1108,7 @@ function storyPromptGuidance(workflow) {
     return `${source}Write one chronological plain-English paragraph for exactly ${duration} seconds. Establish the opening composition, then specify concrete subject action, environmental response, camera and focus movement, changing light, synchronized nonverbal ambience and original music, and a resolved final image. No headings, timestamps, dialogue unless explicitly authored, narration, lyrics, captions, titles, logos, black frames, or model names.`;
   }
   if (workflow.promptOutputFormat === "structured-caption") {
-    return "Write a MiniMax Music 3 instrumental structured caption of 120 to 220 words with exactly these headings in order inside the prompt string: ### Global Metadata, ### Vocal Details, ### Arrangement. Describe genre and mood arc, tempo only when meaningful, instrumentation, sonic palette, production, an explicitly instrumental lead texture, and section-by-section musical progression. Translate the story into music rather than retelling biography or visual composition. No lyrics, artist names, song names, visual camera language, or unrelated continuity notes.";
+    return "Write a MiniMax Music 3 instrumental structured caption of 120 to 220 words with exactly these headings in order inside the prompt string: ### Global Metadata, ### Vocal Details, ### Arrangement. Put each heading on its own line and begin its non-empty section body on the following line. Describe genre and mood arc, tempo only when meaningful, instrumentation, sonic palette, production, an explicitly instrumental lead texture, and section-by-section musical progression. Translate the story into music rather than retelling biography or visual composition. No lyrics, artist names, song names, visual camera language, or unrelated continuity notes.";
   }
   return "Write one model-ready instrumental music paragraph of 45 to 100 words. Lead with style and emotional arc, then defining instruments, rhythm, musical development, texture, stereo depth, dynamics, production, and final sonic state. Translate the story into sound without retelling biography or visual framing. No lyrics, artist names, song names, dialogue, or narration.";
 }
@@ -1134,6 +1134,26 @@ function storyWorkflows(bundle) {
   }
   if (workflows.size !== 3) throw new Error("story_planner_workflows_invalid");
   return workflows;
+}
+
+function normalizeStructuredMusicPrompt(value) {
+  if (typeof value !== "string") return value;
+  const labels = ["Global Metadata", "Vocal Details", "Arrangement"];
+  const expected = labels.map((label) => label.toLocaleLowerCase());
+  const matches = [...value.matchAll(/### (Global Metadata|Vocal Details|Arrangement):?(?=\s|$)/gi)];
+  if (matches.length !== expected.length
+    || matches.some((match, index) => match[1].toLocaleLowerCase() !== expected[index])
+    || value.slice(0, matches[0].index).trim()) return value;
+  const sections = matches.map((match, index) => value
+    .slice((match.index ?? 0) + match[0].length, matches[index + 1]?.index ?? value.length)
+    .trim());
+  if (sections.some((section) => !section)) return value;
+  return labels.map((label, index) => `### ${label}\n${sections[index]}`).join("\n\n");
+}
+
+function isStructuredMusicPrompt(value) {
+  const match = /^### Global Metadata\n([\s\S]*?)\n### Vocal Details\n([\s\S]*?)\n### Arrangement\n([\s\S]*)$/i.exec(value.trim());
+  return Boolean(match && match.slice(1).every((section) => section.trim().length > 0));
 }
 
 export function parseGemmaStoryPlanOutput(value, bundle) {
@@ -1167,15 +1187,18 @@ export function parseGemmaStoryPlanOutput(value, bundle) {
     for (const modality of ["image", "video", "music"]) {
       const prompt = raw[modality];
       if (!exactObjectKeys(prompt, ["title", "prompt"])) throw new Error("story_plan_prompt_invalid");
-      const text = boundedOvernightText(prompt.prompt, 24, 3_800, "story_plan_prompt_invalid");
+      const workflow = workflows.get(modality);
+      const promptValue = modality === "music" && workflow.promptOutputFormat === "structured-caption"
+        ? normalizeStructuredMusicPrompt(prompt.prompt)
+        : prompt.prompt;
+      const text = boundedOvernightText(promptValue, 24, 3_800, "story_plan_prompt_invalid");
       if (/\b(?:as an ai|language model|workflow id|model path|comfyui|schemaVersion|json object)\b/i.test(text)) {
         throw new Error("story_plan_metadata_leak");
       }
-      const workflow = workflows.get(modality);
       if (modality === "video" && workflow.promptOutputFormat === "minimax-h3-timeline"
         && (!/^SHOT 1\b/i.test(text) || !/^Audio:/im.test(text))) throw new Error("story_plan_video_format_invalid");
       if (modality === "music" && workflow.promptOutputFormat === "structured-caption"
-        && !/^### Global Metadata[\s\S]+^### Vocal Details[\s\S]+^### Arrangement/im.test(text)) {
+        && !isStructuredMusicPrompt(text)) {
         throw new Error("story_plan_music_format_invalid");
       }
       result[modality] = {
@@ -3142,6 +3165,40 @@ async function selfTest() {
   if (parsedStoryPlan.stories.length !== 4 || parsedStoryPlan.stories[3].role !== "awe") {
     throw new Error("runner_self_test_story_output_failed");
   }
+  const inlineMusicStoryPlan = structuredClone(storyPlan);
+  inlineMusicStoryPlan.stories = inlineMusicStoryPlan.stories.map((story) => ({
+    ...story,
+    music: {
+      ...story.music,
+      prompt: story.music.prompt
+        .replace(/### (Global Metadata|Vocal Details|Arrangement)/g, "### $1:")
+        .replace(/\n+/g, " "),
+    },
+  }));
+  const parsedInlineMusicStoryPlan = parseGemmaStoryPlanOutput(JSON.stringify(inlineMusicStoryPlan), storyBundle);
+  if (!parsedInlineMusicStoryPlan.stories.every((story) => story.music.prompt.startsWith("### Global Metadata\n")
+    && story.music.prompt.includes("\n\n### Vocal Details\n")
+    && story.music.prompt.includes("\n\n### Arrangement\n"))) {
+    throw new Error("runner_self_test_story_inline_music_normalization_failed");
+  }
+  let emptyMusicSectionRejected = false;
+  try {
+    const emptyMusicStoryPlan = structuredClone(inlineMusicStoryPlan);
+    emptyMusicStoryPlan.stories[0].music.prompt = "### Global Metadata Instrumental glass percussion and warm bass. ### Vocal Details ### Arrangement A brief luminous finish.";
+    parseGemmaStoryPlanOutput(JSON.stringify(emptyMusicStoryPlan), storyBundle);
+  } catch (error) {
+    emptyMusicSectionRejected = error.message === "story_plan_music_format_invalid";
+  }
+  if (!emptyMusicSectionRejected) throw new Error("runner_self_test_story_empty_music_section_failed");
+  let unsafeInlineMusicRejected = false;
+  try {
+    const unsafeMusicStoryPlan = structuredClone(inlineMusicStoryPlan);
+    unsafeMusicStoryPlan.stories[0].music.prompt = unsafeMusicStoryPlan.stories[0].music.prompt.replace("Instrumental nocturnal", "ComfyUI workflow id details precede instrumental nocturnal");
+    parseGemmaStoryPlanOutput(JSON.stringify(unsafeMusicStoryPlan), storyBundle);
+  } catch (error) {
+    unsafeInlineMusicRejected = error.message === "story_plan_metadata_leak";
+  }
+  if (!unsafeInlineMusicRejected) throw new Error("runner_self_test_story_unsafe_inline_music_failed");
   const minimaxProfile = resolveMusicPromptProfile({
     name: "Owner song workflow",
     description: "",

@@ -795,6 +795,17 @@ describe("durable Story Bank", () => {
       status: 400,
       body: { error: "story_plan_music_format_invalid" },
     });
+    const emptyMusicSectionPlan = structuredClone(planned);
+    emptyMusicSectionPlan.stories[0].music.prompt = "### Global Metadata\n\n### Vocal Details\n\n### Arrangement\nA brief luminous finish.";
+    const emptyMusicSection = await routeCreativeStudioApi(request(`/api/creative-studio/runner/story-plans/${firstRefresh.storyBankRefresh.id}/complete`, {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ plan: emptyMusicSectionPlan, comfyPromptId: "comfy_story_plan_empty_music", plannerModel: "gemma4-local-test" }),
+    }), fixture.local);
+    expect({ status: emptyMusicSection.status, body: await payload(emptyMusicSection) }).toMatchObject({
+      status: 400,
+      body: { error: "story_plan_music_format_invalid" },
+    });
     const completeRequest = () => routeCreativeStudioApi(request(`/api/creative-studio/runner/story-plans/${firstRefresh.storyBankRefresh.id}/complete`, {
       method: "POST",
       headers: runnerHeaders,
