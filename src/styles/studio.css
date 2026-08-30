@@ -34,6 +34,11 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 
 .studio-loading, .fatal-error { position: relative; z-index: 2; display: grid; min-height: 100vh; place-items: center; align-content: center; gap: 18px; text-align: center; }
 .studio-loading strong { font-family: var(--font-display); font-size: 18px; }
+.studio-view-loading { display: grid; min-height: min(64vh, 620px); place-items: center; align-content: center; gap: 14px; color: var(--text-muted); text-align: center; }
+.studio-view-loading strong { font-family: var(--font-display); font-size: 14px; }
+.studio-view-recovery { display: grid; min-height: min(64vh, 620px); place-items: center; align-content: center; gap: 10px; padding: 28px; color: var(--text-muted); text-align: center; }
+.studio-view-recovery h1 { margin: 0; color: var(--text-main); font-family: var(--font-display); font-size: clamp(20px, 4vw, 30px); }
+.studio-view-recovery p { max-width: 440px; margin: 0 0 8px; line-height: 1.55; }
 .fatal-error { padding: 30px; }
 .fatal-error h1 { font-family: var(--font-display); }
 .fatal-error p { color: var(--text-muted); }

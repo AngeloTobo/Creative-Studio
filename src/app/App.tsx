@@ -1,18 +1,20 @@
-import { useEffect, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { useStudio } from "./StudioProvider";
 import { type StudioView } from "./views";
 import { DesktopShell, MobileShell } from "../components/Shell";
 import { Icon } from "../components/Icon";
-import { CreativeDnaWorkbench } from "../features/creative-dna/CreativeDnaWorkbench";
-import { PortalView } from "../features/portal/PortalView";
 import { PlaceholderView } from "../features/placeholder/PlaceholderView";
-import { WorkView } from "../features/work/WorkView";
-import { StudioView as StudioHub } from "../features/studio/StudioView";
 import type { ProductionCockpitAction } from "../../shared/contracts";
 import type { VideoCreateEntryMode } from "../features/generation/createEntry";
 import type { CreateIntent } from "../features/generation/quickCreate";
-import { MorningReviewSheet, OvernightSetupSheet } from "../features/overnight";
 import type { StoryRecommendationHandoff } from "../features/stories/StoryBankRail";
+
+const CreativeDnaWorkbench = lazy(async () => ({ default: (await import("../features/creative-dna/CreativeDnaWorkbench")).CreativeDnaWorkbench }));
+const PortalView = lazy(async () => ({ default: (await import("../features/portal/PortalView")).PortalView }));
+const WorkView = lazy(async () => ({ default: (await import("../features/work/WorkView")).WorkView }));
+const StudioHub = lazy(async () => ({ default: (await import("../features/studio/StudioView")).StudioView }));
+const OvernightSetupSheet = lazy(async () => ({ default: (await import("../features/overnight")).OvernightSetupSheet }));
+const MorningReviewSheet = lazy(async () => ({ default: (await import("../features/overnight")).MorningReviewSheet }));
 
 const VIEWS = new Set<StudioView>(["portal", "dna", "work", "studio", "cockpit", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings", "system"]);
 
@@ -31,6 +33,23 @@ function useResponsive() {
     return () => window.removeEventListener("resize", update);
   }, []);
   return mobile;
+}
+
+function StudioViewLoading() {
+  return <div className="studio-view-loading" role="status" aria-live="polite"><div className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></div><strong>Opening your workspace</strong></div>;
+}
+
+class StudioViewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return <div className="studio-view-recovery" role="alert"><Icon name="rerun" size={22} /><h1>Refresh this workspace</h1><p>Creative Studio may have been updated while this tab was open. Reloading will not remove retained jobs or artifacts.</p><button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>Reload Creative Studio</button></div>;
+  }
 }
 
 export function App() {
@@ -220,8 +239,9 @@ export function App() {
   if (loading) return <div className="studio-loading"><div className="brand-mark"><i className="bm-ring" /><i className="bm-orb" /></div><strong>Opening Creative Studio</strong></div>;
 
   const reviewSession = (snapshot?.overnightSessions ?? []).find((session) => session.id === overnightReviewSessionId) ?? null;
-  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-only metadata</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{content}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{content}</DesktopShell>}
-    <OvernightSetupSheet open={overnightOpen} projectId={activeProjectId} dnaArtifactId={activeDna?.artifactId ?? null} onClose={() => setOvernightOpen(false)} onArm={createOvernightSession} />
-    <MorningReviewSheet open={Boolean(overnightReviewSessionId)} session={reviewSession} onClose={() => setOvernightReviewSessionId("")} />
+  const suspenseContent = <StudioViewBoundary><Suspense fallback={<StudioViewLoading />}>{content}</Suspense></StudioViewBoundary>;
+  return <><div className="cosmos" />{snapshot?.adapter.development ? <div className="development-flag"><Icon name="wand" size={14} /> Development adapter · browser-only metadata</div> : null}{error && !snapshot ? <div className="fatal-error"><Icon name="close" size={22} /><h1>Creative Studio could not start</h1><p>{error}</p></div> : mobile ? <MobileShell view={view} navigate={navigate}>{suspenseContent}</MobileShell> : <DesktopShell view={view} navigate={navigate}>{suspenseContent}</DesktopShell>}
+    {overnightOpen ? <Suspense fallback={null}><OvernightSetupSheet open projectId={activeProjectId} dnaArtifactId={activeDna?.artifactId ?? null} onClose={() => setOvernightOpen(false)} onArm={createOvernightSession} /></Suspense> : null}
+    {overnightReviewSessionId ? <Suspense fallback={null}><MorningReviewSheet open session={reviewSession} onClose={() => setOvernightReviewSessionId("")} /></Suspense> : null}
   </>;
 }

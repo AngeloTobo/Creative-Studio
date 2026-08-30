@@ -74,7 +74,7 @@ import {
 } from "../../../shared/contracts";
 import { WorkflowParameterField } from "../workflows/WorkflowParameterField";
 import { sameWorkflowValue } from "../workflows/workflowValues";
-import { useCreativeSessions } from "../sessions";
+import { useCreativeSessions, type CreativeSession } from "../sessions";
 import { compileProjectContext } from "./projectContext";
 import {
   failedQuickWorkflowRecipeSignatures,
@@ -110,6 +110,7 @@ import {
   type VideoCreateEntryMode,
 } from "./createEntry";
 import { VideoScriptBuilderSheet } from "./VideoScriptBuilderSheet";
+import { CreateResultRail } from "./CreateResultRail";
 import { resolveCompletedVideoScriptEditor, restoredVideoScriptEditorIsDirty } from "./videoScriptEditorState";
 import { videoScriptErrorMessage } from "./videoScriptErrorMessage";
 import { directVideoEnhancementDecision, videoPairIdForOutputBatch } from "./directVideo";
@@ -174,13 +175,9 @@ function newestQuickSources(sources: QuickSource[]) {
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.name.localeCompare(right.name));
 }
 
-function QuickSourceVisual({ source, allowVideoPreview = false }: { source: QuickSource; allowVideoPreview?: boolean }) {
+function QuickSourceVisual({ source }: { source: QuickSource }) {
   if (source.kind === "image" && source.previewUrl) return <img src={source.previewUrl} alt="" loading="lazy" />;
   if (source.kind === "video" && source.posterUrl) return <img src={source.posterUrl} alt="" loading="lazy" />;
-  if (source.kind === "video" && source.previewUrl && allowVideoPreview) return <video src={`${source.previewUrl}#t=0.001`} muted playsInline preload="metadata" aria-hidden="true" onLoadedMetadata={(event) => {
-    const video = event.currentTarget;
-    if (video.duration > 0 && video.currentTime === 0) video.currentTime = Math.min(0.001, video.duration / 2);
-  }} />;
   if (source.kind === "audio") return <span className="quick-source-wave" aria-hidden="true">{Array.from({ length: 11 }, (_, index) => <i key={index} />)}</span>;
   return <span className="quick-source-fallback"><Icon name={source.kind} size={21} /></span>;
 }
@@ -221,9 +218,30 @@ function durationRange(lowMs: number, highMs: number) {
   return low === high ? low : `${low}–${high}`;
 }
 
+function creativeSessionHasHiddenControls(session: CreativeSession | null) {
+  if (!session) return false;
+  const settings = session.graphicalSettings;
+  const hasExactWorkflowState = Object.keys(settings).some((key) => key.startsWith("value:") || key.startsWith("binding:"));
+  const hasExplicitMusicModel = session.mediaKind === "music"
+    && settings.workflowSelectionMode === "explicit"
+    && Boolean(session.workflowId);
+  return session.intentTier !== "explore"
+    || settings.projectContextEnabled === true
+    || settings.worldContinuityEnabled === true
+    || settings.imagePerformanceMode === "explicit-custom"
+    || (typeof settings.lyrics === "string" && settings.lyrics.trim().length > 0)
+    || settings.videoSpeechMode === "short-natural-line"
+    || settings.videoSpeechMode === "exact-script"
+    || Boolean(trustedVideoPresetById(settings.trustedVideoPresetId))
+    || settings.videoOperationKind === "extend"
+    || hasExactWorkflowState
+    || hasExplicitMusicModel;
+}
+
 export function GenerationView({
   onQueued,
   onMedia,
+  onArtifacts,
   onWorkflows,
   onDesign,
   onTrain,
@@ -238,6 +256,7 @@ export function GenerationView({
 }: {
   onQueued: () => void;
   onMedia: () => void;
+  onArtifacts: () => void;
   onWorkflows: () => void;
   onDesign: () => void;
   onTrain: (assetIds?: string[], path?: "analyze" | "model") => void;
@@ -271,13 +290,19 @@ export function GenerationView({
     busy,
     error,
   } = useStudio();
+  const { latest: latestSession, save: saveSession, clear: clearSession } = useCreativeSessions(activeProjectId);
   const mediaInputRef = useRef<HTMLInputElement>(null);
+  const sourcePickerRef = useRef<HTMLDetailsElement>(null);
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const availableDna = snapshot ? projectDna.filter((artifact) => creativeDnaCanGenerate(snapshot, artifact)) : [];
   const selected = snapshot && activeDna && creativeDnaCanGenerate(snapshot, activeDna) ? activeDna : availableDna[0] ?? null;
   const projectMedia = useMemo(() => snapshot?.mediaAssets.filter((asset) => asset.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.mediaAssets]);
   const allProjectArtifacts = useMemo(() => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [], [activeProjectId, snapshot?.artifacts]);
   const projectArtifacts = useMemo(() => allProjectArtifacts.filter((artifact) => artifact.retention.state === "retained"), [allProjectArtifacts]);
+  const recentCreateArtifacts = useMemo(() => [...projectArtifacts]
+    .filter((artifact) => artifact.status !== "archived")
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 8), [projectArtifacts]);
   const workflows = useMemo(
     () => snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [],
     [snapshot?.workflows],
@@ -320,6 +345,14 @@ export function GenerationView({
     && VIDEO_DURATION_OPTIONS.includes(initialStoryRecommendation.recommendation.durationSeconds as VideoDurationSeconds)
     ? initialStoryRecommendation.recommendation.durationSeconds as VideoDurationSeconds
     : null;
+  const hasInitialIncomingAction = Boolean(
+    initialVideoExtensionArtifactId
+    || initialEvolutionSourceId
+    || initialSourceId
+    || initialCreateIntent
+    || initialAutoStart
+    || initialStoryRecommendation,
+  );
   const initialDirection = initialStoryRecommendation?.recommendation.prompt ?? (autoAnimate
     ? quickAnimationDirection(initialDirectArtifact?.prompt ?? initialDirectDescription)
     : initialEvolutionArtifact?.prompt ?? selected?.source.directive ?? "");
@@ -371,7 +404,7 @@ export function GenerationView({
   const [selectedTrustedVideoPresetId, setSelectedTrustedVideoPresetId] = useState<TrustedVideoPresetId | null>(null);
   const [heavyRenderConfirmationOpen, setHeavyRenderConfirmationOpen] = useState(false);
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
-  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [creativeToolsOpen, setCreativeToolsOpen] = useState(() => !hasInitialIncomingAction && creativeSessionHasHiddenControls(latestSession));
   const [trainingEligible, setTrainingEligible] = useState(true);
   const [projectContextEnabled, setProjectContextEnabled] = useState(false);
   const [worldContinuityEnabled, setWorldContinuityEnabled] = useState(false);
@@ -392,7 +425,6 @@ export function GenerationView({
     transitionSeconds: 0.5,
     audioMode: "keep-source",
   } : null);
-  const { latest: latestSession, save: saveSession, clear: clearSession } = useCreativeSessions(activeProjectId);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionProjectRef = useRef("");
   const sessionReadyRef = useRef(false);
@@ -526,6 +558,7 @@ export function GenerationView({
           && GENERATION_ASPECT_PRESETS.some((preset) => preset.id === settings.canvasAspectRatio)
           ? settings.canvasAspectRatio as GenerationAspectRatio
           : null;
+        const restoredHasHiddenControls = creativeSessionHasHiddenControls(latestSession);
         setSessionId(latestSession.id);
         lastSavedSessionSignature.current = "restored-session";
         setIntent(latestSession.mediaKind);
@@ -577,6 +610,7 @@ export function GenerationView({
         setCanvasAspectRatio(restoredAspect);
         setCanvasMegapixels(typeof settings.canvasMegapixels === "number" && Number.isFinite(settings.canvasMegapixels) ? settings.canvasMegapixels : null);
         setSelectedTrustedVideoPresetId(trustedVideoPresetById(settings.trustedVideoPresetId)?.id ?? null);
+        setCreativeToolsOpen(restoredHasHiddenControls);
         trustedVideoRestoreRef.current = null;
         const restoredTransition = settings.videoOperationTransitionSeconds;
         const restoredVideoOperation: VideoGenerationOperation | null = settings.videoOperationKind === "extend"
@@ -597,12 +631,13 @@ export function GenerationView({
           : null;
         setVideoOperation(restoredVideoOperation);
         const restoredAt = new Date(latestSession.updatedAt).toLocaleString();
+        const restoredControlsNotice = restoredHasHiddenControls ? " Creative controls are open so every restored non-default setting is visible before generation." : "";
         if (restoredSelectionMode === "explicit" && latestSession.workflowId && !restoredWorkflow) {
-          setNotice(`Resumed your draft from ${restoredAt}, but its model is no longer available. Choose a model and review the settings before generating.`);
+          setNotice(`Resumed your draft from ${restoredAt}, but its model is no longer available. Choose a model and review the settings before generating.${restoredControlsNotice}`);
         } else if (restoredWorkflow && savedRevisionId && savedRevisionId !== restoredWorkflow.currentRevision.id) {
-          setNotice(`Resumed your draft from ${restoredAt}. Its model recipe changed, so the saved settings were migrated to the current revision; review them before generating.`);
+          setNotice(`Resumed your draft from ${restoredAt}. Its model recipe changed, so the saved settings were migrated to the current revision; review them before generating.${restoredControlsNotice}`);
         } else {
-          setNotice(`Resumed your ${latestSession.intentTier} ${latestSession.mediaKind} draft from ${restoredAt}.`);
+          setNotice(`Resumed your ${latestSession.intentTier} ${latestSession.mediaKind} draft from ${restoredAt}.${restoredControlsNotice}`);
         }
       } else {
         setSessionId(null);
@@ -2035,6 +2070,7 @@ export function GenerationView({
       setSelectedStoryRecommendation(undefined);
       setQuickSourceId(asset.id);
       setSourceGalleryExpanded(false);
+      if (sourcePickerRef.current) sourcePickerRef.current.open = false;
       if (mediaInputRef.current) mediaInputRef.current.value = "";
       if (intent === "train") {
         onTrain([asset.id]);
@@ -2612,6 +2648,62 @@ export function GenerationView({
   const countedGenerationLabel = outputCount === 1 ? generationLabel : `${outputCount} ${generationLabel}s`;
   const scoutReady = generationGoal !== "scout" || generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
   const evolutionReady = !evolutionEnabled || Boolean(quickSource && workflowPromptParameter && projectTasteMemory && personalTaste);
+  const generationBlocker: { message: string; action: "controls" | "direction" | "models" | "outputs" | "source" | null; actionLabel?: string } | null = uiOnlyDevelopment
+    ? { message: "Real generation needs the Creative Studio Worker. The labeled simulated preview remains available below for UI testing only.", action: null }
+    : !workflow
+      ? { message: `No ready ${generationLabel} model is connected.`, action: "models", actionLabel: "Models" }
+      : !directionReady
+        ? { message: `Describe the ${generationLabel} in at least a few words.`, action: "direction", actionLabel: "Write prompt" }
+        : selectedSourceCompatibilityError
+          ? { message: `${workflow.name} cannot use this source. Choose another source or continue without it.`, action: "source", actionLabel: "Choose source" }
+          : !workflowReady
+            ? { message: `This model still needs a ${sourceRequirement ?? "source"}.`, action: "source", actionLabel: "Choose source" }
+            : !scoutReady
+              ? { message: "Scout Board needs one retained image as its starting point.", action: "source", actionLabel: "Choose image" }
+              : !evolutionReady
+                ? { message: "Evolution needs a retained source plus reviewed project and personal taste evidence.", action: "controls", actionLabel: "Review setup" }
+                : !videoSpeechReady
+                  ? { message: videoSpeechText.trim() ? `Shorten the spoken line to ${videoSpeechWordBudget.maximum} words for this clip.` : "Add the spoken words, or choose No dialogue while keeping sound on.", action: "controls", actionLabel: "Review sound" }
+                  : fastImageBlocked
+                    ? { message: "These restored image settings exceed Fast mode. Choose Custom only if you accept the longer render.", action: "controls", actionLabel: "Review speed" }
+                    : outputCountSeedBlocked
+                      ? { message: "This model needs a mapped sampler seed for distinct versions. Choose one version or update the model.", action: "outputs", actionLabel: "Use one" }
+                      : continuityTooLarge
+                        ? { message: "The selected World continuity is too large for one prompt. Select fewer characters, places, or rules.", action: "controls", actionLabel: "Narrow World" }
+                        : generationIntent === "video" && !workflowPromptParameter
+                          ? { message: "This video model has no mapped prompt input. Repair its model mapping before generation.", action: "models", actionLabel: "Models" }
+                          : null;
+  const resolveGenerationBlocker = () => {
+    if (!generationBlocker?.action) return;
+    if (generationBlocker.action === "models") {
+      onWorkflows();
+      return;
+    }
+    if (generationBlocker.action === "direction") {
+      document.getElementById("creative-studio-direction")?.focus();
+      return;
+    }
+    if (generationBlocker.action === "source") {
+      if (sourcePickerRef.current) {
+        sourcePickerRef.current.open = true;
+        sourcePickerRef.current.scrollIntoView({ block: "nearest" });
+      }
+      return;
+    }
+    if (generationBlocker.action === "outputs") {
+      setOutputCount(1);
+      setLocalError("");
+      return;
+    }
+    setCreativeToolsOpen(true);
+    requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(videoSpeechReady
+        ? continuityTooLarge ? ".quick-world-continuity button:not(:disabled)" : fastImageBlocked ? ".quick-speed-panel > summary" : ".quick-generation-goal-options button:not(:disabled)"
+        : ".quick-video-speech button:not(:disabled)");
+      target?.scrollIntoView({ block: "nearest" });
+      target?.focus({ preventScroll: true });
+    });
+  };
   const basePrimaryLabel = !workflow
     ? "Choose a model"
     : selectedSourceCompatibilityError
@@ -2713,14 +2805,183 @@ export function GenerationView({
         {INTENTS.map((item) => <button key={item.id} className={intent === item.id ? "on" : ""} aria-pressed={intent === item.id} onClick={() => chooseIntent(item.id)}><Icon name={item.icon} size={18} /><span>{item.label}</span></button>)}
       </div>
 
-      <section className={`quick-create-card glass${generationIntent === "video" ? " video-create" : ""}`}>
+      <section className={`quick-create-card simple-create glass${generationIntent === "video" ? " video-create" : ""}${creativeToolsOpen ? " power-open" : ""}`}>
         <div className="quick-create-head">
           <div className={`create-output-icon ${intent}`}><Icon name={intent === "train" ? "dna" : intent} size={22} /></div>
           <div><span className="eyebrow">{intent === "train" ? "Learn from your work" : videoOperation ? "Continue retained motion" : `New ${intent === "music" ? "song" : intent}`}</span><h2>{intent === "train" ? "Train music or analyze DNA" : videoOperation ? "Extend video" : "Create"}</h2></div>
           {intent !== "train" ? <em className={runnerOnline ? "online" : "offline"}>{runnerOnline ? "Runner online" : "Will wait for runner"}</em> : null}
         </div>
 
-        {intent !== "train" && !(evolutionEnabled && initialEvolutionSource) ? <section className="quick-generation-goals" aria-label="Creation goal">
+        {intent !== "train" ? <section
+          className={`quick-create-stage${quickSource ? " has-source" : " is-empty"}`}
+          aria-label="Create canvas"
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = busy || uiOnlyDevelopment ? "none" : "copy";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            if (busy || uiOnlyDevelopment) return;
+            void uploadAndUseMedia(event.dataTransfer.files?.[0] ?? null);
+          }}
+        >
+          <div className={`quick-create-stage-media${quickSource ? ` ${quickSource.kind}` : ""}`} style={quickSource ? { background: `linear-gradient(135deg, ${quickSource.colors[0]}, ${quickSource.colors[1]})` } : undefined}>
+            {quickSource?.kind === "image" && quickSource.previewUrl ? <img src={quickSource.previewUrl} alt={`${quickSource.name} source`} decoding="async" /> : null}
+            {quickSource?.kind === "video" && quickSource.previewUrl ? <video key={quickSource.id} src={quickSource.previewUrl} poster={quickSource.posterUrl ?? undefined} controls playsInline preload="metadata" aria-label={`${quickSource.name} source video`} /> : null}
+            {quickSource?.kind === "audio" && quickSource.previewUrl ? <div className="quick-create-stage-audio"><span><Icon name="music" size={34} /></span><strong>{quickSource.name}</strong><audio key={quickSource.id} src={quickSource.previewUrl} controls preload="none" aria-label={`${quickSource.name} source audio`} /></div> : null}
+            {quickSource && !quickSource.previewUrl ? <div className="quick-create-stage-fallback"><QuickSourceVisual source={quickSource} /><strong>{quickSource.name}</strong></div> : null}
+            {!quickSource ? <div className="quick-create-stage-empty"><span><Icon name={generationIntent === "music" ? "music" : generationIntent} size={30} /></span><strong>Drop in a spark—or start with words</strong><small>{uiOnlyDevelopment ? "Choose retained work or write the idea below. Uploads need the Creative Studio Worker." : "Upload, choose retained work, or write the idea below. Creative Studio handles the model."}</small></div> : null}
+            <span className="quick-create-stage-kind"><Icon name={quickSource?.kind === "audio" ? "music" : quickSource?.kind ?? generationIntent} size={13} />{quickSource ? `${quickSource.source === "upload" ? "Uploaded" : "Generated"} ${quickSource.kind}` : "Prompt only is ready"}</span>
+          </div>
+          <footer>
+            <span><small>{quickSource ? "STARTING POINT" : "OPTIONAL SOURCE"}</small><strong>{quickSource?.name ?? "Your next idea"}</strong></span>
+            <div>
+              {quickSource ? <button type="button" className="btn btn-ghost stage-remove" disabled={busy} onClick={() => { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setLocalError(""); }}><Icon name="close" size={14} /> Remove</button> : null}
+              <button type="button" className="btn btn-ghost stage-change" disabled={busy} onClick={() => { if (!sourcePickerRef.current) return; sourcePickerRef.current.open = true; sourcePickerRef.current.scrollIntoView({ block: "nearest" }); }}><Icon name="library" size={14} /> {quickSource ? "Change" : "Retained work"}</button>
+              <button type="button" className="btn btn-primary stage-upload" disabled={busy || uiOnlyDevelopment} onClick={() => mediaInputRef.current?.click()}><Icon name="plus" size={14} /> Upload</button>
+            </div>
+          </footer>
+        </section> : null}
+
+        <details ref={sourcePickerRef} className="quick-compose-panel quick-compose-source">
+          <summary>
+            <span className={`quick-compose-preview${quickSource ? ` ${quickSource.kind}` : " empty"}`} style={quickSource ? { background: `linear-gradient(135deg, ${quickSource.colors[0]}, ${quickSource.colors[1]})` } : undefined}>{quickSource ? <QuickSourceVisual source={quickSource} /> : <Icon name="plus" size={18} />}</span>
+            <span className="quick-compose-summary-copy"><small>Source</small><strong>{quickSource?.name ?? (intent === "train" ? "Choose media" : "Prompt only")}</strong><em>{quickSource ? `${quickSource.source === "upload" ? "Upload" : "Generated"} / ${quickSource.kind}` : `${sourceChoices.length} retained available`}</em></span>
+            <span className="quick-compose-change">{quickSource ? "Change" : "Choose"}</span><Icon name="chevronDown" size={14} />
+          </summary>
+          <div className="quick-compose-panel-body">
+            <section className={`quick-source-gallery${sourceGalleryExpanded ? " expanded" : ""}`} aria-label={sourcePickerLabel}>
+              <header><span><strong>{sourcePickerLabel}</strong><small>{quickSource ? quickSource.name : `${sourceChoices.length} compatible retained`}</small></span>{sourceChoices.length > SOURCE_GALLERY_LIMIT ? <button type="button" className="link-btn" disabled={busy} onClick={() => setSourceGalleryExpanded((current) => !current)}>{sourceGalleryExpanded ? "Show newest" : `View all ${sourceChoices.length}`}</button> : null}</header>
+              <div className="quick-source-gallery-grid" role="group" aria-label={`${sourcePickerLabel} gallery`}>
+                <label className={`quick-source-card quick-source-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
+                  <input ref={mediaInputRef} type="file" aria-label={uploadSourceLabel} accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : intent === "music" ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
+                  <span className="quick-source-visual"><Icon name="plus" size={22} /></span>
+                  <span className="quick-source-copy"><strong>{busy ? "Working…" : uploadSourceLabel}</strong><small>{uiOnlyDevelopment ? "Worker required" : "From this device"}</small></span>
+                </label>
+                {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { if (quickSourceId) detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
+                  <span className="quick-source-visual"><Icon name="generate" size={22} /></span>
+                  <span className="quick-source-copy"><strong>No source</strong><small>Start from prompt</small></span>
+                  {!quickSource ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
+                </button> : null}
+                {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { if (source.id !== quickSourceId) { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); } setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
+                  <span className={`quick-source-visual ${source.kind}`} style={{ background: `linear-gradient(135deg, ${source.colors[0]}, ${source.colors[1]})` }}><QuickSourceVisual source={source} /><span className="quick-source-kind"><Icon name={source.kind === "audio" ? "music" : source.kind} size={11} /></span></span>
+                  <span className="quick-source-copy"><strong>{source.name}</strong><small>{source.source === "upload" ? "Upload" : "Generated"} · {source.kind}</small></span>
+                  {quickSource?.id === source.id ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
+                </button>)}
+              </div>
+              <button type="button" className="link-btn quick-source-library" onClick={onMedia}>Open full media library</button>
+            </section>
+          </div>
+        </details>
+        {selectedSourceCompatibilityError ? <div className="quick-source-conflict" role="alert"><Icon name="shield" size={16} /><span><strong>{workflow?.name} cannot use {quickSource?.name}.</strong><small>Choose a compatible model or continue without this source. Creative Studio will not silently drop it.</small></span><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setLocalError(""); setNotice("Continuing without a source."); }}>Continue without source</button></div> : null}
+
+        {intent === "train" ? <div className="quick-training-paths" role="group" aria-label="Choose how Creative Studio learns">
+          <button type="button" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [], "analyze")}><span><Icon name="image" size={19} /></span><strong>Analyze media</strong><small>Describe files and evolve a reviewable CreativeDNA version.</small><em>{trainingSource ? `Use ${trainingSource.name}` : "Images, audio, or video"}</em></button>
+          <button type="button" disabled={busy} onClick={() => onTrain([], "model")}><span><Icon name="music" size={19} /></span><strong>Train music LoRA</strong><small>Train real ACE-Step weights from consented recordings.</small><em>{consentedAudioCount >= 3 ? `${consentedAudioCount} tracks ready` : `${3 - consentedAudioCount} more tracks needed`}</em></button>
+        </div> : <>
+          <div className="quick-direction">
+            <div className="quick-direction-head">
+              <label htmlFor="creative-studio-direction">{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</label>
+              {generationIntent === "video" ? <button type="button" className="quick-enhance-action" disabled={busy || promptEnhancementPending || !promptEnhancementAvailable || !workflow || !workflowPromptParameter || !directionReady} title={promptEnhancementButtonTitle} onClick={() => void requestVideoPromptEnhancement()}><Icon name="wand" size={14} />{promptEnhancementButtonLabel}</button> : null}
+              {generationIntent !== "video" ? <small className="quick-autosave-state">{sessionId ? "Draft autosaved on this device." : "Changes autosave on this device."}</small> : null}
+            </div>
+            <textarea id="creative-studio-direction" value={direction} maxLength={VIDEO_PROMPT_ENHANCED_MAX_LENGTH} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} />
+            {generationIntent === "video" && (promptEnhancementPending || activePromptEnhancement || promptEnhancementApplied) ? <div className={`quick-prompt-enhancement-state${activePromptEnhancement?.status === "failed" ? " failed" : promptEnhancementApplied ? " applied" : ""}`} role="status">
+              <span><Icon name={activePromptEnhancement?.status === "failed" ? "close" : promptEnhancementPending ? "history" : "wand"} size={13} /><small>{promptEnhancementPending
+                ? activePromptEnhancement?.status === "running" ? "Gemma 4 is adding motion, camera, timing, and atmosphere on your machine." : "Waiting for local Gemma 4. Your prompt is safe and unchanged."
+                : activePromptEnhancement?.status === "failed"
+                  ? "Gemma couldn’t enhance this prompt. Your current prompt is unchanged."
+                  : activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id
+                    ? promptEnhancementMatchesWorkflow ? "Enhancement ready. Use it, or keep your current prompt." : "Length, source, or model changed. Enhance again for this setup."
+                    : promptEnhancementContextChanged
+                      ? "Length, source, or model changed. Enhance again for this setup."
+                      : direction.trim() === appliedPromptEnhancement?.enhancedPrompt?.trim() ? "Enhanced locally · Gemma 4" : "Edited after enhancement · Gemma 4"}</small></span>
+              <span className="quick-prompt-enhancement-actions">
+                {promptEnhancementPending ? <button type="button" onClick={keepCurrentVideoPrompt}>Keep current</button> : null}
+                {activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={applyCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
+                {originalVideoDirection !== null && direction.trim() !== originalVideoDirection.trim() ? <button type="button" onClick={restoreOriginalVideoPrompt}>Restore original</button> : null}
+              </span>
+            </div> : null}
+          </div>
+
+          {generationIntent === "video" ? <section className="quick-video-essentials quick-duration-panel" aria-label="Video setup">
+            <header>
+              <span><Icon name="video" size={16} /><span><small>{requestedWorkflow ? "YOUR MODEL" : "AUTO MODEL"}</small><strong>{workflow?.name ?? "Choose a ready video model"}</strong></span></span>
+              <em>{compactEstimate}</em>
+            </header>
+            <div className="quick-video-essential quick-video-duration" aria-label="Video length">
+              <span><strong>Length</strong><small>{estimatedOutputCount === 1 ? "One retained output" : `Each of ${estimatedOutputCount} outputs`}</small></span>
+              <div role="group" aria-label="Video duration">
+                {VIDEO_DURATION_OPTIONS.map((seconds) => <button type="button" key={seconds} className={videoDurationSeconds === seconds ? "on" : ""} aria-pressed={videoDurationSeconds === seconds} disabled={busy} onClick={() => chooseVideoDuration(seconds)}>{videoDurationLabel(seconds)}</button>)}
+              </div>
+              <p>{durationFallback ?? (videoDurationSeconds === 30 && trustedVideoPresetActive
+                ? "Explicit Fast 30s: one native portrait render at 0.20 MP."
+                : videoDurationSeconds >= 30
+                  ? `${videoDurationLabel(videoDurationSeconds)} is a longer local render; exact settings and elapsed time stay visible.`
+                  : evolutionEnabled ? "Refine, Correct, and Discovery use the same selected length." : "Aligned follows your direction; Discovery uses 70% random DNA.")}</p>
+            </div>
+            {showAspectControls ? <div className="quick-video-essential quick-video-shape">
+              <span><strong>Shape</strong><small>Frame</small></span>
+              <div role="group" aria-label="Canvas shape">
+                {GENERATION_ASPECT_PRESETS.map((preset) => <button type="button" key={preset.id} className={displayedAspectRatio === preset.id ? "on" : ""} aria-label={`${preset.id} ${preset.label}`} aria-pressed={displayedAspectRatio === preset.id} disabled={busy} onClick={() => chooseCanvasAspect(preset.id)}><i style={{ aspectRatio: preset.id.replace(":", " / ") }} /><strong>{preset.id}</strong></button>)}
+              </div>
+            </div> : null}
+            {!evolutionEnabled ? <div className="quick-video-essential quick-video-outputs">
+              <span><strong>Versions</strong><small>Every result retained</small></span>
+              <div role="group" aria-label="Number of video outputs">
+                {GENERATION_OUTPUT_COUNTS.map((count) => {
+                  const unavailable = count === 4 && !workflowSeedParameter;
+                  return <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy || unavailable} title={unavailable ? "Map this model's sampler seed to guarantee four distinct outputs." : `${count} retained video ${count === 1 ? "output" : "outputs"}`} onClick={() => chooseVideoOutputCount(count)}>{count}</button>;
+                })}
+              </div>
+            </div> : null}
+            <footer>
+              <span>{outputCountSeedBlocked ? "Four versions need a mapped sampler seed." : `${estimatedOutputCount} durable ${estimatedOutputCount === 1 ? "result" : "results"} with exact settings retained.`}</span>
+              <small>{requestedWorkflow ? "Explicit model choice retained" : workflow ? `Fastest measured compatible model · ${workflow.name}` : "Choose a ready compatible model"}</small>
+            </footer>
+            {fourWayBoardRequested ? <div className="quick-four-way-roles" aria-label="Four-way video roles"><span><b>Exact</b> your motion</span><span><b>Enhanced</b> local Gemma</span><span><b>Left Field</b> new direction</span><span><b>Awe</b> beautiful strange</span></div> : null}
+          </section> : null}
+
+          {generationIntent === "image" && workflow && !evolutionEnabled ? <section className="quick-image-essentials" aria-label="Image setup">
+            <header><span><Icon name="image" size={16} /><span><small>{requestedWorkflow ? "YOUR MODEL" : "AUTO MODEL"}</small><strong>{workflow.name}</strong></span></span><em>{compactEstimate}</em></header>
+            {showAspectControls ? <div className="quick-image-essential quick-image-shape"><span><strong>Shape</strong><small>Tap once to change</small></span><div role="group" aria-label="Image canvas shape">{GENERATION_ASPECT_PRESETS.map((preset) => <button type="button" key={preset.id} className={displayedAspectRatio === preset.id ? "on" : ""} aria-label={`${preset.id} ${preset.label}`} aria-pressed={displayedAspectRatio === preset.id} disabled={busy} onClick={() => chooseCanvasAspect(preset.id)}><i style={{ aspectRatio: preset.id.replace(":", " / ") }} /><strong>{preset.id}</strong></button>)}</div></div> : null}
+            <div className="quick-image-essential quick-image-outputs"><span><strong>Versions</strong><small>Every result is retained</small></span><div role="group" aria-label="Number of image outputs">{GENERATION_OUTPUT_COUNTS.map((count) => {
+              const unavailable = count > 1 && !workflowSeedParameter;
+              return <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy || unavailable} title={unavailable ? "Map this model's sampler seed to make distinct versions." : `${count} retained image ${count === 1 ? "version" : "versions"}`} onClick={() => { setOutputCount(count); setLocalError(""); }}>{count}</button>;
+            })}</div></div>
+            <footer><span><Icon name="generate" size={13} />{imagePerformanceMode === "fast-default" ? "Fast local image" : "Custom render"}</span><small>{requestedWorkflow ? "Model pinned by you" : "Fastest compatible model selected automatically"}</small></footer>
+          </section> : null}
+
+          {heavyRenderConfirmationOpen && heavyVideoRender ? <section className="quick-heavy-render-confirmation" role="alert" aria-label="Confirm heavy video render">
+            <header><Icon name="analytics" size={17} /><span><strong>Confirm this longer local render</strong><small>These settings are intentionally outside the one-click 5s / 0.20 MP fast path.</small></span></header>
+            <div className="quick-heavy-render-facts">
+              <span><small>CLIP</small><strong>{videoDurationLabel(videoDurationSeconds)}</strong></span>
+              <span><small>FRAMES</small><strong>{videoFrameSummary}</strong></span>
+              <span><small>SIZE</small><strong>{videoResolutionSummary}</strong></span>
+              <span><small>VERSIONS</small><strong>{estimatedOutputCount}</strong></span>
+            </div>
+            <p><strong>{heavyRenderTimeSummary}</strong><small>The Local Runner renders these {estimatedOutputCount} versions one after another, so later versions wait for earlier ones to finish.</small></p>
+            <footer><button type="button" className="btn btn-ghost" onClick={() => { armedVideoRenderSignature.current = ""; setHeavyRenderConfirmationOpen(false); }}>Keep editing</button><button type="button" className="btn btn-primary" onClick={() => { armedVideoRenderSignature.current = videoRenderSignature; setHeavyRenderConfirmationOpen(false); void startWorkflowGeneration(); }}><Icon name="send" size={15} /> Confirm &amp; queue</button></footer>
+          </section> : null}
+          <div className={`quick-generate-dock${localError || error ? " has-error" : ""}`}>
+            {localError || error ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{localError || error}</small></span></div> : null}
+            {!localError && !error && generationBlocker ? <div className="quick-generation-blocker" role="status"><Icon name="shield" size={15} /><span>{generationBlocker.message}</span>{generationBlocker.action ? <button type="button" onClick={resolveGenerationBlocker}>{generationBlocker.actionLabel ?? "Review"}</button> : null}</div> : null}
+            <span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || Boolean(generationBlocker)} onClick={() => void startWorkflowGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button>
+          </div>
+          {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
+          <button type="button" className="quick-more-toggle" aria-expanded={creativeToolsOpen} aria-controls="creative-studio-power-tools" onClick={() => {
+            const opening = !creativeToolsOpen;
+            setCreativeToolsOpen(opening);
+            if (opening) requestAnimationFrame(() => {
+              const target = document.querySelector<HTMLElement>("#creative-studio-power-tools .quick-generation-goal-options button:not(:disabled), #creative-studio-power-tools .quick-world-continuity button:not(:disabled), #creative-studio-power-tools .quick-project-context button:not(:disabled), #creative-studio-power-tools .quick-evolution-brief summary, #creative-studio-power-tools .quick-trusted-video button:not(:disabled), #creative-studio-power-tools .quick-recipe-tools select:not(:disabled), #creative-studio-power-tools .quick-setting-panel summary, #creative-studio-power-tools .quick-compose-model summary, #creative-studio-power-tools .quick-video-speech button:not(:disabled), #creative-studio-power-tools .quick-song-lyrics summary");
+              target?.scrollIntoView({ block: "nearest" });
+              target?.focus({ preventScroll: true });
+            });
+          }}><span><Icon name={creativeToolsOpen ? "close" : "settings"} size={15} /><span><strong>{creativeToolsOpen ? "Hide creative controls" : "More creative controls"}</strong><small>{creativeToolsOpen ? "Return to the focused canvas" : "Ideas, sound, model, World, recipes, and exact settings"}</small></span></span><Icon name={creativeToolsOpen ? "chevronDown" : "chevron"} size={14} /></button>
+        </>}
+
+        {intent !== "train" ? <div className="quick-power-tools" id="creative-studio-power-tools" hidden={!creativeToolsOpen}>
+        {!(evolutionEnabled && initialEvolutionSource) ? <section className="quick-generation-goals" aria-label="Creation goal">
           <div className="quick-generation-goal-options" role="group" aria-label="Choose creation goal">
             {GENERATION_GOALS.map((goal) => {
               const unavailable = goal.id === "scout" && !generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
@@ -2736,7 +2997,7 @@ export function GenerationView({
             : GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.description}<small>{sessionId ? "Draft autosaved on this device." : "Changes autosave on this device."}</small></p>
         </section> : null}
 
-        {intent !== "train" && generationIntent !== "music" && workflow && !uiOnlyDevelopment && selectedWorld ? <section className={`quick-world-continuity${worldContinuityEnabled ? " on" : ""}`}>
+        {generationIntent !== "music" && workflow && !uiOnlyDevelopment && selectedWorld ? <section className={`quick-world-continuity${worldContinuityEnabled ? " on" : ""}`}>
           <button type="button" className="quick-project-context-toggle" aria-pressed={worldContinuityEnabled} onClick={() => setWorldContinuityEnabled((current) => !current)}>
             <Icon name="projects" size={15} /><span><strong>{selectedWorld.name} continuity</strong><small>{worldContinuityEnabled ? "Version-stamped into this generation" : "Optional · tap to keep your world consistent"}</small></span><em>{worldContinuityEnabled ? "On" : "Off"}</em>
           </button>
@@ -2763,7 +3024,7 @@ export function GenerationView({
           {compiledWorldDirective?.text ? <details className={compiledWorldDirective.truncated ? "continuity-overflow" : ""}><summary>{compiledWorldDirective.truncated ? "Continuity is too large" : "Inspect exact continuity"}</summary><p>{compiledWorldDirective.text}</p>{compiledWorldDirective.truncated ? <small>Nothing will generate until every selected rule and canon reference can fit. Select fewer elements above.</small> : null}</details> : <p className="quick-world-empty">Add a premise, character detail, rule, or canon note in Studio › Project before turning continuity on.</p>}
         </section> : null}
 
-        {intent !== "train" && generationIntent !== "music" && workflow && !uiOnlyDevelopment && !selectedWorld && projectContext?.text ? <section className={`quick-project-context${projectContextEnabled ? " on" : ""}`}>
+        {generationIntent !== "music" && workflow && !uiOnlyDevelopment && !selectedWorld && projectContext?.text ? <section className={`quick-project-context${projectContextEnabled ? " on" : ""}`}>
           <button type="button" className="quick-project-context-toggle" aria-pressed={projectContextEnabled} onClick={() => setProjectContextEnabled((current) => !current)}>
             <Icon name="projects" size={15} /><span><strong>{activeProject?.name} project context</strong><small>{projectContextEnabled ? "Added to this local Comfy prompt" : "Optional · off by default"}{projectContext.excludedReferenceIdentityMentions ? ` · ${projectContext.excludedReferenceIdentityMentions} provenance identity ${projectContext.excludedReferenceIdentityMentions === 1 ? "mention" : "mentions"} excluded` : ""}</small></span><em>{projectContextEnabled ? "On" : "Off"}</em>
           </button>
@@ -2806,69 +3067,12 @@ export function GenerationView({
           </details>
         </section> : null}
 
-        {generationIntent === "video" ? <section className="quick-video-essentials quick-duration-panel" aria-label="Video setup">
-          <header>
-            <span><Icon name="video" size={16} /><span><small>{requestedWorkflow ? "YOUR MODEL" : "AUTO MODEL"}</small><strong>{workflow?.name ?? "Choose a ready video model"}</strong></span></span>
-            <em>{compactEstimate}</em>
-          </header>
-          <div className="quick-video-essential quick-video-duration" aria-label="Video length">
-            <span><strong>Length</strong><small>{estimatedOutputCount === 1 ? "One retained output" : `Each of ${estimatedOutputCount} outputs`}</small></span>
-            <div role="group" aria-label="Video duration">
-              {VIDEO_DURATION_OPTIONS.map((seconds) => <button type="button" key={seconds} className={videoDurationSeconds === seconds ? "on" : ""} aria-pressed={videoDurationSeconds === seconds} disabled={busy} onClick={() => chooseVideoDuration(seconds)}>{videoDurationLabel(seconds)}</button>)}
-            </div>
-            <p>{durationFallback ?? (videoDurationSeconds === 30 && trustedVideoPresetActive
-              ? "Explicit Fast 30s: one native portrait render at 0.20 MP."
-              : videoDurationSeconds >= 30
-                ? `${videoDurationLabel(videoDurationSeconds)} is a longer local render; exact settings and elapsed time stay visible.`
-              : evolutionEnabled ? "Refine, Correct, and Discovery use the same selected length." : "Aligned follows your direction; Discovery uses 70% random DNA.")}</p>
-          </div>
-          {showAspectControls ? <div className="quick-video-essential quick-video-shape">
-            <span><strong>Shape</strong><small>Frame</small></span>
-            <div role="group" aria-label="Canvas shape">
-              {GENERATION_ASPECT_PRESETS.map((preset) => <button type="button" key={preset.id} className={displayedAspectRatio === preset.id ? "on" : ""} aria-label={`${preset.id} ${preset.label}`} aria-pressed={displayedAspectRatio === preset.id} disabled={busy} onClick={() => chooseCanvasAspect(preset.id)}><i style={{ aspectRatio: preset.id.replace(":", " / ") }} /><strong>{preset.id}</strong></button>)}
-            </div>
-          </div> : null}
-          {!evolutionEnabled ? <div className="quick-video-essential quick-video-outputs">
-            <span><strong>Versions</strong><small>Every result retained</small></span>
-            <div role="group" aria-label="Number of video outputs">
-              {GENERATION_OUTPUT_COUNTS.map((count) => {
-                const unavailable = count === 4 && !workflowSeedParameter;
-                return <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy || unavailable} title={unavailable ? "Map this model's sampler seed to guarantee four distinct outputs." : `${count} retained video ${count === 1 ? "output" : "outputs"}`} onClick={() => chooseVideoOutputCount(count)}>{count}</button>;
-              })}
-            </div>
-          </div> : null}
-          <footer>
-            <span>{outputCountSeedBlocked ? "Four versions need a mapped sampler seed." : `${estimatedOutputCount} durable ${estimatedOutputCount === 1 ? "result" : "results"} with exact settings retained.`}</span>
-            <small>{requestedWorkflow ? "Explicit model choice retained" : workflow ? `Fastest measured compatible model · ${workflow.name}` : "Choose a ready compatible model"}</small>
-          </footer>
-          {fourWayBoardRequested ? <div className="quick-four-way-roles" aria-label="Four-way video roles"><span><b>Exact</b> your motion</span><span><b>Enhanced</b> local Gemma</span><span><b>Left Field</b> new direction</span><span><b>Awe</b> beautiful strange</span></div> : null}
-        </section> : null}
-
-        {intent !== "train" ? <details className="quick-compose-panel quick-compose-model">
-          <summary>
-            <span className="quick-compose-model-icon"><Icon name={generationIntent === "music" ? "music" : generationIntent} size={17} /></span>
-            <span className="quick-compose-summary-copy"><small>{requestedWorkflow ? "Selected model" : "Recommended model"}</small><strong>{workflow?.name ?? `No ${generationLabel} model ready`}</strong><em>{workflow ? modelSummary(workflow) : "Choose or import a compatible Comfy workflow"}</em></span>
-            <span className="quick-compose-change">{workflow ? "Change" : "Manage"}</span><Icon name="chevronDown" size={14} />
-          </summary>
-          <div className="quick-compose-panel-body quick-model-picker">
-          <div className="quick-model-head"><span>Model</span><button className="link-btn" onClick={onWorkflows}>Manage models</button></div>
-          {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
-            {intentWorkflows.map((item) => {
-              const durationUnsupported = generationIntent === "video" && !workflowSupportsVideoDuration(item, videoDurationSeconds);
-              const durationProfile = generationIntent === "video" ? videoWorkflowDurationProfile(item) : null;
-              return <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy || durationUnsupported} title={durationUnsupported && durationProfile ? `${durationProfile.label} supports up to ${videoDurationLabel(durationProfile.maxSeconds)}` : undefined} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}{durationProfile ? ` · max ${videoDurationLabel(durationProfile.maxSeconds)}` : ""}</small></span></button>;
-            })}
-          </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
-          {musicPromptProfile ? <small className="quick-model-prompt-profile">Gemma formats this for {musicPromptProfile.targetModel}: {musicPromptProfile.outputFormat === "structured-caption" ? "Global Metadata + Vocal Details + section-by-section Arrangement" : "one concise natural-language audio prompt"}.</small> : null}
-          </div>
-        </details> : null}
-
-        {intent !== "train" && workflow && !uiOnlyDevelopment ? <section className="quick-recipe-tools" aria-label="Reusable generation recipes">
+        {workflow && !uiOnlyDevelopment ? <section className="quick-recipe-tools" aria-label="Reusable generation recipes">
           <label><Icon name="star" size={14} /><span><strong>Recipe</strong><small>{projectRecipes.length ? `${projectRecipes.length} saved · best evidence first` : "Save these exact settings"}</small></span><select aria-label="Load a generation recipe" defaultValue="" disabled={busy || !projectRecipes.length} onChange={(event) => { const recipe = projectRecipes.find((item) => item.id === event.target.value); if (recipe) applyGenerationRecipe(recipe); event.currentTarget.value = ""; }}><option value="">{projectRecipes.length ? "Choose saved recipe" : "No saved recipes yet"}</option>{projectRecipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.name}{recipe.evidenceSummary.runs ? ` · ${recipe.evidenceSummary.accepted}/${recipe.evidenceSummary.runs} accepted` : " · untested"}</option>)}</select></label>
           <button type="button" className="btn btn-ghost" disabled={busy || !workflowReady || !directionReady || (generationIntent !== "music" && worldContinuityEnabled && Boolean(selectedWorld))} title={generationIntent !== "music" && worldContinuityEnabled && selectedWorld ? "World continuity recipes require typed replay and cannot be saved yet." : undefined} onClick={() => void saveCurrentRecipe()}><Icon name="plus" size={14} /> Save recipe</button>
         </section> : null}
 
-        {intent !== "train" && generationIntent === "image" && workflow ? <details className="quick-setting-panel quick-speed-panel">
+        {generationIntent === "image" && workflow ? <details className="quick-setting-panel quick-speed-panel">
           <summary><span><Icon name="generate" size={14} /><strong>Speed</strong></span><em>{imagePerformanceMode === "fast-default" ? "Fast" : "Custom"}</em><small>{fastImageBlocked ? "Needs custom" : compactEstimate}</small><Icon name="chevronDown" size={13} /></summary>
           <div className={`quick-image-speed${fastImageBlocked ? " blocked" : ""}`}>
           <div className="quick-image-speed-options" role="group" aria-label="Image speed">
@@ -2885,7 +3089,7 @@ export function GenerationView({
           </div>
         </details> : null}
 
-        {intent !== "train" && workflow ? <details className="quick-setting-panel quick-render-panel">
+        {workflow ? <details className="quick-setting-panel quick-render-panel">
           <summary><span><Icon name="settings" size={14} /><strong>Canvas &amp; render</strong></span><span className="quick-setting-chips">{compactSettings.map((item) => <em key={item}>{item}</em>)}</span><small>{compactEstimate}</small><Icon name="chevronDown" size={13} /></summary>
           <section className="quick-render-setup" aria-label="Canvas and render settings">
           <header>
@@ -2919,38 +3123,6 @@ export function GenerationView({
           </section>
         </details> : null}
 
-        <details className="quick-compose-panel quick-compose-source" onToggle={(event) => setSourcePickerOpen(event.currentTarget.open)}>
-          <summary>
-            <span className={`quick-compose-preview${quickSource ? ` ${quickSource.kind}` : " empty"}`} style={quickSource ? { background: `linear-gradient(135deg, ${quickSource.colors[0]}, ${quickSource.colors[1]})` } : undefined}>{quickSource ? <QuickSourceVisual source={quickSource} /> : <Icon name="plus" size={18} />}</span>
-            <span className="quick-compose-summary-copy"><small>Source</small><strong>{quickSource?.name ?? (intent === "train" ? "Choose media" : "Prompt only")}</strong><em>{quickSource ? `${quickSource.source === "upload" ? "Upload" : "Generated"} / ${quickSource.kind}` : `${sourceChoices.length} retained available`}</em></span>
-            <span className="quick-compose-change">{quickSource ? "Change" : "Choose"}</span><Icon name="chevronDown" size={14} />
-          </summary>
-          <div className="quick-compose-panel-body">
-        <section className={`quick-source-gallery${sourceGalleryExpanded ? " expanded" : ""}`} aria-label={sourcePickerLabel}>
-          <header><span><strong>{sourcePickerLabel}</strong><small>{quickSource ? quickSource.name : `${sourceChoices.length} compatible retained`}</small></span>{sourceChoices.length > SOURCE_GALLERY_LIMIT ? <button type="button" className="link-btn" disabled={busy} onClick={() => setSourceGalleryExpanded((current) => !current)}>{sourceGalleryExpanded ? "Show newest" : `View all ${sourceChoices.length}`}</button> : null}</header>
-          <div className="quick-source-gallery-grid" role="group" aria-label={`${sourcePickerLabel} gallery`}>
-            <label className={`quick-source-card quick-source-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
-              <input ref={mediaInputRef} type="file" aria-label={uploadSourceLabel} accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : intent === "music" ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
-              <span className="quick-source-visual"><Icon name="plus" size={22} /></span>
-              <span className="quick-source-copy"><strong>{busy ? "Working…" : uploadSourceLabel}</strong><small>{uiOnlyDevelopment ? "Worker required" : "From this device"}</small></span>
-            </label>
-            {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { if (quickSourceId) detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); }}>
-              <span className="quick-source-visual"><Icon name="generate" size={22} /></span>
-              <span className="quick-source-copy"><strong>No source</strong><small>Start from prompt</small></span>
-              {!quickSource ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
-            </button> : null}
-            {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { if (source.id !== quickSourceId) { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); } setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); }}>
-              <span className={`quick-source-visual ${source.kind}`} style={{ background: `linear-gradient(135deg, ${source.colors[0]}, ${source.colors[1]})` }}><QuickSourceVisual source={source} allowVideoPreview={sourcePickerOpen} /><span className="quick-source-kind"><Icon name={source.kind === "audio" ? "music" : source.kind} size={11} /></span></span>
-              <span className="quick-source-copy"><strong>{source.name}</strong><small>{source.source === "upload" ? "Upload" : "Generated"} · {source.kind}</small></span>
-              {quickSource?.id === source.id ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
-            </button>)}
-          </div>
-          <button type="button" className="link-btn quick-source-library" onClick={onMedia}>Open full media library</button>
-        </section>
-          </div>
-        </details>
-        {selectedSourceCompatibilityError ? <div className="quick-source-conflict" role="alert"><Icon name="shield" size={16} /><span><strong>{workflow?.name} cannot use {quickSource?.name}.</strong><small>Choose a compatible model or continue without this source. Creative Studio will not silently drop it.</small></span><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setLocalError(""); setNotice("Continuing without a source."); }}>Continue without source</button></div> : null}
-
         {intent === "music" && songPromptRecommendations.length ? <details className="quick-prompt-ideas"><summary><span><Icon name="star" size={14} /><strong>Song prompt ideas</strong></span><small>{songArtDescription ? "Art + CreativeDNA" : "CreativeDNA"} / {songPromptRecommendations.length}</small></summary><section className="quick-song-prompts" aria-label="Recommended song prompts">
           <header><span><Icon name="star" size={15} /><strong>Prompt ideas</strong></span><small>{songArtDescription ? "Uploaded art + CreativeDNA" : "CreativeDNA"}</small></header>
           <div>{songPromptRecommendations.map((recommendation) => <button type="button" key={recommendation.id} disabled={busy} aria-label={`Use ${recommendation.label} song prompt`} onClick={() => { setSelectedStoryRecommendation(undefined); setDirection(recommendation.prompt); setNotice(`${recommendation.label} prompt is ready to edit.`); }}><span><strong>{recommendation.label}</strong><small>{recommendation.focus}</small></span><p>{recommendation.prompt}</p><em>Use</em></button>)}</div>
@@ -2973,34 +3145,26 @@ export function GenerationView({
           </section>
         </details> : null}
 
-        {intent === "train" ? <div className="quick-training-paths" role="group" aria-label="Choose how Creative Studio learns">
-          <button type="button" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [], "analyze")}><span><Icon name="image" size={19} /></span><strong>Analyze media</strong><small>Describe files and evolve a reviewable CreativeDNA version.</small><em>{trainingSource ? `Use ${trainingSource.name}` : "Images, audio, or video"}</em></button>
-          <button type="button" disabled={busy} onClick={() => onTrain([], "model")}><span><Icon name="music" size={19} /></span><strong>Train music LoRA</strong><small>Train real ACE-Step weights from consented recordings.</small><em>{consentedAudioCount >= 3 ? `${consentedAudioCount} tracks ready` : `${3 - consentedAudioCount} more tracks needed`}</em></button>
-        </div> : <>
-          <RecommendedDirectionsRail threads={snapshot?.storyThreads ?? []} projectId={activeProjectId} modality={generationIntent} activeRecommendationId={selectedStoryRecommendation?.recommendationId} onUse={applyStoryRecommendation} />
-          <div className="quick-direction">
-            <div className="quick-direction-head">
-              <label htmlFor="creative-studio-direction">{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</label>
-              {generationIntent === "video" ? <button type="button" className="quick-enhance-action" disabled={busy || promptEnhancementPending || !promptEnhancementAvailable || !workflow || !workflowPromptParameter || !directionReady} title={promptEnhancementButtonTitle} onClick={() => void requestVideoPromptEnhancement()}><Icon name="wand" size={14} />{promptEnhancementButtonLabel}</button> : null}
+        <RecommendedDirectionsRail threads={snapshot?.storyThreads ?? []} projectId={activeProjectId} modality={generationIntent} activeRecommendationId={selectedStoryRecommendation?.recommendationId} onUse={applyStoryRecommendation} />
+        <details className={`quick-compose-panel quick-compose-model${workflow ? "" : " no-ready"}`}>
+            <summary>
+              <span className="quick-compose-model-icon"><Icon name={generationIntent === "music" ? "music" : generationIntent} size={17} /></span>
+              <span className="quick-compose-summary-copy"><small>{requestedWorkflow ? "Selected model" : "Recommended model"}</small><strong>{workflow?.name ?? `No ${generationLabel} model ready`}</strong><em>{workflow ? modelSummary(workflow) : "Choose or import a compatible Comfy workflow"}</em></span>
+              <span className="quick-compose-change">{workflow ? "Change" : "Manage"}</span><Icon name="chevronDown" size={14} />
+            </summary>
+            <div className="quick-compose-panel-body quick-model-picker">
+            <div className="quick-model-head"><span>Model</span><button className="link-btn" onClick={onWorkflows}>Manage models</button></div>
+            {intentWorkflows.length ? <div className="quick-models" role="group" aria-label={`${intent === "music" ? "Song" : intent} model`}>
+              {intentWorkflows.map((item) => {
+                const durationUnsupported = generationIntent === "video" && !workflowSupportsVideoDuration(item, videoDurationSeconds);
+                const durationProfile = generationIntent === "video" ? videoWorkflowDurationProfile(item) : null;
+                return <button key={item.id} className={workflow?.id === item.id ? "on" : ""} aria-pressed={workflow?.id === item.id} disabled={busy || durationUnsupported} title={durationUnsupported && durationProfile ? `${durationProfile.label} supports up to ${videoDurationLabel(durationProfile.maxSeconds)}` : undefined} onClick={() => chooseWorkflow(item.id)}><Icon name={item.modality === "music" || item.modality === "audio" ? "music" : item.modality === "video" ? "video" : "image"} size={17} /><span><strong>{item.name}</strong><small>{modelSummary(item)}{durationProfile ? ` · max ${videoDurationLabel(durationProfile.maxSeconds)}` : ""}</small></span></button>;
+              })}
+            </div> : <button className="quick-model-empty" onClick={onWorkflows}><Icon name="flows" size={16} /><span><strong>No {intent === "music" ? "song" : intent} model is ready</strong><small>Manage models</small></span><Icon name="chevron" size={14} /></button>}
+            {musicPromptProfile ? <small className="quick-model-prompt-profile">Gemma formats this for {musicPromptProfile.targetModel}: {musicPromptProfile.outputFormat === "structured-caption" ? "Global Metadata + Vocal Details + section-by-section Arrangement" : "one concise natural-language audio prompt"}.</small> : null}
             </div>
-            <textarea id="creative-studio-direction" value={direction} maxLength={VIDEO_PROMPT_ENHANCED_MAX_LENGTH} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} />
-            {generationIntent === "video" && (promptEnhancementPending || activePromptEnhancement || promptEnhancementApplied) ? <div className={`quick-prompt-enhancement-state${activePromptEnhancement?.status === "failed" ? " failed" : promptEnhancementApplied ? " applied" : ""}`} role="status">
-              <span><Icon name={activePromptEnhancement?.status === "failed" ? "close" : promptEnhancementPending ? "history" : "wand"} size={13} /><small>{promptEnhancementPending
-                ? activePromptEnhancement?.status === "running" ? "Gemma 4 is adding motion, camera, timing, and atmosphere on your machine." : "Waiting for local Gemma 4. Your prompt is safe and unchanged."
-                : activePromptEnhancement?.status === "failed"
-                  ? "Gemma couldn’t enhance this prompt. Your current prompt is unchanged."
-                  : activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id
-                    ? promptEnhancementMatchesWorkflow ? "Enhancement ready. Use it, or keep your current prompt." : "Length, source, or model changed. Enhance again for this setup."
-                    : promptEnhancementContextChanged
-                      ? "Length, source, or model changed. Enhance again for this setup."
-                      : direction.trim() === appliedPromptEnhancement?.enhancedPrompt?.trim() ? "Enhanced locally · Gemma 4" : "Edited after enhancement · Gemma 4"}</small></span>
-              <span className="quick-prompt-enhancement-actions">
-                {promptEnhancementPending ? <button type="button" onClick={keepCurrentVideoPrompt}>Keep current</button> : null}
-                {activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={applyCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
-                {originalVideoDirection !== null && direction.trim() !== originalVideoDirection.trim() ? <button type="button" onClick={restoreOriginalVideoPrompt}>Restore original</button> : null}
-              </span>
-            </div> : null}
-          </div>
+          </details>
+
           {generationIntent === "video" ? <section className="quick-video-speech" aria-label="Dialogue and sound">
             <div className="quick-video-speech-head"><span><Icon name="music" size={14} /><strong>Dialogue & sound</strong></span><small>{videoSpeechMode === "no-speech" ? "Sound on · no dialogue" : `${videoSpeechWordCount} / ${videoSpeechWordBudget.maximum} words`}</small></div>
             <div className="quick-video-speech-modes" role="group" aria-label="Dialogue mode">
@@ -3033,26 +3197,7 @@ export function GenerationView({
               })}
             </div>
           </div> : null}
-          {heavyRenderConfirmationOpen && heavyVideoRender ? <section className="quick-heavy-render-confirmation" role="alert" aria-label="Confirm heavy video render">
-            <header><Icon name="analytics" size={17} /><span><strong>Confirm this longer local render</strong><small>These settings are intentionally outside the one-click 5s / 0.20 MP fast path.</small></span></header>
-            <div className="quick-heavy-render-facts">
-              <span><small>CLIP</small><strong>{videoDurationLabel(videoDurationSeconds)}</strong></span>
-              <span><small>FRAMES</small><strong>{videoFrameSummary}</strong></span>
-              <span><small>SIZE</small><strong>{videoResolutionSummary}</strong></span>
-              <span><small>VERSIONS</small><strong>{estimatedOutputCount}</strong></span>
-            </div>
-            <p><strong>{heavyRenderTimeSummary}</strong><small>The Local Runner renders these {estimatedOutputCount} versions one after another, so later versions wait for earlier ones to finish.</small></p>
-            <footer><button type="button" className="btn btn-ghost" onClick={() => { armedVideoRenderSignature.current = ""; setHeavyRenderConfirmationOpen(false); }}>Keep editing</button><button type="button" className="btn btn-primary" onClick={() => { armedVideoRenderSignature.current = videoRenderSignature; setHeavyRenderConfirmationOpen(false); void startWorkflowGeneration(); }}><Icon name="send" size={15} /> Confirm &amp; queue</button></footer>
-          </section> : null}
-          <div className={`quick-generate-dock${localError || error ? " has-error" : ""}`}>
-            {localError || error ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{localError || error}</small></span></div> : null}
-            <span><Icon name="analytics" size={13} /><span><strong>{compactEstimate}</strong><small>{continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || promptEnhancementPending || uiOnlyDevelopment || !workflow || !directionReady || !workflowReady || !scoutReady || !evolutionReady || !videoSpeechReady || selectedSourceCompatibilityError || fastImageBlocked || outputCountSeedBlocked || continuityTooLarge || (generationIntent === "video" && !workflowPromptParameter)} onClick={() => void startWorkflowGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button>
-          </div>
-          {!workflow && developmentPreviewAvailable && generationIntent !== "video" ? <button className="btn btn-ghost quick-development" disabled={busy || !directionReady} onClick={() => void submitDevelopmentPreview()}>Create explicitly simulated development preview</button> : null}
-        </>}
-      </section>
-
-      {intent !== "train" ? <details className="quick-create-advanced glass">
+        <details className="quick-create-advanced glass">
         <summary><span><Icon name="settings" size={15} /><strong>Advanced</strong></span><small>DNA, less-used settings, and remote route</small></summary>
         <div className="quick-advanced-body">
           <section className="quick-advanced-section quick-advanced-wide">
@@ -3101,7 +3246,23 @@ export function GenerationView({
           {afdfwCapability ? <details className="generation-optional-route create-remote-route quick-advanced-wide"><summary><span>Optional remote route · AFDFW</span><em className={afdfwCapability.state}>{afdfwCapability.state}</em></summary><p>{afdfwCapability.detail}</p>{afdfwImageWorkload && afdfwImageProfile ? <div className="direct-generation-profile"><div>{afdfwImageWorkload.facts.map((fact) => <span key={fact}>{fact}</span>)}</div><details><summary>Model evidence · {afdfwImageProfile.models.length} files</summary>{afdfwImageProfile.models.map((model) => <code key={model}>{model}</code>)}</details></div> : null}<button className="btn btn-ghost" disabled={busy || afdfwCapability.state !== "available" || !directionReady} onClick={() => void submitRemote()}><Icon name="send" size={16} /> Generate remotely with AFDFW</button></details> : null}
           {selected?.rights.referenceStoredAsProvenanceOnly ? <div className="rights-panel quick-advanced-wide"><Icon name="shield" size={18} /><div><strong>Reference identity stays in lineage only.</strong></div></div> : null}
         </div>
-      </details> : null}
+      </details>
+        </div> : null}
+        {intent !== "train" ? <div className="quick-create-results"><CreateResultRail artifacts={recentCreateArtifacts} onOpenArtifacts={onArtifacts} onUseAsSource={(artifactId) => {
+          const artifact = recentCreateArtifacts.find((item) => item.id === artifactId);
+          if (!artifact) return;
+          if (artifact.id !== quickSourceId) {
+            detachAssistedVideoScript();
+            setSelectedStoryRecommendation(undefined);
+          }
+          setQuickSourceId(artifact.id);
+          setInputBindings({});
+          setSourceGalleryExpanded(false);
+          setLocalError("");
+          setNotice(`${artifact.name} is now your starting point. Keep this format or choose Image, Video, or Song above.`);
+          document.getElementById("creative-studio-direction")?.focus({ preventScroll: false });
+        }} /></div> : null}
+      </section>
 
       <VideoScriptBuilderSheet
         open={videoScriptBuilderOpen}

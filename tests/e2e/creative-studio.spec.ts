@@ -1,4 +1,13 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function openRetainedWork(page: Page) {
+  await page.getByRole("button", { name: /^(Retained work|Change)$/ }).click();
+}
+
+async function openCreativeControls(page: Page) {
+  const control = page.getByRole("button", { name: /creative controls/i });
+  if (await control.getAttribute("aria-expanded") !== "true") await control.click();
+}
 
 test("a Create draft survives navigation and resumes from Home", async ({ page }) => {
   const createdAt = "2026-08-27T05:00:00.000Z";
@@ -12,7 +21,7 @@ test("a Create draft survives navigation and resumes from Home", async ({ page }
   await page.goto("/#/dna");
   const direction = page.getByRole("textbox", { name: "Describe the image" });
   await direction.fill("A suspended glass seed holding a tiny electric storm.");
-  await expect(page.getByText("Changes autosave on this device.")).toBeVisible();
+  await expect(page.locator(".quick-autosave-state")).toHaveText("Changes autosave on this device.");
   await page.waitForTimeout(750);
 
   await page.goto("/#/portal");
@@ -47,6 +56,7 @@ test("a restored draft requires an explicit replacement when its model disappear
   await expect(page.locator(".quick-compose-model > summary")).toContainText("No image model ready");
   await expect(page.locator(".quick-primary")).toContainText("Choose a model");
   await expect(page.locator(".quick-primary")).toBeDisabled();
+  await openCreativeControls(page);
   await page.locator(".quick-compose-model > summary").click();
   await page.getByRole("button", { name: /Available image model/ }).click();
   await expect(page.locator(".quick-compose-model > summary")).toContainText("Available image model");
@@ -85,7 +95,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
-  await page.locator(".quick-compose-source > summary").click();
+  await openRetainedWork(page);
   await expect(page.getByRole("button", { name: "Use Rebecca embryo upload" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
   await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
@@ -96,6 +106,7 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(outputCount.getByRole("button", { name: "1", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "4", exact: true })).toBeDisabled();
   await expect(page.getByRole("alert")).toContainText("development adapter cannot submit simulated video");
+  await openCreativeControls(page);
   await expect(page.getByRole("button", { name: "No dialogue", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText(/sparkling synth arpeggios/)).toBeVisible();
   await page.getByRole("button", { name: "Exact script", exact: true }).click();
@@ -184,14 +195,15 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
     }));
   }, { createdAt });
   await page.goto("/#/dna");
-  await page.locator(".quick-compose-source > summary").click();
+  await openRetainedWork(page);
   const sourceGallery = page.getByRole("region", { name: "Use retained work" });
   await expect(sourceGallery.getByRole("button", { name: "Use Newest retained source upload" })).toBeVisible();
   await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toHaveCount(0);
   await sourceGallery.getByRole("button", { name: "View all 7" }).click();
   await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toBeVisible();
   await sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" }).click();
-  await expect(sourceGallery.getByRole("button", { name: "Use Oldest retained source upload" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("region", { name: "Create canvas" })).toContainText("Oldest retained source");
+  await openCreativeControls(page);
   await page.locator(".quick-speed-panel > summary").click();
   const speed = page.getByRole("group", { name: "Image speed" });
   await expect(speed.getByRole("button", { name: /^Fast/ })).toHaveAttribute("aria-pressed", "true");
@@ -200,7 +212,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("button", { name: /generate image · fast/i })).toBeVisible();
   await page.locator(".quick-render-panel > summary").click();
   const renderSetup = page.getByRole("region", { name: "Canvas and render settings" });
-  const canvasShape = page.getByRole("group", { name: "Canvas shape" });
+  const canvasShape = renderSetup.getByRole("group", { name: "Canvas shape", exact: true });
   const renderDetail = page.getByRole("group", { name: "Render detail" });
   await expect(renderSetup).toBeVisible();
   await expect(canvasShape.getByRole("button", { name: "9:16 Portrait" })).toBeVisible();
@@ -220,6 +232,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
   await expect(page.getByRole("region", { name: "Creation goal" })).toContainText("Two fast retained directions");
+  await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Newest retained source upload" }).click();
   await page.locator(".quick-compose-model > summary").click();
   const videoDuration = page.getByRole("group", { name: "Video duration" });
@@ -257,6 +270,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await page.reload();
   await expect(page.locator(".quick-video-essentials > header")).toContainText("AUTO MODEL");
   await expect(page.locator(".quick-video-essentials > header")).toContainText("MiniMax Video H3");
+  await openCreativeControls(page);
   await page.locator(".quick-compose-model > summary").click();
   await page.getByRole("button", { name: /LTX 2.5 Image to Video/ }).click();
   await videoDuration.getByRole("button", { name: "10s", exact: true }).click();
@@ -273,6 +287,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await page.reload();
   await expect(page.locator(".quick-video-essentials > header")).toContainText("YOUR MODEL");
   await expect(page.locator(".quick-video-essentials > header")).toContainText("LTX 2.5 Image to Video");
+  await openCreativeControls(page);
   await page.locator(".quick-render-panel > summary").click();
   await page.getByRole("region", { name: "Canvas and render settings" }).getByText("Fine tune", { exact: true }).click();
   await expect(page.getByRole("group", { name: "Frames per second" }).getByRole("button", { name: /24/ })).toHaveAttribute("aria-pressed", "true");
@@ -317,8 +332,9 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
 
   await page.goto("/#/dna");
   await page.getByRole("button", { name: "Song", exact: true }).click();
-  await page.locator(".quick-compose-source > summary").click();
+  await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Embryo artwork upload" }).click();
+  await openCreativeControls(page);
   await page.locator(".quick-prompt-ideas > summary").click();
   await expect(page.getByRole("region", { name: "Recommended song prompts" })).toContainText("Uploaded art + CreativeDNA");
   await page.getByRole("button", { name: "Use Art + DNA song prompt" }).click();
@@ -326,6 +342,7 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
   await expect(direction).toHaveValue(/A translucent embryo-like form floats in a violet chamber/);
   await expect(direction).toHaveValue(/123 BPM/);
   await expect(direction).toHaveValue(/wide depth, long decays, and deliberate negative space/);
+  await openCreativeControls(page);
   await page.locator(".quick-song-lyrics > summary").click();
   await expect(page.getByRole("textbox", { name: "Song lyrics" })).toHaveValue("");
   await page.locator(".quick-create-advanced > summary").click();
@@ -557,6 +574,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Image", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("Add workflow JSON", { exact: true })).toHaveCount(0);
   await expect(page.locator(".quick-compose-model > summary")).toContainText("No image model ready");
+  await openCreativeControls(page);
   await page.locator(".quick-create-advanced > summary").click();
   await page.getByRole("button", { name: "Build detailed CreativeDNA" }).click();
 
@@ -603,6 +621,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(artifact.getByText("Reviewed by Development user")).toBeVisible();
   await artifact.locator(".artifact-compact-actions details > summary").click();
   await artifact.getByRole("button", { name: "Evolve this" }).click();
+  await openCreativeControls(page);
   await page.locator(".quick-evolution-brief > summary").click();
   const evolution = page.getByRole("region", { name: "Evolution study" });
   await expect(evolution).toContainText("Refine");

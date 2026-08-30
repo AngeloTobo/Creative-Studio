@@ -6,6 +6,7 @@ import type {
   CreateVideoPromptEnhancementRequest,
   CreativeDnaArtifact,
   Job,
+  MediaAsset,
   StudioSnapshot,
   SubmitJobBatchRequest,
   SubmitJobRequest,
@@ -26,6 +27,15 @@ const SOURCE_ID = "media_retained_frame";
 const IMAGE_PARAMETER_ID = "395::image";
 const SEED_PARAMETER_ID = "398:339::noise_seed";
 const MEGAPIXELS_PARAMETER_ID = "403::megapixels";
+
+async function openRetainedWork(page: Page) {
+  await page.getByRole("button", { name: /^(Retained work|Change)$/ }).click();
+}
+
+async function openCreativeControls(page: Page) {
+  const control = page.getByRole("button", { name: /creative controls/i });
+  if (await control.getAttribute("aria-expanded") !== "true") await control.click();
+}
 
 let httpAdapterServer: ChildProcess | null = null;
 
@@ -230,6 +240,7 @@ type MockVideoBackend = {
   batchRequests: SubmitJobBatchRequest[];
   enhancementRequests: CreateVideoPromptEnhancementRequest[];
   revisionRequests: Array<{ baseRevisionId: string; values: Record<string, WorkflowScalar> }>;
+  uploads: Array<{ fileName: string; contentType: string; size: number }>;
   workflow: () => WorkflowDefinition;
 };
 
@@ -245,6 +256,8 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
   const batchRequests: SubmitJobBatchRequest[] = [];
   const enhancementRequests: CreateVideoPromptEnhancementRequest[] = [];
   const revisionRequests: MockVideoBackend["revisionRequests"] = [];
+  const uploads: MockVideoBackend["uploads"] = [];
+  const uploadedAssets: MediaAsset[] = [];
   let promptEnhancement: VideoPromptEnhancement | null = null;
   let createdDna: CreativeDnaArtifact | null = null;
 
@@ -323,7 +336,36 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     const pathname = new URL(request.url()).pathname;
 
     if (request.method() === "GET" && pathname === "/api/creative-studio/snapshot") {
-      await json(route, { snapshot: baseSnapshot(workflow, jobs, promptEnhancement, withEnhancement, createdDna) });
+      const snapshot = baseSnapshot(workflow, jobs, promptEnhancement, withEnhancement, createdDna);
+      snapshot.mediaAssets.push(...uploadedAssets);
+      await json(route, { snapshot });
+      return;
+    }
+
+    if (request.method() === "POST" && pathname === "/api/creative-studio/media") {
+      const fileName = decodeURIComponent(request.headers()["x-cs-file-name"] ?? "uploaded-source.png");
+      const contentType = request.headers()["content-type"] ?? "application/octet-stream";
+      const size = Number(request.headers()["x-cs-file-size"] ?? request.postDataBuffer()?.length ?? 0);
+      uploads.push({ fileName, contentType, size });
+      const createdAt = new Date(Date.parse(NOW) + 15_000 + uploadedAssets.length * 1_000).toISOString();
+      const asset: MediaAsset = {
+        id: `media_uploaded_e2e_${uploadedAssets.length + 1}`,
+        projectId: "project_video_e2e",
+        kind: "image",
+        name: fileName.replace(/\.[^.]+$/, ""),
+        originalFileName: fileName,
+        mimeType: contentType,
+        size,
+        source: "upload",
+        status: "retained",
+        contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        trainingEligible: request.headers()["x-cs-training-eligible"] === "true",
+        provenance: { uploadedByOwner: true, uploadedAt: createdAt, parentAssetIds: [] },
+        createdAt,
+        updatedAt: createdAt,
+      };
+      uploadedAssets.push(asset);
+      await json(route, { asset }, 201);
       return;
     }
 
@@ -453,7 +495,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     await json(route, { error: `unhandled_e2e_api_route:${request.method()}:${pathname}` }, 500);
   });
 
-  return { jobs: jobRequests, batchRequests, enhancementRequests, revisionRequests, workflow: () => workflow };
+  return { jobs: jobRequests, batchRequests, enhancementRequests, revisionRequests, uploads, workflow: () => workflow };
 }
 
 async function openRetainedMedia(page: Page) {
@@ -567,26 +609,185 @@ test("Mobile video creation keeps the direct composer ahead of secondary control
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
   await page.getByRole("button", { name: "Video", exact: true }).click();
+  await openRetainedWork(page);
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   const composerOrder = await page.locator(".quick-create-card").evaluate((card) => {
-    const order = (selector: string) => Number.parseInt(getComputedStyle(card.querySelector(selector)!).order, 10);
-    return {
-      source: order(".quick-compose-source"),
-      prompt: order(".quick-direction"),
-      setup: order(".quick-video-essentials"),
-      generate: order(".quick-generate-dock"),
-      dialogue: order(".quick-video-speech"),
-      model: order(".quick-compose-model"),
-    };
+    const selectors = [
+      ".quick-create-stage",
+      ":scope > .quick-compose-source",
+      ":scope > .quick-direction",
+      ":scope > .quick-video-essentials",
+      ":scope > .quick-generate-dock",
+      ":scope > .quick-more-toggle",
+      ":scope > .quick-create-results",
+    ];
+    return selectors.map((selector) => Array.from(card.children).indexOf(card.querySelector(selector)!));
   });
-  expect(composerOrder.source).toBeLessThan(composerOrder.prompt);
-  expect(composerOrder.prompt).toBeLessThan(composerOrder.setup);
-  expect(composerOrder.setup).toBeLessThan(composerOrder.generate);
-  expect(composerOrder.generate).toBeLessThan(composerOrder.dialogue);
-  expect(composerOrder.generate).toBeLessThan(composerOrder.model);
+  expect(composerOrder).toEqual([...composerOrder].sort((left, right) => left - right));
   await expect(page.getByRole("group", { name: "Video duration" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Canvas shape" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Number of video outputs" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Create canvas" })).toBeVisible();
+  await expect(page.locator(".quick-video-speech")).toBeHidden();
+  await expect(page.locator(".quick-compose-model")).toBeHidden();
+  await expect(page.getByRole("button", { name: /More creative controls/ })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".quick-generate-dock")).toHaveCSS("position", "relative");
+  await expect(page.locator(".quick-generation-blocker")).toContainText("Describe the video");
+  await page.getByRole("button", { name: /More creative controls/ }).click();
+  await expect(page.locator("#creative-studio-power-tools")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Hide creative controls/ })).toHaveAttribute("aria-controls", "creative-studio-power-tools");
+  await expect(page.locator(".quick-generation-goal-options button:not(:disabled)").first()).toBeFocused();
+  await page.getByRole("button", { name: /Hide creative controls/ }).click();
+  const stageUpload = page.getByRole("region", { name: "Create canvas" }).getByRole("button", { name: "Upload", exact: true });
+  await stageUpload.focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Describe the video")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "5s", exact: true })).toBeFocused();
+  for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const [promptBounds, setupBounds, generateBounds] = await Promise.all([
+      page.locator(".quick-direction").boundingBox(),
+      page.locator(".quick-video-essentials").boundingBox(),
+      page.locator(".quick-generate-dock").boundingBox(),
+    ]);
+    expect(promptBounds).not.toBeNull();
+    expect(setupBounds).not.toBeNull();
+    expect(generateBounds).not.toBeNull();
+    expect(promptBounds!.y + promptBounds!.height).toBeLessThanOrEqual(setupBounds!.y + 1);
+    expect(setupBounds!.y + setupBounds!.height).toBeLessThanOrEqual(generateBounds!.y + 1);
+    const sourceNameSizing = await page.locator(".quick-create-stage > footer strong").evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      whiteSpace: getComputedStyle(element).whiteSpace,
+    }));
+    expect(sourceNameSizing.whiteSpace).toBe("normal");
+    expect(sourceNameSizing.scrollWidth).toBeLessThanOrEqual(sourceNameSizing.clientWidth + 1);
+    if (viewport.width === 320) {
+      const [sourceNameBounds, sourceActionsBounds] = await Promise.all([
+        page.locator(".quick-create-stage > footer > span").boundingBox(),
+        page.locator(".quick-create-stage > footer > div").boundingBox(),
+      ]);
+      expect(sourceNameBounds).not.toBeNull();
+      expect(sourceActionsBounds).not.toBeNull();
+      expect(sourceNameBounds!.width).toBeGreaterThan(120);
+      expect(sourceNameBounds!.y + sourceNameBounds!.height).toBeLessThanOrEqual(sourceActionsBounds!.y + 1);
+    }
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("Restored non-default video settings open Creative controls before generation", async ({ page }) => {
+  await installVideoBackend(page, false);
+  await page.addInitScript(({ now, sourceId, workflowId, revisionId }) => {
+    localStorage.setItem("creative-studio:create-sessions", JSON.stringify({
+      schemaVersion: 2,
+      sessions: [{
+        schemaVersion: 2,
+        id: "session_restored_exact_dialogue",
+        projectId: "project_video_e2e",
+        sourceAssetIds: [sourceId],
+        retainedArtifactId: null,
+        direction: "The figure catches a ribbon of rain while the camera circles once.",
+        mediaKind: "video",
+        workflowId,
+        graphicalSettings: {
+          workflowSelectionMode: "explicit",
+          workflowRevisionId: revisionId,
+          videoDurationSeconds: 5,
+          outputCount: 2,
+          videoSpeechMode: "exact-script",
+          videoSpeechText: "We return together.",
+        },
+        intentTier: "explore",
+        updatedAt: now,
+      }],
+    }));
+  }, {
+    now: NOW,
+    sourceId: SOURCE_ID,
+    workflowId: "workflow_ltx_i2v_e2e",
+    revisionId: "workflowrev_ltx_i2v_e2e_1",
+  });
+
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+  await expect(page.getByRole("button", { name: /Hide creative controls/ })).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".quick-video-speech")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Exact script", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByPlaceholder("I remember this place.")).toHaveValue("We return together.");
+  await expect(page.getByText(/every restored non-default setting is visible/i)).toBeVisible();
+});
+
+test("Restored exact workflow overrides cannot remain hidden behind Simple Create", async ({ page }) => {
+  await installVideoBackend(page, false);
+  await page.addInitScript(({ now, sourceId, workflowId, revisionId, seedParameterId }) => {
+    localStorage.setItem("creative-studio:create-sessions", JSON.stringify({
+      schemaVersion: 2,
+      sessions: [{
+        schemaVersion: 2,
+        id: "session_restored_exact_seed",
+        projectId: "project_video_e2e",
+        sourceAssetIds: [sourceId],
+        retainedArtifactId: null,
+        direction: "The figure turns as a luminous storm folds into a narrow ribbon above the street.",
+        mediaKind: "video",
+        workflowId: null,
+        graphicalSettings: {
+          workflowSelectionMode: "automatic",
+          automaticWorkflowId: workflowId,
+          workflowRevisionId: revisionId,
+          videoDurationSeconds: 5,
+          outputCount: 2,
+          videoSpeechMode: "no-speech",
+          [`value:${seedParameterId}`]: 246813579,
+        },
+        intentTier: "explore",
+        updatedAt: now,
+      }],
+    }));
+  }, {
+    now: NOW,
+    sourceId: SOURCE_ID,
+    workflowId: "workflow_ltx_i2v_e2e",
+    revisionId: "workflowrev_ltx_i2v_e2e_1",
+    seedParameterId: SEED_PARAMETER_ID,
+  });
+
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+  await expect(page.getByRole("button", { name: /Hide creative controls/ })).toHaveAttribute("aria-expanded", "true");
+  await page.locator("details.quick-render-panel > summary").click();
+  await page.locator("details.quick-render-more > summary").click();
+  await expect(page.locator(".quick-seed-control button small")).toHaveText("246813579");
+  await expect(page.getByText(/every restored non-default setting is visible/i)).toBeVisible();
+});
+
+test("Simple Create uploads a source in place and preserves the authored prompt through generation", async ({ page }) => {
+  const backend = await installVideoBackend(page, false);
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  const direction = page.getByLabel("Describe the video");
+  const authoredPrompt = "The glass figure catches a falling star and the street folds upward behind them.";
+  await direction.fill(authoredPrompt);
+
+  const fileChooser = page.waitForEvent("filechooser");
+  await page.getByRole("region", { name: "Create canvas" }).getByRole("button", { name: "Upload", exact: true }).click();
+  await (await fileChooser).setFiles({
+    name: "new-sculpt.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("creative-studio-upload-proof"),
+  });
+
+  await expect.poll(() => backend.uploads.length).toBe(1);
+  expect(backend.uploads[0]).toMatchObject({ fileName: "new-sculpt.png", contentType: "image/png" });
+  await expect(page.getByRole("region", { name: "Create canvas" }).getByRole("img", { name: "new-sculpt source" })).toBeVisible();
+  await expect(direction).toHaveValue(authoredPrompt);
+  await expect(page).toHaveURL(/#\/dna$/);
+
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
+  expect(backend.jobs.every((job) => job.workflow?.inputBindings[IMAGE_PARAMETER_ID] === "media_uploaded_e2e_1")).toBe(true);
+  expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["aligned", "discovery"]);
 });
 
 test("Longer video settings require an explicit workload confirmation", async ({ page }) => {
@@ -594,7 +795,7 @@ test("Longer video settings require an explicit workload confirmation", async ({
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
   await page.getByRole("button", { name: "Video", exact: true }).click();
-  await page.locator(".quick-compose-source > summary").click();
+  await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   await page.getByLabel("Describe the video").fill("The figure turns toward the moving skyline as rain rises around them.");
   await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
@@ -623,13 +824,14 @@ test("Retained-image Fast 30s remains an explicit single-render choice and queue
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
   await page.getByRole("button", { name: "Video", exact: true }).click();
-  await page.locator(".quick-compose-source > summary").click();
+  await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   const authoredDirection = "A glass-robed figure turns toward a luminous storm gathering above the city.";
   await page.getByLabel("Describe the video").fill(authoredDirection);
 
   // Choose an unsaved seed before selecting Fast 30s. The explicit recipe must
   // retain the authored source, direction, and seed.
+  await openCreativeControls(page);
   await page.locator("details.quick-create-advanced > summary").click();
   await page.locator("details.quick-render-panel > summary").click();
   await page.locator("details.quick-render-more > summary").click();
@@ -669,6 +871,7 @@ test("Retained-image Fast 30s remains an explicit single-render choice and queue
   expect(savedSession?.sourceAssetIds).toContain(SOURCE_ID);
   expect(savedSession?.graphicalSettings?.[`value:${SEED_PARAMETER_ID}`]).toBe(preservedSeed);
   await page.reload();
+  await openCreativeControls(page);
   await expect(page.getByRole("region", { name: "Fast 30 second single-render option" })
     .getByRole("button", { name: "Return to Standard Pair" })).toBeVisible();
   await expect(page.getByLabel("Describe the video")).toHaveValue(authoredDirection);
@@ -715,10 +918,11 @@ test("Fast 30s exits cleanly to the standard Aligned and Discovery pair", async 
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
   await page.getByRole("button", { name: "Video", exact: true }).click();
-  await page.locator(".quick-compose-source > summary").click();
+  await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   await page.getByLabel("Describe the video").fill("A glass figure discovers a ribbon of light and follows it through the upright city.");
 
+  await openCreativeControls(page);
   await page.locator("details.quick-create-advanced > summary").click();
   await page.locator("details.quick-render-panel > summary").click();
   await page.locator("details.quick-render-more > summary").click();
