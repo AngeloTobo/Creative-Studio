@@ -8,7 +8,7 @@ The product should have one obvious front door: **Create**. The ordinary path is
 
 This turn is deliberately split in two:
 
-- The UX simplification is implemented locally and verified.
+- The UX simplification is deployed and verified.
 - The operations work below is an evidence-backed recommendation set only.
 
 **No Local Runner, ComfyUI, workflow graph, model, queue, prompt payload, generation setting, post-processing, storage contract, or output behavior was changed. No generation job was submitted during this audit.**
@@ -93,11 +93,11 @@ An approved evaluation should use:
 - Lint and all TypeScript targets: passed.
 - Environment and Cloudflare Free guards: passed.
 - Production build: passed.
-- Secret scan: clean across 244 source files.
+- Secret scan: clean across 245 source files.
 - Browser matrix: 60 applicable desktop/mobile checks passed; 6 existing device-shape skips remained intentional.
 - Standard Animate still submits exactly two Aligned/Discovery jobs.
 - Animate x4 still waits for enhancement and submits exactly four named jobs.
 - Fast 30 still submits exactly one proven render and returns cleanly to the standard pair.
 - Upload, retained-source reuse, exact restored settings, long-render confirmation, drafts, scripts, speech, training, review, and artifact lineage remain covered.
 - No files under `runner/`, `worker/`, `shared/`, migrations, scripts, or package configuration changed.
-- No commit, push, deployment, migration, process restart, model load/unload, queue mutation, or generated proof artifact was performed for this UX pass.
+- Commit `dd31b96` was pushed and deployed as Worker `cae26f90-2ebd-4e96-8322-a9d5ea32b0ee`; remote D1 had no migration to apply. The release restarted no process, loaded or unloaded no model, mutated no queue or review state, and submitted no proof generation. The active LTX render retained its exact job and Comfy prompt mapping after publication.
