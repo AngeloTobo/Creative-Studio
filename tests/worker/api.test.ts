@@ -5,6 +5,7 @@ import {
   compileContinuityDirective,
   createFourWayVideoGenerationVersions,
   createVideoGenerationVersions,
+  inspectWorkflowGraph,
   loveLoopLocalDate,
   TRUSTED_LTX_25_I2V_PORTRAIT_30S,
   TRUSTED_LTX_25_I2V_PORTRAIT_30S_ID,
@@ -97,6 +98,9 @@ function memoryBucket() {
 
 async function clearData() {
   await env.DB.batch([
+    env.DB.prepare("drop trigger if exists fail_durable_pair_lane_two"),
+    env.DB.prepare("delete from creative_story_scheduler_state"),
+    env.DB.prepare("delete from creative_generation_batches"),
     env.DB.prepare("delete from creative_love_loop_drops"),
     env.DB.prepare("delete from creative_love_loops"),
     env.DB.prepare("delete from creative_overnight_tasks"),
@@ -1576,7 +1580,190 @@ describe("Creative Studio Worker API", () => {
     });
   });
 
-  it("repairs a copied LTX negative prompt into an immutable execution revision before queueing", async () => {
+  it("resumes a failed second video render ahead of ordinary work without duplicating lane one", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Durable video pair");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Durable pair DNA",
+      directive: "Upright three-beat transformations with precise luminous motion.",
+      targetModality: "image",
+    });
+    const local = workerEnv("development", undefined, memoryBucket().bucket);
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5 Text to Video", inputMode: "text-to-video" });
+    const first = compileVideoPromptWithSpeech("Beat one: the figure looks up. Beat two: light crosses the room. Beat three: the doors open.", undefined, profile);
+    const second = compileVideoPromptWithSpeech("Beat one: the figure remains still. Beat two: the room unfolds. Beat three: a new horizon appears.", undefined, profile);
+    const graph = JSON.stringify({
+      "1": { class_type: "PrimitiveStringMultiline", inputs: { value: first.prompt }, _meta: { title: "Positive Prompt" } },
+      "2": { class_type: "LTXVideo", inputs: { prompt: ["1", 0], seed: 44 } },
+      "3": { class_type: "PrimitiveInt", inputs: { value: 5 }, _meta: { title: "Video Duration" } },
+      "4": { class_type: "PrimitiveFloat", inputs: { value: 0.2 }, _meta: { title: "Megapixels" } },
+      "5": { class_type: "PrimitiveInt", inputs: { value: 24 }, _meta: { title: "Frame Rate" } },
+      "6": { class_type: "PrimitiveInt", inputs: { value: 121 }, _meta: { title: "Frames" } },
+      "7": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("durable-video-pair.json"),
+        "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength),
+        "x-cs-workflow-name": encodeURIComponent("LTX 2.5 Text to Video"),
+      },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+    const secondRevision = await result(await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevisionId: imported.workflow.currentRevision.id, values: { "1::value": second.prompt, "2::seed": 45 } }),
+    }), local)) as { workflow: { currentRevision: { id: string } } };
+    const batchId = "output_batch_durable_pair_12345678";
+    const lane = (index: 1 | 2, revisionId: string, prompt: string, idempotencyKey: string) => ({
+      projectId: project.id,
+      dnaArtifactId: dna.artifactId,
+      modality: "video",
+      idempotencyKey,
+      videoPerformanceMode: "fast-default",
+      videoSpeech: index === 1 ? first.speech : second.speech,
+      workflow: { workflowId: imported.workflow.id, revisionId, inputBindings: {}, expectedPrompt: prompt },
+      outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId, index, count: 2 },
+    });
+    const jobs = [
+      lane(1, imported.workflow.currentRevision.id, first.prompt, "durable_pair_lane_one_001"),
+      lane(2, secondRevision.workflow.currentRevision.id, second.prompt, "durable_pair_lane_two_002"),
+    ];
+    await env.DB.prepare(`create trigger fail_durable_pair_lane_two before insert on creative_jobs
+      when new.idempotency_key = 'durable_pair_lane_two_002'
+      begin select raise(abort, 'simulated_transient_lane_two'); end`).run();
+    const submitted = await routeCreativeStudioApi(request("/api/creative-studio/jobs/batches", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "creative-studio-job-batch/1.0", batchId, jobs }),
+    }), local);
+    expect(submitted.status).toBe(202);
+    expect(await result(submitted)).toMatchObject({
+      batch: { batchId, status: "waiting", completedLanes: 1, laneCount: 2 },
+      jobs: [expect.objectContaining({ settingsStamp: expect.objectContaining({ outputBatch: expect.objectContaining({ index: 1 }) }) })],
+    });
+    await env.DB.prepare("drop trigger fail_durable_pair_lane_two").run();
+    await env.DB.prepare("update creative_generation_batches set next_attempt_at = ? where id = ?").bind("2000-01-01T00:00:00.000Z", batchId).run();
+    await env.DB.prepare("update creative_jobs set status = 'completed', updated_at = ? where idempotency_key = ?")
+      .bind(new Date().toISOString(), "durable_pair_lane_one_001").run();
+    const enrollment = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Durable pair runner" }),
+    }), local)) as { token: string };
+    const claimed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ version: "1.16.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, comfyVersion: "0.33.0", device: "RTX 3090", activeJobId: null, error: null, modelTrainingProviders: [] }),
+    }), local)) as { kind: string; bundle: { job: { id: string; settingsStamp: { outputBatch: { index: number } } } } };
+    expect(claimed).toMatchObject({ kind: "generation", bundle: { job: { settingsStamp: { outputBatch: { index: 2 } } } } });
+
+    const failed = await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${claimed.bundle.job.id}/fail`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ error: "simulated_renderer_failure" }),
+    }), local)) as { job: { id: string; status: string } };
+    expect(failed.job).toMatchObject({ id: claimed.bundle.job.id, status: "failed" });
+
+    const { outputBatch: _outputBatch, ...ordinaryLane } = jobs[0];
+    void _outputBatch;
+    for (let index = 0; index < 4; index += 1) {
+      const ordinary = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...ordinaryLane, idempotencyKey: `ordinary_video_queue_${index}_0001` }),
+      }), local);
+      expect(ordinary.status).toBe(202);
+    }
+    await env.DB.prepare("update creative_generation_batches set next_attempt_at = ? where id = ?")
+      .bind("2000-01-01T00:00:00.000Z", batchId).run();
+
+    const resumed = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ version: "1.16.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, comfyVersion: "0.33.0", device: "RTX 3090", activeJobId: null, error: null, modelTrainingProviders: [] }),
+    }), local)) as { kind: string; bundle: { job: { id: string; retryOfJobId: string | null; settingsStamp: { outputBatch: { index: number } } } } };
+    expect(resumed).toMatchObject({
+      kind: "generation",
+      bundle: { job: { retryOfJobId: claimed.bundle.job.id, settingsStamp: { outputBatch: { index: 2 } } } },
+    });
+    expect(resumed.bundle.job.id).not.toBe(claimed.bundle.job.id);
+
+    const counts = await env.DB.prepare(`select json_extract(settings_stamp_json, '$.outputBatch.index') as lane,
+      count(*) as count from creative_jobs where owner_id = ?
+      and json_extract(settings_stamp_json, '$.outputBatch.batchId') = ?
+      group by json_extract(settings_stamp_json, '$.outputBatch.index') order by lane`)
+      .bind(ownerId, batchId).all<{ lane: number; count: number }>();
+    expect(counts.results).toEqual([{ lane: 1, count: 1 }, { lane: 2, count: 2 }]);
+    const ordinaryQueued = await env.DB.prepare(`select count(*) as count from creative_jobs
+      where owner_id = ? and idempotency_key like 'ordinary_video_queue_%' and status = 'queued'`)
+      .bind(ownerId).first<{ count: number }>();
+    expect(Number(ordinaryQueued?.count)).toBe(4);
+
+    const cancelled = await result(await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${resumed.bundle.job.id}/cancel`, {
+      method: "POST",
+    }), local)) as { job: { status: string } };
+    expect(cancelled.job.status).toBe("cancelled");
+    const cancelledBatch = await env.DB.prepare("select status from creative_generation_batches where id = ? and owner_id = ?")
+      .bind(batchId, ownerId).first<{ status: string }>();
+    expect(cancelledBatch?.status).toBe("cancelled");
+  });
+
+  it("exposes a terminal batch lane and correction guidance data in the snapshot", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Failed durable set");
+    const dna = await createLocalDna(env, ownerId, { projectId: project.id, name: "Failure DNA", directive: "Precise upright motion.", targetModality: "image" });
+    const local = workerEnv("development");
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5 Text to Video", inputMode: "text-to-video" });
+    const compiled = compileVideoPromptWithSpeech("Beat one begins; beat two changes the room; beat three resolves upright.", undefined, profile);
+    const graph = JSON.stringify({
+      "1": { class_type: "PrimitiveStringMultiline", inputs: { value: compiled.prompt }, _meta: { title: "Positive Prompt" } },
+      "2": { class_type: "LTXVideo", inputs: { prompt: ["1", 0], seed: 44 } },
+      "3": { class_type: "PrimitiveInt", inputs: { value: 5 }, _meta: { title: "Video Duration" } },
+      "4": { class_type: "PrimitiveFloat", inputs: { value: 0.2 }, _meta: { title: "Megapixels" } },
+      "5": { class_type: "SaveVideo", inputs: { video: ["2", 0] } },
+    });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-cs-project-id": project.id, "x-cs-file-name": "failed-set.json", "x-cs-file-size": String(new TextEncoder().encode(graph).byteLength), "x-cs-workflow-name": "LTX 2.5 Text to Video" },
+      body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
+    const batchId = "output_batch_terminal_set_12345678";
+    const job = (index: 1 | 2, revisionId: string, key: string) => ({
+      projectId: project.id, dnaArtifactId: dna.artifactId, modality: "video", idempotencyKey: key,
+      videoPerformanceMode: "fast-default", videoSpeech: compiled.speech,
+      workflow: { workflowId: imported.workflow.id, revisionId, inputBindings: {}, expectedPrompt: compiled.prompt },
+      outputBatch: { schemaVersion: "creative-studio-output-batch/1.0", batchId, index, count: 2 },
+    });
+    const submitted = await routeCreativeStudioApi(request("/api/creative-studio/jobs/batches", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "creative-studio-job-batch/1.0", batchId, jobs: [
+        job(1, imported.workflow.currentRevision.id, "terminal_set_lane_one_001"),
+        job(2, "workflowrev_missing_terminal", "terminal_set_lane_two_002"),
+      ] }),
+    }), local);
+    expect(submitted.status).toBe(409);
+    const snapshot = await result(await routeCreativeStudioApi(request("/api/creative-studio/snapshot"), local)) as {
+      snapshot: { generationBatches: Array<Record<string, unknown>> };
+    };
+    expect(snapshot.snapshot.generationBatches).toContainEqual(expect.objectContaining({
+      batchId,
+      projectId: project.id,
+      status: "failed",
+      completedLanes: 1,
+      laneCount: 2,
+      failedLane: 2,
+      failureKind: "permanent",
+      error: "workflow_revision_not_found",
+    }));
+  });
+
+  it("repairs a copied LTX positive beyond the first 100 revisions after the current positive changes", async () => {
     const ownerId = "development-angelo";
     const project = await testProject(ownerId, "LTX prompt safety repair");
     const dna = await createLocalDna(env, ownerId, {
@@ -1622,19 +1809,76 @@ describe("Creative Studio Worker API", () => {
       body: raw,
     }), local)) as { workflow: { id: string; currentRevision: { id: string } } };
 
+    const lateHistoricalPositive = compileVideoPromptWithSpeech(
+      "The figure catches a violet ribbon of light, follows it across the roof, then releases it above the upright skyline.",
+      undefined,
+      profile,
+    );
+    const historyStatements: D1PreparedStatement[] = [];
+    let historyParentId = imported.workflow.currentRevision.id;
+    let lateHistoricalRevisionId = "";
+    for (let version = 2; version <= 102; version += 1) {
+      const historicalGraph = structuredClone(graph);
+      historicalGraph["398:376"].inputs.value = version === 102
+        ? lateHistoricalPositive.prompt
+        : `${compiled.prompt} Historical motion study ${version}.`;
+      const historicalInspection = inspectWorkflowGraph(historicalGraph);
+      const historicalRevisionId = `workflowrev_prompt_history_${String(version).padStart(3, "0")}`;
+      historyStatements.push(env.DB.prepare(`insert into creative_workflow_revisions (
+        id, owner_id, workflow_id, version, parent_revision_id, format, content_hash, graph_json,
+        node_count, parameters_json, models_json, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          historicalRevisionId,
+          ownerId,
+          imported.workflow.id,
+          version,
+          historyParentId,
+          historicalInspection.format,
+          `prompt-history-${version}`,
+          JSON.stringify(historicalGraph),
+          historicalInspection.nodeCount,
+          JSON.stringify(historicalInspection.parameters),
+          JSON.stringify(historicalInspection.models),
+          new Date(Date.parse("2026-08-29T12:00:00.000Z") + version * 1_000).toISOString(),
+        ));
+      historyParentId = historicalRevisionId;
+      lateHistoricalRevisionId = historicalRevisionId;
+    }
+    // Keep batches comfortably below platform statement limits while creating
+    // enough immutable history to regress the former first-100 scan.
+    await env.DB.batch(historyStatements.slice(0, 50));
+    await env.DB.batch(historyStatements.slice(50, 100));
+    await env.DB.batch(historyStatements.slice(100));
+
     const contaminatedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        baseRevisionId: imported.workflow.currentRevision.id,
+        baseRevisionId: lateHistoricalRevisionId,
         values: {
-          "398:376::value": compiled.prompt,
-          "398:373::text": compiled.prompt,
+          "398:376::value": lateHistoricalPositive.prompt,
+          "398:373::text": lateHistoricalPositive.prompt,
         },
       }),
     }), local);
     expect(contaminatedResponse.status).toBe(201);
     const contaminated = await result(contaminatedResponse) as { workflow: { currentRevision: { id: string } } };
+    const changed = compileVideoPromptWithSpeech(
+      "The figure opens both hands; violet reflections climb the walls before the camera settles on an upright wide view.",
+      undefined,
+      profile,
+    );
+    const changedResponse = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevisionId: contaminated.workflow.currentRevision.id,
+        values: { "398:376::value": changed.prompt },
+      }),
+    }), local);
+    expect(changedResponse.status).toBe(201);
+    const changedRevision = await result(changedResponse) as { workflow: { currentRevision: { id: string } } };
 
     const createdResponse = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
@@ -1648,19 +1892,19 @@ describe("Creative Studio Worker API", () => {
         idempotencyKey: "ltx_negative_prompt_repair_001",
         workflow: {
           workflowId: imported.workflow.id,
-          revisionId: contaminated.workflow.currentRevision.id,
+          revisionId: changedRevision.workflow.currentRevision.id,
           inputBindings: { "395::image": uploaded.asset.id },
-          expectedPrompt: compiled.prompt,
+          expectedPrompt: changed.prompt,
         },
-        videoSpeech: compiled.speech,
+        videoSpeech: changed.speech,
       }),
     }), local);
     expect(createdResponse.status).toBe(202);
     const created = await result(createdResponse) as {
       job: { settingsStamp: { workflow: { revisionId: string }; parameters: Record<string, unknown> } };
     };
-    expect(created.job.settingsStamp.workflow.revisionId).not.toBe(contaminated.workflow.currentRevision.id);
-    expect(created.job.settingsStamp.parameters["398:376::value"]).toBe(compiled.prompt);
+    expect(created.job.settingsStamp.workflow.revisionId).not.toBe(changedRevision.workflow.currentRevision.id);
+    expect(created.job.settingsStamp.parameters["398:376::value"]).toBe(changed.prompt);
     expect(created.job.settingsStamp.parameters["398:373::text"]).toBe(originalNegative);
 
     const exported = await routeCreativeStudioApi(request(
@@ -1668,14 +1912,14 @@ describe("Creative Studio Worker API", () => {
     ), local);
     expect(exported.status).toBe(200);
     expect(await exported.json()).toMatchObject({
-      "398:376": { inputs: { value: compiled.prompt } },
+      "398:376": { inputs: { value: changed.prompt } },
       "398:373": { inputs: { text: originalNegative } },
     });
     const listed = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows"), local)) as {
       workflows: Array<{ id: string; currentRevision: { id: string } }>;
     };
     expect(listed.workflows.find((workflow) => workflow.id === imported.workflow.id)?.currentRevision.id)
-      .toBe(contaminated.workflow.currentRevision.id);
+      .toBe(changedRevision.workflow.currentRevision.id);
   });
 
   it("persists reusable generation recipes with exact workflow settings and observed job evidence", async () => {

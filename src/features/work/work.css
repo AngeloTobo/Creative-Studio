@@ -46,6 +46,23 @@
 .work-runner-chip.offline i { background: var(--amber); }
 .work-create { min-height: 34px; padding: 0 12px; }
 
+.work-batch-failures { display: grid; gap: 7px; }
+.work-batch-failure {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-color: color-mix(in srgb, var(--amber) 42%, var(--border-soft));
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+.work-batch-failure > svg { color: var(--amber); }
+.work-batch-failure > div { min-width: 0; }
+.work-batch-failure strong { display: block; font-size: 11px; }
+.work-batch-failure p { margin-top: 2px; overflow: hidden; color: var(--text-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.work-batch-failure small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 8px; }
+.work-batch-failure .btn { min-height: 32px; padding: 0 10px; font-size: 9px; }
+
 .work-segments {
   position: sticky;
   top: 6px;
@@ -136,6 +153,8 @@
   .work-runner-chip { max-width: 112px; overflow: hidden; padding: 0 8px; text-overflow: ellipsis; white-space: nowrap; }
   .work-create { width: 36px; padding: 0; }
   .work-create span { display: none; }
+  .work-batch-failure { grid-template-columns: auto minmax(0, 1fr); padding: 9px; }
+  .work-batch-failure .btn { grid-column: 2; justify-self: start; }
   .work-segments { top: 2px; gap: 2px; padding: 3px; border-radius: 12px; }
   .work-segments button { grid-template-columns: auto minmax(0, 1fr); gap: 5px; min-height: 39px; padding: 0 7px; font-size: 8px; }
   .work-segments button strong { position: absolute; overflow: hidden; width: 1px; height: 1px; clip: rect(0 0 0 0); white-space: nowrap; }

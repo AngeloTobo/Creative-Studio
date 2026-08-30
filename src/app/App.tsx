@@ -12,6 +12,7 @@ import type { ProductionCockpitAction } from "../../shared/contracts";
 import type { VideoCreateEntryMode } from "../features/generation/createEntry";
 import type { CreateIntent } from "../features/generation/quickCreate";
 import { MorningReviewSheet, OvernightSetupSheet } from "../features/overnight";
+import type { StoryRecommendationHandoff } from "../features/stories/StoryBankRail";
 
 const VIEWS = new Set<StudioView>(["portal", "dna", "work", "studio", "cockpit", "media", "library", "gallery", "projects", "flows", "queue", "runtime", "settings", "system"]);
 
@@ -42,6 +43,7 @@ export function App() {
   const [createIntent, setCreateIntent] = useState<CreateIntent | undefined>();
   const [createAutoStart, setCreateAutoStart] = useState(false);
   const [videoCreateEntryMode, setVideoCreateEntryMode] = useState<VideoCreateEntryMode>("standard");
+  const [storyRecommendation, setStoryRecommendation] = useState<StoryRecommendationHandoff | null>(null);
   const [trainingSourceIds, setTrainingSourceIds] = useState<string[]>([]);
   const [trainingPath, setTrainingPath] = useState<"analyze" | "model">("analyze");
   const [overnightOpen, setOvernightOpen] = useState(false);
@@ -56,6 +58,7 @@ export function App() {
       setCreateIntent(undefined);
       setCreateAutoStart(false);
       setVideoCreateEntryMode("standard");
+      setStoryRecommendation(null);
       setTrainingSourceIds([]);
       setTrainingPath("analyze");
       setView(hashView());
@@ -75,6 +78,7 @@ export function App() {
     setCreateIntent(undefined);
     setCreateAutoStart(false);
     setVideoCreateEntryMode("standard");
+    setStoryRecommendation(null);
     setTrainingSourceIds([]);
     setTrainingPath("analyze");
     setView(next);
@@ -90,6 +94,7 @@ export function App() {
     setCreateIntent(undefined);
     setCreateAutoStart(false);
     setVideoCreateEntryMode("standard");
+    setStoryRecommendation(null);
     setTrainingSourceIds([]);
     setTrainingPath("analyze");
     setView("dna");
@@ -105,6 +110,7 @@ export function App() {
     setCreateIntent(undefined);
     setCreateAutoStart(false);
     setVideoCreateEntryMode("standard");
+    setStoryRecommendation(null);
     setTrainingSourceIds([]);
     setTrainingPath("analyze");
     setView("dna");
@@ -112,7 +118,7 @@ export function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const openHomeCreate = (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart = false, videoEntryMode: VideoCreateEntryMode = "standard") => {
+  const openHomeCreate = (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart = false, videoEntryMode: VideoCreateEntryMode = "standard", recommendation: StoryRecommendationHandoff | null = null) => {
     setCockpitTarget(null);
     setVideoExtensionArtifactId("");
     setEvolutionSourceId("");
@@ -120,6 +126,7 @@ export function App() {
     setCreateIntent(intent);
     setCreateAutoStart(autoStart);
     setVideoCreateEntryMode(intent === "video" ? videoEntryMode : "standard");
+    setStoryRecommendation(recommendation);
     setTrainingSourceIds([]);
     setTrainingPath("analyze");
     setView("dna");
@@ -135,6 +142,7 @@ export function App() {
     setCreateIntent(undefined);
     setCreateAutoStart(false);
     setVideoCreateEntryMode("standard");
+    setStoryRecommendation(null);
     setTrainingSourceIds([sourceId]);
     setTrainingPath(path);
     setView("dna");
@@ -150,6 +158,7 @@ export function App() {
     setCreateIntent(undefined);
     setCreateAutoStart(false);
     setVideoCreateEntryMode("standard");
+    setStoryRecommendation(null);
     setTrainingSourceIds([]);
     setTrainingPath("analyze");
     setCockpitTarget(action);
@@ -176,8 +185,8 @@ export function App() {
     />;
     if (!activeProjectId && view !== "work" && view !== "cockpit" && view !== "queue") return studio;
     switch (view) {
-      case "portal": return <PortalView navigate={navigate} onCreate={openHomeCreate} onTrain={openHomeTraining} onOvernight={() => setOvernightOpen(true)} onOvernightReview={setOvernightReviewSessionId} />;
-      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${createSourceId}:${createIntent ?? ""}:${createAutoStart}:${videoCreateEntryMode}:${trainingSourceIds.join(",")}:${trainingPath}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} initialSourceId={createSourceId || undefined} initialCreateIntent={createIntent} initialAutoStart={createAutoStart} initialVideoCreateMode={videoCreateEntryMode} initialTrainingAssetIds={trainingSourceIds} initialTrainingPath={trainingPath} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
+      case "portal": return <PortalView navigate={navigate} onCreate={openHomeCreate} onUseStoryRecommendation={(handoff) => openHomeCreate(handoff.recommendation.modality, handoff.recommendation.sourceId ?? undefined, false, "standard", handoff)} onTrain={openHomeTraining} onOvernight={() => setOvernightOpen(true)} onOvernightReview={setOvernightReviewSessionId} />;
+      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${createSourceId}:${createIntent ?? ""}:${createAutoStart}:${videoCreateEntryMode}:${storyRecommendation?.recommendation.id ?? ""}:${storyRecommendation?.recommendation.version ?? ""}:${trainingSourceIds.join(",")}:${trainingPath}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} initialSourceId={createSourceId || undefined} initialCreateIntent={createIntent} initialAutoStart={createAutoStart} initialVideoCreateMode={videoCreateEntryMode} initialStoryRecommendation={storyRecommendation ?? undefined} initialTrainingAssetIds={trainingSourceIds} initialTrainingPath={trainingPath} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "work":
       case "cockpit":
       case "queue":

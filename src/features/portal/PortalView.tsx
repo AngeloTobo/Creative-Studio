@@ -15,6 +15,7 @@ import type { VideoCreateEntryMode } from "../generation/createEntry";
 import type { CreateIntent } from "../generation/quickCreate";
 import { useCreativeSessions } from "../sessions";
 import { LoveLoopHomeCard } from "../loveLoop";
+import { StoryBankRail, type StoryRecommendationHandoff } from "../stories/StoryBankRail";
 
 const DIMENSION_LABELS: Record<CreativeDnaDimensionKey, string> = {
   energy: "Energy",
@@ -104,17 +105,19 @@ function SourcePreview({ asset }: { asset: MediaAsset }) {
 export function PortalView({
   navigate,
   onCreate,
+  onUseStoryRecommendation,
   onTrain,
   onOvernight,
   onOvernightReview,
 }: {
   navigate: (view: StudioView) => void;
   onCreate: (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart?: boolean, videoEntryMode?: VideoCreateEntryMode) => void;
+  onUseStoryRecommendation: (handoff: StoryRecommendationHandoff) => void;
   onTrain: (sourceId: string) => void;
   onOvernight: () => void;
   onOvernightReview: (sessionId: string) => void;
 }) {
-  const { snapshot, activeProjectId, activeDna, uploadMedia, busy, error } = useStudio();
+  const { snapshot, activeProjectId, activeDna, uploadMedia, refreshStoryBank, updateStoryThread, busy, error } = useStudio();
   const { latest: latestSession } = useCreativeSessions(activeProjectId);
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedSourceId, setSelectedSourceId] = useState("");
@@ -129,6 +132,24 @@ export function PortalView({
   const recentArtifacts = (snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && !artifact.settingsStamp.overnight) ?? [])
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
     .slice(0, 4);
+  const activeStories = (snapshot?.storyThreads ?? []).filter((story) => story.projectId === activeProjectId
+    && story.status !== "archived"
+    && story.status !== "parked"
+    && story.recommendations.some((recommendation) => recommendation.status === "ready" || recommendation.status === "used"));
+  const parkedStoryCount = (snapshot?.storyThreads ?? []).filter((story) => story.projectId === activeProjectId
+    && story.status === "parked"
+    && story.recommendations.some((recommendation) => recommendation.status === "ready" || recommendation.status === "used")).length;
+  const latestStoryRefresh = [...(snapshot?.storyBankRefreshes ?? [])]
+    .filter((refresh) => refresh.projectId === activeProjectId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+  const storyRefreshPending = latestStoryRefresh?.status === "waiting-for-runner" || latestStoryRefresh?.status === "running";
+  const storyBankLabel = storyRefreshPending
+    ? latestStoryRefresh?.status === "running" ? "Writing new stories locally" : "New stories are queued"
+    : latestStoryRefresh?.status === "failed"
+      ? "Story planning needs a retry"
+      : activeStories.length ? `${activeStories.length} evolving ${activeStories.length === 1 ? "story" : "stories"}`
+        : parkedStoryCount ? `${parkedStoryCount} ${parkedStoryCount === 1 ? "idea" : "ideas"} parked for later`
+          : "Ideas grounded in your work";
 
   const profile: DnaProfile | null = analysisMatch ? {
     kind: "source",
@@ -231,8 +252,10 @@ export function PortalView({
 
     {(localError || error) ? <div className="inline-error" role="alert">{localError || error}</div> : null}
 
-    <section className="home-continue glass" aria-label="Continue working">
-      <header><span><small>CONTINUE</small><strong>{activeJobs.length ? `${activeJobs.length} ${activeJobs.length === 1 ? "run" : "runs"} active` : latestSession ? `Resume ${latestSession.intentTier} ${latestSession.mediaKind}` : recentArtifacts.length ? "Newest work" : "Ready to make"}</strong></span><button className="link-btn" onClick={() => navigate("work")}>Open Work <Icon name="arrow" size={13} /></button></header>
+    <section className="home-continue glass" aria-label="Story Bank and current work">
+      <header><span><small>STORY BANK</small><strong>{storyBankLabel}</strong></span><span className="home-story-actions"><button className={`link-btn home-story-refresh${latestStoryRefresh?.status === "failed" ? " failed" : ""}`} disabled={busy || development || !activeDna || storyRefreshPending} title={development ? "Story planning needs the real Creative Studio Worker." : !activeDna ? "Build or select CreativeDNA first." : latestStoryRefresh?.error ?? "Prepare four new story directions locally."} onClick={() => void refreshStoryBank()}><Icon name={latestStoryRefresh?.status === "failed" ? "rerun" : storyRefreshPending ? "history" : "star"} size={12} /> {storyRefreshPending ? "Preparing…" : latestStoryRefresh?.status === "failed" ? "Retry" : "New ideas"}</button><button className="link-btn" onClick={() => navigate("work")}>Open Work <Icon name="arrow" size={13} /></button></span></header>
+      <div className="home-story-shelf"><StoryBankRail threads={snapshot?.storyThreads ?? []} projectId={activeProjectId} development={development} hasCreativeEvidence={Boolean(activeDna && (sourceAssets.length || recentArtifacts.length))} refreshStatus={latestStoryRefresh?.status} onUse={onUseStoryRecommendation} onUpdate={(story, input) => updateStoryThread(story.id, input)} busy={busy} /></div>
+      <div className="home-now-label"><small>NOW</small><strong>{activeJobs.length ? `${activeJobs.length} ${activeJobs.length === 1 ? "run" : "runs"} active` : latestSession ? `Resume ${latestSession.intentTier} ${latestSession.mediaKind}` : recentArtifacts.length ? "Newest work" : "Ready to make"}</strong></div>
       <div className="home-continue-rail">
         {activeJobs.slice(0, 3).map((job) => {
           const run = productionRunsById.get(job.id);

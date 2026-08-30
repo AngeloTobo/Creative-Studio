@@ -112,13 +112,28 @@ describe("quick Create routing", () => {
     expect(recovered.has(h3Fast)).toBe(false);
   });
 
-  it("uses retained source evidence for a truthful animation brief without an imported demo prompt", () => {
+  it("uses retained source evidence to invent a concrete three-beat animation instead of captioning it", () => {
     const prompt = quickAnimationDirection("A hand-built ceramic figure stands under a warm side light.");
     expect(prompt).toContain("A hand-built ceramic figure stands under a warm side light.");
     expect(prompt).toContain("exact first frame");
-    expect(prompt).toContain("No text, captions, logos, black frames");
+    expect(prompt).toContain("Beat 1:");
+    expect(prompt).toContain("Beat 2:");
+    expect(prompt).toContain("Beat 3:");
+    expect(prompt).toContain("central figure turns toward the strongest visible light");
+    expect(prompt).toContain("no sideways roll");
+    expect(prompt).toContain("no dialogue, narration, lyrics, text, captions, logos, black frames");
     expect(prompt).not.toContain("cybernetic");
-    expect(quickAnimationDirection(null)).toContain("Preserve every visible subject");
+    expect(quickAnimationDirection(null)).toContain("focal subject turns or tilts");
+  });
+
+  it("chooses motion vocabulary grounded in biological and architectural source descriptions", () => {
+    const embryo = quickAnimationDirection("A translucent embryo floats inside a softly lit membrane with suspended particles.");
+    expect(embryo).toContain("fine pulse of light travels across the central organic form");
+    expect(embryo).toContain("surrounding fluid and suspended particles curl into a slow spiral");
+
+    const city = quickAnimationDirection("A rain-dark city rooftop overlooks towers and traffic below.");
+    expect(city).toContain("one bank of practical light ignites across the visible structure");
+    expect(city).toContain("newly revealed architectural relationship");
   });
 
   it("automatically binds one compatible retained source without overwriting explicit inputs", () => {

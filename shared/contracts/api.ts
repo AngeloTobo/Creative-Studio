@@ -68,6 +68,17 @@ import type {
   OvernightSession,
 } from "./overnight";
 import type { ConfigureLoveLoopRequest, LoveLoop } from "./loveLoop";
+import type {
+  CompleteStoryPlanRequest,
+  FailStoryPlanRequest,
+  RefreshStoryBankRequest,
+  StoryBankRefresh,
+  StoryPlanHeartbeatRequest,
+  StoryPlannerBundle,
+  StoryRecommendationSelection,
+  StoryThread,
+  UpdateStoryThreadRequest,
+} from "./storyRecommendations";
 import type { VideoDurationSeconds } from "./videoDuration";
 import type { SaveWorkflowRevisionRequest, WorkflowDefinition } from "./workflows";
 import type {
@@ -107,6 +118,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   worlds: `${CREATIVE_STUDIO_API_PREFIX}/worlds`,
   dna: `${CREATIVE_STUDIO_API_PREFIX}/dna`,
   jobs: `${CREATIVE_STUDIO_API_PREFIX}/jobs`,
+  jobBatches: `${CREATIVE_STUDIO_API_PREFIX}/jobs/batches`,
   promptEnhancements: `${CREATIVE_STUDIO_API_PREFIX}/prompt-enhancements`,
   videoScripts: `${CREATIVE_STUDIO_API_PREFIX}/video-scripts`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
@@ -120,6 +132,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   productionCockpit: `${CREATIVE_STUDIO_API_PREFIX}/production-cockpit`,
   overnight: `${CREATIVE_STUDIO_API_PREFIX}/overnight`,
   loveLoop: `${CREATIVE_STUDIO_API_PREFIX}/love-loop`,
+  storyBank: `${CREATIVE_STUDIO_API_PREFIX}/story-bank`,
   runners: `${CREATIVE_STUDIO_API_PREFIX}/runners`,
   runner: `${CREATIVE_STUDIO_API_PREFIX}/runner`,
   capabilities: `${CREATIVE_STUDIO_API_PREFIX}/capabilities`,
@@ -131,7 +144,7 @@ export type CreativeStudioRoute =
   | "world-entity-create" | "world-entity-update" | "world-entity-retire"
   | "world-rule-create" | "world-rule-update" | "world-rule-retire"
   | "world-reference-create" | "world-reference-update" | "world-reference-retire" | "world-reference-promote" | "world-artifact-promote"
-  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-retry" | "job-cancel" | "prompt-enhancement-create" | "prompt-enhancement-get" | "video-script-create" | "video-script-get" | "video-script-update"
+  | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-batch-create" | "job-retry" | "job-cancel" | "prompt-enhancement-create" | "prompt-enhancement-get" | "video-script-create" | "video-script-get" | "video-script-update"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
@@ -139,12 +152,14 @@ export type CreativeStudioRoute =
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
   | "overnight-list" | "overnight-create" | "overnight-pause" | "overnight-resume" | "overnight-cancel"
   | "love-loop-get" | "love-loop-configure" | "love-loop-pause" | "love-loop-resume" | "love-loop-disable"
+  | "story-bank-list" | "story-bank-refresh" | "story-thread-update"
   | "model-training-jobs-list" | "model-training-job-create" | "model-training-job-cancel" | "model-training-dataset-review" | "model-adapter-review"
   | "runners-list" | "runner-enroll" | "runner-revoke"
   | "runner-work-claim" | "runner-heartbeat" | "runner-job-claim" | "runner-job-heartbeat" | "runner-job-complete" | "runner-job-thumbnail" | "runner-job-fail" | "runner-media-content"
   | "runner-prompt-enhancement-heartbeat" | "runner-prompt-enhancement-complete" | "runner-prompt-enhancement-fail"
   | "runner-video-script-heartbeat" | "runner-video-script-complete" | "runner-video-script-fail"
   | "runner-overnight-heartbeat" | "runner-overnight-complete" | "runner-overnight-fail"
+  | "runner-story-plan-heartbeat" | "runner-story-plan-complete" | "runner-story-plan-fail"
   | "runner-training-claim" | "runner-training-heartbeat" | "runner-training-complete" | "runner-training-fail"
   | "runner-model-training-dataset" | "runner-model-training-heartbeat" | "runner-model-training-complete" | "runner-model-training-fail";
 
@@ -175,6 +190,7 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/dna") return "dna-create";
   if (method === "GET" && pathname === "/api/creative-studio/jobs") return "jobs-list";
   if (method === "POST" && pathname === "/api/creative-studio/jobs") return "jobs-create";
+  if (method === "POST" && pathname === "/api/creative-studio/jobs/batches") return "job-batch-create";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/retry$/i.test(pathname)) return "job-retry";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/cancel$/i.test(pathname)) return "job-cancel";
   if (method === "POST" && /^\/api\/creative-studio\/jobs\/[a-z0-9_]+\/reuse$/i.test(pathname)) return "job-reuse";
@@ -221,6 +237,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && pathname === "/api/creative-studio/love-loop/pause") return "love-loop-pause";
   if (method === "POST" && pathname === "/api/creative-studio/love-loop/resume") return "love-loop-resume";
   if (method === "POST" && pathname === "/api/creative-studio/love-loop/disable") return "love-loop-disable";
+  if (method === "GET" && pathname === "/api/creative-studio/story-bank") return "story-bank-list";
+  if (method === "POST" && pathname === "/api/creative-studio/story-bank/refresh") return "story-bank-refresh";
+  if (method === "PATCH" && /^\/api\/creative-studio\/story-bank\/stories\/[a-z0-9_]+$/i.test(pathname)) return "story-thread-update";
   if (method === "GET" && pathname === "/api/creative-studio/runners") return "runners-list";
   if (method === "POST" && pathname === "/api/creative-studio/runners/enroll") return "runner-enroll";
   if (method === "POST" && /^\/api\/creative-studio\/runners\/[a-z0-9_]+\/revoke$/i.test(pathname)) return "runner-revoke";
@@ -241,6 +260,9 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "POST" && /^\/api\/creative-studio\/runner\/overnight\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-overnight-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/overnight\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-overnight-complete";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/overnight\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-overnight-fail";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/story-plans\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-story-plan-heartbeat";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/story-plans\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-story-plan-complete";
+  if (method === "POST" && /^\/api\/creative-studio\/runner\/story-plans\/[a-z0-9_]+\/fail$/i.test(pathname)) return "runner-story-plan-fail";
   if (method === "POST" && pathname === "/api/creative-studio/runner/training/claim") return "runner-training-claim";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/heartbeat$/i.test(pathname)) return "runner-training-heartbeat";
   if (method === "POST" && /^\/api\/creative-studio\/runner\/training\/[a-z0-9_]+\/complete$/i.test(pathname)) return "runner-training-complete";
@@ -264,6 +286,7 @@ export type StudioSnapshot = {
   canonPromotions?: CanonPromotion[];
   dnaArtifacts: CreativeDnaArtifact[];
   jobs: Job[];
+  generationBatches: GenerationSubmissionBatch[];
   promptEnhancements: VideoPromptEnhancement[];
   videoScriptDrafts?: VideoScriptDraft[];
   artifacts: Artifact[];
@@ -272,6 +295,8 @@ export type StudioSnapshot = {
   recipes: GenerationRecipe[];
   overnightSessions: OvernightSession[];
   loveLoop: LoveLoop | null;
+  storyThreads: StoryThread[];
+  storyBankRefreshes: StoryBankRefresh[];
   trainingExamples: CreativeTrainingExample[];
   trainingJobs: CreativeDnaTrainingJob[];
   trainingReviews: CreativeDnaTrainingReview[];
@@ -338,10 +363,42 @@ export type SubmitJobRequest = {
   promptReference?: GenerationPromptReferenceSelection;
   continuity?: GenerationContinuitySelection;
   promptEnhancement?: { requestId: string; basePrompt: string; appliedPrompt: string };
+  storyRecommendation?: StoryRecommendationSelection;
 };
 
 export type SubmitJobResponse = {
   job: Job;
+};
+
+export type GenerationSubmissionBatch = {
+  schemaVersion: "creative-studio-job-batch-state/1.0";
+  batchId: string;
+  projectId: string;
+  status: "waiting" | "running" | "completed" | "failed" | "cancelled";
+  completedLanes: number;
+  laneCount: number;
+  failedLane: number | null;
+  failureKind: "permanent" | "retry-exhausted" | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
+export type SubmitJobBatchRequest = {
+  schemaVersion: "creative-studio-job-batch/1.0";
+  batchId: string;
+  jobs: SubmitJobRequest[];
+};
+
+export type SubmitJobBatchResponse = {
+  batch: {
+    batchId: string;
+    status: "waiting" | "running" | "completed";
+    completedLanes: number;
+    laneCount: number;
+  };
+  jobs: Job[];
 };
 
 export type CreatePromptEnhancementRequest = CreateVideoPromptEnhancementRequest;
@@ -437,6 +494,10 @@ export type RecipeEvidenceResponse = { recipe: GenerationRecipe; evidence: Recip
 export type OvernightSessionsResponse = { overnightSessions: OvernightSession[] };
 export type OvernightSessionResponse = { overnightSession: OvernightSession };
 export type LoveLoopResponse = { loveLoop: LoveLoop | null };
+export type StoryBankResponse = { storyThreads: StoryThread[]; storyBankRefreshes: StoryBankRefresh[] };
+export type StoryBankRefreshResponse = { storyBankRefresh: StoryBankRefresh };
+export type StoryThreadResponse = { storyThread: StoryThread };
+export type { RefreshStoryBankRequest, UpdateStoryThreadRequest };
 export type EnrollLocalRunnerRequest = { name: string };
 export type EnrollLocalRunnerResponse = { runner: LocalRunner; token: string; apiBase: string };
 export type RevokeLocalRunnerResponse = { runner: LocalRunner };
@@ -473,6 +534,7 @@ export type RunnerJobBundle = {
 export type RunnerClaimJobResponse = { bundle: RunnerJobBundle | null };
 export type RunnerWorkClaimResponse =
   | { kind: "overnight-plan"; bundle: OvernightPlannerBundle }
+  | { kind: "story-plan"; bundle: StoryPlannerBundle }
   | { kind: "prompt-enhancement"; bundle: RunnerPromptEnhancementBundle }
   | { kind: "video-script"; bundle: RunnerVideoScriptDraftBundle }
   | { kind: "generation"; bundle: RunnerJobBundle }
@@ -491,6 +553,7 @@ export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
 export type { RunnerPromptEnhancementHeartbeatRequest, RunnerCompletePromptEnhancementRequest, RunnerFailPromptEnhancementRequest };
 export type { RunnerVideoScriptDraftHeartbeatRequest, RunnerCompleteVideoScriptDraftRequest, RunnerFailVideoScriptDraftRequest };
 export type { CreateVideoScriptDraftRequest, UpdateVideoScriptDraftRequest };
+export type { CompleteStoryPlanRequest, FailStoryPlanRequest, StoryPlanHeartbeatRequest };
 export type RunnerFailJobRequest = { error: string };
 export type RunnerTrainingClaimResponse = { bundle: CreativeDnaTrainingBundleResponse | null };
 export type RunnerTrainingHeartbeatRequest = { progress: number };

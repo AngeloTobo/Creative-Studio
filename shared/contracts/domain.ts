@@ -142,6 +142,7 @@ export type GenerationSettingsStamp = {
   continuity?: import("./worlds").GenerationContinuityStamp;
   overnight?: import("./overnight").OvernightGenerationStamp;
   loveLoop?: import("./loveLoop").LoveLoopGenerationStamp;
+  storyRecommendation?: import("./storyRecommendations").StoryRecommendationStamp;
 };
 
 export type GenerationPromptReferenceSelection = {
@@ -403,6 +404,7 @@ export type CapabilityKey =
   | "video-generation"
   | "prompt-enhancement"
   | "script-builder"
+  | "story-bank"
   | "afdfw-music-generation"
   | "afdfw-image-generation"
   | "local-runner"

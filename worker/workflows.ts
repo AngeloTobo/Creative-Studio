@@ -103,6 +103,24 @@ export async function listWorkflows(env: Env, ownerId: string): Promise<Workflow
   return Promise.all((result.results ?? []).map((row) => definitionFromRow(env, ownerId, row)));
 }
 
+export async function workflowsByIds(env: Env, ownerId: string, workflowIds: string[]): Promise<WorkflowDefinition[]> {
+  const ids = [...new Set(workflowIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const workflows = await env.DB.prepare(`select ${WORKFLOW_COLUMNS} from creative_workflows
+    where owner_id = ? and id in (select value from json_each(?)) order by updated_at desc, id desc`)
+    .bind(ownerId, JSON.stringify(ids)).all<WorkflowRow>();
+  const rows = workflows.results ?? [];
+  if (!rows.length) return [];
+  const revisions = await env.DB.prepare(`select ${REVISION_COLUMNS} from creative_workflow_revisions
+    where owner_id = ? and id in (select value from json_each(?))`)
+    .bind(ownerId, JSON.stringify(rows.map((row) => row.currentRevisionId))).all<RevisionRow>();
+  const revisionById = new Map((revisions.results ?? []).map((revision) => [revision.id, revision]));
+  return rows.flatMap((row) => {
+    const revision = revisionById.get(row.currentRevisionId);
+    return revision && revision.workflowId === row.id ? [{ ...row, currentRevision: parseRevision(revision) }] : [];
+  });
+}
+
 export async function importWorkflow(env: Env, request: Request, ownerId: string) {
   const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
   if (!contentType.includes("application/json")) throw new Error("unsupported_workflow_type");
@@ -278,16 +296,23 @@ export async function createAutomationWorkflowRevision(
   throw lastError;
 }
 
-const SAFE_NEGATIVE_PROMPT_FALLBACK = "low quality, blurry, distorted anatomy, duplicate subjects, text, captions, logos, watermarks, black frames";
+const SAFE_NEGATIVE_PROMPT_FALLBACK = "low quality, blurry, distorted anatomy, duplicate subjects, text, captions, subtitles, titles, logos, watermarks, black frames, frozen frames, abrupt cuts, rotated frames, sideways framing, camera roll";
 
 type PromptSafetyRepair = {
   parameterId: string;
   restoredFromRevisionId: string | null;
 };
 
+type PromptHistoryRow = Pick<RevisionRow, "id" | "graphJson">;
+
+function promptValue(value: unknown) {
+  return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
+}
+
 /**
- * Repairs the legacy positive-to-negative prompt copy defect by creating an
- * immutable execution revision. The earliest clean owner revision is the
+ * Repairs the legacy positive-to-negative prompt copy defect, including a
+ * negative copied from an older positive after the current positive changes,
+ * by creating an immutable execution revision. The earliest clean owner revision is the
  * authority for each negative prompt; the bounded fallback is used only when
  * no clean historical value exists. The owner's visible current revision is
  * deliberately left unchanged.
@@ -299,31 +324,67 @@ export async function promptSafeWorkflowExecutionPlan(
   revisionId: string,
 ) {
   const plan = await workflowExecutionPlan(env, ownerId, workflowId, revisionId);
-  const contamination = detectExactWorkflowPromptContamination(plan.graph);
-  if (!contamination.length) return { ...plan, promptSafetyRepairs: [] as PromptSafetyRepair[] };
-
-  const history = await env.DB.prepare(`select ${REVISION_COLUMNS} from creative_workflow_revisions
-    where workflow_id = ? and owner_id = ? order by version asc limit 100`)
-    .bind(workflowId, ownerId).all<RevisionRow>();
-  const historical = (history.results ?? []).flatMap((row) => {
+  // Prompt safety must cover the workflow's complete immutable history. A
+  // fixed recency cap can miss the positive value that contaminated a later
+  // negative prompt. The join keeps this scan owner/project/workflow scoped,
+  // and the existing (owner_id, workflow_id, version) index supplies the
+  // ordered revision walk without loading unrelated histories.
+  const history = await env.DB.prepare(`select revision.id, revision.graph_json as graphJson
+    from creative_workflow_revisions revision
+    inner join creative_workflows workflow
+      on workflow.id = revision.workflow_id and workflow.owner_id = revision.owner_id
+    where revision.workflow_id = ? and revision.owner_id = ? and workflow.project_id = ?
+    order by revision.version asc`)
+    .bind(workflowId, ownerId, plan.workflow.projectId).all<PromptHistoryRow>();
+  const inspectedHistory = (history.results ?? []).flatMap((row) => {
     try {
       const graph = JSON.parse(row.graphJson);
-      if (detectExactWorkflowPromptContamination(graph).length) return [];
-      return [{ row, parameters: inspectWorkflowGraph(graph).parameters }];
+      return [{ row, graph, parameters: inspectWorkflowGraph(graph).parameters }];
     } catch {
       return [];
     }
   });
+  const historicalPositiveValues = new Map<string, string>();
+  for (const revision of inspectedHistory) {
+    for (const parameter of revision.parameters) {
+      if (parameter.kind !== "text" || parameter.promptRole !== "positive") continue;
+      const value = promptValue(parameter.value);
+      if (value && !historicalPositiveValues.has(value)) historicalPositiveValues.set(value, parameter.id);
+    }
+  }
+  const exact = detectExactWorkflowPromptContamination(plan.graph);
+  const contamination = new Map(exact.map((issue) => [issue.negativeParameterId, issue]));
+  for (const parameter of plan.workflow.currentRevision.parameters) {
+    if (parameter.kind !== "text" || parameter.promptRole !== "negative") continue;
+    const value = promptValue(parameter.value);
+    const historicalPositiveParameterId = historicalPositiveValues.get(value);
+    if (!value || !historicalPositiveParameterId || contamination.has(parameter.id)) continue;
+    contamination.set(parameter.id, {
+      positiveParameterId: historicalPositiveParameterId,
+      negativeParameterId: parameter.id,
+      sharedValue: value,
+    });
+  }
+  if (!contamination.size) return { ...plan, promptSafetyRepairs: [] as PromptSafetyRepair[] };
+
+  // A revision is a restoration authority only when none of its negative text
+  // was ever used as a positive direction in this workflow. This catches the
+  // subtle v2-copy/v3-positive-change case that exact current equality misses.
+  const historical = inspectedHistory.filter(({ graph, parameters }) =>
+    !detectExactWorkflowPromptContamination(graph).length
+    && !parameters.some((parameter) => parameter.kind === "text"
+      && parameter.promptRole === "negative"
+      && historicalPositiveValues.has(promptValue(parameter.value))));
   const values: Record<string, string> = {};
   const repairs: PromptSafetyRepair[] = [];
-  for (const issue of contamination) {
+  for (const issue of contamination.values()) {
     const source = historical.find(({ parameters }) => parameters.some((parameter) =>
       parameter.id === issue.negativeParameterId
       && parameter.kind === "text"
       && parameter.promptRole === "negative"
       && typeof parameter.value === "string"
       && Boolean(parameter.value.trim())
-      && parameter.value !== issue.sharedValue));
+      && promptValue(parameter.value) !== promptValue(issue.sharedValue)));
     const restored = source?.parameters.find((parameter) => parameter.id === issue.negativeParameterId)?.value;
     values[issue.negativeParameterId] = typeof restored === "string" && restored.trim()
       ? restored
@@ -338,7 +399,13 @@ export async function promptSafeWorkflowExecutionPlan(
     values,
   });
   const repairedPlan = await workflowExecutionPlan(env, ownerId, workflowId, repaired.currentRevision.id);
-  if (detectExactWorkflowPromptContamination(repairedPlan.graph).length) throw new Error("workflow_prompt_safety_repair_failed");
+  const repairedParameters = repairedPlan.workflow.currentRevision.parameters;
+  if (detectExactWorkflowPromptContamination(repairedPlan.graph).length
+    || repairedParameters.some((parameter) => parameter.kind === "text"
+      && parameter.promptRole === "negative"
+      && historicalPositiveValues.has(promptValue(parameter.value)))) {
+    throw new Error("workflow_prompt_safety_repair_failed");
+  }
   return { ...repairedPlan, promptSafetyRepairs: repairs };
 }
 

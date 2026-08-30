@@ -219,6 +219,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("spinbutton", { name: "Seed" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /generate image · can be slow/i })).toBeVisible();
   await page.getByRole("button", { name: "Video", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Creation goal" })).toContainText("Two fast retained directions");
   await page.getByRole("button", { name: "Use Newest retained source upload" }).click();
   await page.locator(".quick-compose-model > summary").click();
   const videoDuration = page.getByRole("group", { name: "Video duration" });

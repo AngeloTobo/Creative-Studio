@@ -282,7 +282,7 @@ function videoDiscoveryPrompt(direction: string, dimensions: CreativeDnaDimensio
   const continuity = hasSource
     ? "Keep the source identity and opening frame recognizable, but let the staging and motion take the less expected path."
     : "Keep the central subject continuous, but let the staging and motion take the less expected path.";
-  return boundedNarrative(`${direction.trim()} ${motion} ${cadence} ${tension} ${camera} ${light} ${surface} ${continuity}`, 2_400);
+  return boundedNarrative(`${direction.trim()} ${motion} ${cadence} ${tension} ${camera} ${light} ${surface} ${continuity} Keep the horizon upright and the camera level; use no sideways framing or camera roll.`, 2_400);
 }
 
 function deriveVideoSeed(baseSeed: number, index: number) {
@@ -323,9 +323,9 @@ function leftFieldVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, h
   ], random);
   const camera = seededChoice([
     "Use a low orbit that crosses behind one foreground obstruction before returning at a radically different scale",
-    "Begin with a locked close view, then let the camera fall sideways into a wide architectural reveal without a cut",
+    "Begin with a locked close view, then pull straight back through a foreground threshold into a wide architectural reveal without a cut",
     "Track against the apparent motion so the subject and world briefly seem to travel in opposite directions",
-    "Let the frame rotate only after the spatial reversal is visible, ending in a clean, unfamiliar composition",
+    "Use a level lateral parallax move after the spatial reversal appears, ending in a clean, unfamiliar composition",
   ], random);
   const finish = dimensions.polish >= 60
     ? "Keep every transition physically legible, sharply timed, and materially precise."
@@ -333,7 +333,7 @@ function leftFieldVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, h
   const continuity = hasSource
     ? "Preserve the source subject, first-frame composition, and defining features even as the staging changes direction."
     : "Keep the central subject recognizable and continuous through the spatial change.";
-  return boundedNarrative(`${premise}. ${camera}. ${finish} ${continuity}`, 2_400);
+  return boundedNarrative(`${premise}. ${camera}. ${finish} ${continuity} Keep the horizon upright and the camera level; use no sideways framing or camera roll.`, 2_400);
 }
 
 function aweVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, hasSource: boolean) {
@@ -354,7 +354,7 @@ function aweVideoPrompt(dimensions: CreativeDnaDimensions, seed: number, hasSour
   const continuity = hasSource
     ? "The source identity and opening frame must remain unmistakable anchors throughout the transformation."
     : "The central subject must remain an unmistakable anchor throughout the transformation.";
-  return boundedNarrative(`${transformation}. ${movement}. ${finish} ${continuity}`, 2_400);
+  return boundedNarrative(`${transformation}. ${movement}. ${finish} ${continuity} Keep the horizon upright and the camera level; use no sideways framing or camera roll.`, 2_400);
 }
 
 /**

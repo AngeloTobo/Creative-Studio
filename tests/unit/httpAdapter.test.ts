@@ -15,6 +15,7 @@ const emptySnapshot: StudioSnapshot = {
   projects: [],
   dnaArtifacts: [],
   jobs: [],
+  generationBatches: [],
   promptEnhancements: [],
   videoScriptDrafts: [],
   artifacts: [],
@@ -63,6 +64,8 @@ const emptySnapshot: StudioSnapshot = {
   canonPromotions: [],
   overnightSessions: [],
   loveLoop: null,
+  storyThreads: [],
+  storyBankRefreshes: [],
   refreshedAt: now,
 };
 
@@ -84,6 +87,34 @@ describe("HTTP adapter request budget", () => {
 
     await expect(createHttpAdapter().load()).rejects.toThrow("cloudflare_free_tier_temporarily_limited");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits a multi-output set with one durable batch request", async () => {
+    const response = {
+      batch: { batchId: "output_batch_12345678", status: "waiting" as const, completedLanes: 1, laneCount: 2 },
+      jobs: [],
+    };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => (
+      Response.json({ ok: true, ...response }, { status: 202 })
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const jobs = [1, 2].map((index) => ({
+      projectId: "project_1",
+      dnaArtifactId: "dna_1",
+      modality: "video" as const,
+      idempotencyKey: `video_output_1234567_${index}`,
+      workflow: { workflowId: "workflow_1", revisionId: `revision_${index}`, inputBindings: {}, expectedPrompt: `Beat ${index}` },
+      outputBatch: { schemaVersion: "creative-studio-output-batch/1.0" as const, batchId: "output_batch_12345678", index, count: 2 as const },
+    }));
+
+    await expect(createHttpAdapter().submitJobBatch({
+      schemaVersion: "creative-studio-job-batch/1.0",
+      batchId: "output_batch_12345678",
+      jobs,
+    })).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/creative-studio/jobs/batches", expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ batchId: "output_batch_12345678", jobs: [{ outputBatch: { index: 1 } }, { outputBatch: { index: 2 } }] });
   });
 
   it("uses the exact Love Loop controls without adding snapshot polls", async () => {

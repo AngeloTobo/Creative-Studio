@@ -133,10 +133,59 @@ export function quickGenerationSourceUsage<T>(
   };
 }
 
+function quickAnimationBeats(evidence: string) {
+  if (/\b(?:embryo|anatomy|cell|membrane|organ|biological|organic tissue)\b/i.test(evidence)) return [
+    "a fine pulse of light travels across the central organic form and makes its surface flex once",
+    "the surrounding fluid and suspended particles curl into a slow spiral as the form answers with a second, stronger pulse",
+    "the spiral clears and the camera settles closer on one newly illuminated internal detail",
+  ];
+  if (/\b(?:person|portrait|figure|human|alien|woman|man|face|body|character|performer)\b/i.test(evidence)) return [
+    "the central figure turns toward the strongest visible light and fixes their attention on it",
+    "their posture shifts with one deliberate movement while nearby fabric, hair, smoke, or loose material responds to a passing gust",
+    "the camera arcs past a foreground detail and settles on a decisive profile or three-quarter view as the environment finishes reacting",
+  ];
+  if (/\b(?:bird|animal|creature|insect|fish|dog|cat|horse)\b/i.test(evidence)) return [
+    "the creature snaps its attention toward an off-frame sound and begins one purposeful movement",
+    "the ground, water, foliage, fur, feathers, or nearby particles answer that movement with a visible wake",
+    "the camera tracks alongside and resolves as the creature stops at a newly revealed point of interest",
+  ];
+  if (/\b(?:car|vehicle|ship|aircraft|train|motorcycle|machine|robot)\b/i.test(evidence)) return [
+    "the machine powers on in a clear sequence of lights, joints, or moving surfaces",
+    "it advances or pivots once while reflections and loose environmental material sweep across its path",
+    "the camera tracks the movement and settles low as the machine reaches a precise final position",
+  ];
+  if (/\b(?:city|building|architecture|room|interior|tower|street|rooftop)\b/i.test(evidence)) return [
+    "one bank of practical light ignites across the visible structure in a directional cascade",
+    "wind, traffic, curtains, signs, mist, or loose debris carries that energy through the depth of the scene",
+    "the camera pushes through one foreground layer and resolves on a newly revealed architectural relationship",
+  ];
+  if (/\b(?:flower|plant|tree|forest|garden|landscape|water|ocean|cloud|mountain)\b/i.test(evidence)) return [
+    "a focused gust or current crosses the scene and bends the nearest natural forms in one readable direction",
+    "light follows the movement through the deeper layers while particles, leaves, water, or cloud mass build a visible response",
+    "the camera rises or advances through that response and settles on one transformed pocket of the landscape",
+  ];
+  if (/\b(?:sculpture|object|form|artifact|mask|vessel|sphere|structure)\b/i.test(evidence)) return [
+    "the focal object rotates a deliberate quarter turn as a seam, reflection, or inner light wakes across its surface",
+    "one nearby material element lifts, unfolds, or circles it and briefly changes the surrounding shadows",
+    "the camera completes a restrained orbit and settles as every moving element locks into a stronger final silhouette",
+  ];
+  return [
+    "the focal subject turns or tilts toward the strongest visible light in one clear initiating move",
+    "the nearest loose element lifts and travels through the frame while the environment answers with a visible change in light and depth",
+    "the camera advances past one foreground detail and settles on a stronger final silhouette after the motion resolves",
+  ];
+}
+
+/**
+ * One-click Animate must contribute a real motion idea, not merely restate the
+ * source caption. The source description selects grounded physical material,
+ * while each output still receives a concrete three-beat action and reveal.
+ */
 export function quickAnimationDirection(sourceEvidence: string | null | undefined) {
-  const evidence = String(sourceEvidence ?? "").replace(/\s+/g, " ").trim().slice(0, 760);
-  const source = evidence ? `${evidence} ` : "";
-  return `${source}Use the provided image as the exact first frame. Preserve every visible subject, identity, composition, material, color, and light relationship. Add coherent natural motion, subtle environmental movement, and one controlled camera move while maintaining temporal continuity. No text, captions, logos, black frames, scene replacement, or abrupt cuts.`.slice(0, 1_200);
+  const evidence = String(sourceEvidence ?? "").replace(/\s+/g, " ").trim().slice(0, 900);
+  const [opening, escalation, resolve] = quickAnimationBeats(evidence);
+  const source = evidence ? `Opening-frame evidence: ${evidence} ` : "";
+  return `${source}Use the provided image as the exact first frame and keep every visible identity, anatomy, material, palette, and light relationship continuous. Beat 1: ${opening}. Beat 2: ${escalation}. Beat 3: ${resolve}. Keep the horizon upright and the camera physically stable with no sideways roll. Preserve coherent ambient sound and original nonverbal music; no dialogue, narration, lyrics, text, captions, logos, black frames, scene replacement, or abrupt cuts.`.slice(0, 2_400);
 }
 
 export function quickInputBindings(

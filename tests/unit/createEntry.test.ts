@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessVideoPerformance,
   canonicalGenerationPerformanceParameters,
+  TRUSTED_LTX_25_I2V_PORTRAIT_30S,
   type WorkflowParameter,
 } from "../../shared/contracts";
 import {
@@ -26,6 +27,11 @@ describe("speed-safe video creation", () => {
       megapixels: 0.2,
       outputCount: 4,
     });
+  });
+
+  it("keeps Fast 30s as an explicit one-output recipe while standard Animate stays paired", () => {
+    expect(oneClickVideoSettings("standard").outputCount).toBe(2);
+    expect(TRUSTED_LTX_25_I2V_PORTRAIT_30S.settings).toMatchObject({ durationSeconds: 30, outputCount: 1 });
   });
 
   it("requires confirmation for longer clips or higher detail without flagging rounded 0.2 MP frames", () => {

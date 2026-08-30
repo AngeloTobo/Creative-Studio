@@ -136,6 +136,7 @@ function capabilitySnapshot(now: string): Capability[] {
     { key: "creative-dna-training", label: "CreativeDNA training", state: "unavailable", provider: "not connected", detail: "Upload-based training requires the Creative Studio Worker and an authenticated local runner.", checkedAt: now },
     { key: "prompt-enhancement", label: "Video prompt enhancement", state: "unavailable", provider: "local runner required", detail: "Real Gemma prompt enhancement is never simulated by the development adapter.", checkedAt: now },
     { key: "script-builder", label: "Full video script", state: "unavailable", provider: "local runner required", detail: "Real Gemma full-scene writing is never simulated by the development adapter.", checkedAt: now },
+    { key: "story-bank", label: "Story Bank", state: "unavailable", provider: "local runner required", detail: "The development adapter never invents placeholder stories or recommendations.", checkedAt: now },
     { key: "model-adapter-training", label: "ACE-Step music LoRA", state: "unavailable", provider: "not connected", detail: "Real LoRA training requires the Creative Studio Worker and a configured local ACE-Step 1.5 runtime. This development adapter never simulates a checkpoint.", checkedAt: now },
     { key: "music-generation", label: "Music generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; no real audio is rendered in this mode.", checkedAt: now },
     { key: "image-generation", label: "Image generation", state: "degraded", provider: "development renderer", detail: "Durable job and artifact metadata; gradients stand in for generated media.", checkedAt: now },
@@ -163,6 +164,7 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     projects,
     dnaArtifacts: [...state.dnaArtifacts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     jobs: [...state.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    generationBatches: [],
     artifacts,
     mediaAssets: [...(state.mediaAssets ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     workflows: [...(state.workflows ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -207,6 +209,8 @@ function snapshot(state: DevelopmentState, now: string): StudioSnapshot {
     canonPromotions: [...state.canonPromotions].sort((a, b) => b.promotedAt.localeCompare(a.promotedAt)),
     overnightSessions: [],
     loveLoop: null,
+    storyThreads: [],
+    storyBankRefreshes: [],
     tasteMemory: compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts: state.dnaArtifacts }),
     evolutionStudies: deriveEvolutionStudies(state.jobs, artifacts),
     refreshedAt: now,
@@ -669,6 +673,9 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
       const state = read();
       return addJob(state, input, null);
     },
+    async submitJobBatch() {
+      throw new Error("development_adapter_batch_unavailable");
+    },
     async retryJob(jobId: string, idempotencyKey: string) {
       const state = read();
       const original = state.jobs.find((item) => item.id === jobId);
@@ -857,6 +864,12 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     },
     async cancelOvernightSession() {
       throw new Error("overnight_studio_requires_creative_studio_worker");
+    },
+    async refreshStoryBank() {
+      throw new Error("story_bank_requires_creative_studio_worker");
+    },
+    async updateStoryThread() {
+      throw new Error("story_bank_requires_creative_studio_worker");
     },
     async configureLoveLoop() {
       throw new Error("love_loop_requires_creative_studio_worker");

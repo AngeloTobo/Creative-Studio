@@ -7,6 +7,7 @@ import type {
   CreativeDnaArtifact,
   Job,
   StudioSnapshot,
+  SubmitJobBatchRequest,
   SubmitJobRequest,
   VideoPromptEnhancement,
   WorkflowDefinition,
@@ -171,6 +172,7 @@ function baseSnapshot(
     projects: [{ id: "project_video_e2e", activeDnaArtifactId: "dna_video_e2e", name: "Animation proof", type: "Video", status: "active", description: "", note: "", hue: "#d946ef", initials: "AP", createdAt: NOW, updatedAt: NOW }],
     dnaArtifacts: createdDna ? [createdDna, initialDna()] : [initialDna()],
     jobs,
+    generationBatches: [],
     promptEnhancements: promptEnhancement ? [promptEnhancement] : [],
     videoScriptDrafts: [],
     artifacts: [],
@@ -215,12 +217,17 @@ function baseSnapshot(
     continuityRules: [],
     canonReferences: [],
     canonPromotions: [],
+    overnightSessions: [],
+    loveLoop: null,
+    storyThreads: [],
+    storyBankRefreshes: [],
     refreshedAt: NOW,
   };
 }
 
 type MockVideoBackend = {
   jobs: SubmitJobRequest[];
+  batchRequests: SubmitJobBatchRequest[];
   enhancementRequests: CreateVideoPromptEnhancementRequest[];
   revisionRequests: Array<{ baseRevisionId: string; values: Record<string, WorkflowScalar> }>;
   workflow: () => WorkflowDefinition;
@@ -235,10 +242,81 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
   let revision = 1;
   const jobs: Job[] = [];
   const jobRequests: SubmitJobRequest[] = [];
+  const batchRequests: SubmitJobBatchRequest[] = [];
   const enhancementRequests: CreateVideoPromptEnhancementRequest[] = [];
   const revisionRequests: MockVideoBackend["revisionRequests"] = [];
   let promptEnhancement: VideoPromptEnhancement | null = null;
   let createdDna: CreativeDnaArtifact | null = null;
+
+  const materializeJob = (input: SubmitJobRequest): Job => {
+    jobRequests.push(input);
+    const createdAt = new Date(Date.parse(NOW) + (20 + jobRequests.length) * 1_000).toISOString();
+    const prompt = input.workflow?.expectedPrompt ?? "";
+    const job: Job = {
+      id: `job_video_e2e_${jobRequests.length}`,
+      projectId: input.projectId,
+      dnaArtifactId: input.dnaArtifactId,
+      capability: "VIDEO_GENERATE",
+      modality: "video",
+      status: "queued",
+      progress: 0,
+      prompt,
+      provider: "local-comfyui",
+      upstreamId: null,
+      artifactId: null,
+      retryOfJobId: null,
+      error: null,
+      createdAt,
+      updatedAt: createdAt,
+      startedAt: null,
+      executionStage: "queued",
+      stageUpdatedAt: createdAt,
+      completedAt: null,
+      settingsStamp: {
+        schemaVersion: 1,
+        source: "comfyui-workflow",
+        createdAt,
+        reusedFromJobId: null,
+        prompt,
+        provider: "local-comfyui",
+        modality: "video",
+        videoPerformance: input.videoPerformanceMode ? {
+          schemaVersion: "creative-studio-video-performance/1.0",
+          mode: input.videoPerformanceMode,
+          workflowRevisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
+          trustedPreset: input.trustedVideoPresetId ? trustedVideoPresetStamp() : undefined,
+          workload: {
+            durationSeconds: input.videoDurationSeconds ?? null,
+            width: null,
+            height: null,
+            megapixels: Number(workflow.currentRevision.parameters.find((parameter) => parameter.id === MEGAPIXELS_PARAMETER_ID)?.value ?? 0),
+            frames: null,
+            fps: 24,
+            requiresExplicitHeavy: input.videoPerformanceMode === "explicit-heavy",
+            reasons: [],
+          },
+        } : undefined,
+        videoDurationSeconds: input.videoDurationSeconds,
+        workflow: {
+          workflowId: workflow.id,
+          revisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
+          version: workflow.currentRevision.version,
+          name: workflow.name,
+          format: workflow.currentRevision.format,
+          contentHash: workflow.currentRevision.contentHash,
+        },
+        parameters: Object.fromEntries(workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])),
+        models: workflow.currentRevision.models,
+        inputAssetIds: [SOURCE_ID],
+        inputBindings: input.workflow?.inputBindings,
+        videoVariant: input.videoVariant,
+        videoSpeech: input.videoSpeech,
+        outputBatch: input.outputBatch,
+      },
+    };
+    jobs.unshift(job);
+    return job;
+  };
 
   await page.route(`${HTTP_STUDIO}/api/creative-studio/**`, async (route) => {
     const request = route.request();
@@ -301,73 +379,24 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
 
     if (request.method() === "POST" && pathname === "/api/creative-studio/jobs") {
       const input = request.postDataJSON() as SubmitJobRequest;
-      jobRequests.push(input);
-      const createdAt = new Date(Date.parse(NOW) + (20 + jobRequests.length) * 1_000).toISOString();
-      const prompt = input.workflow?.expectedPrompt ?? "";
-      const job: Job = {
-        id: `job_video_e2e_${jobRequests.length}`,
-        projectId: input.projectId,
-        dnaArtifactId: input.dnaArtifactId,
-        capability: "VIDEO_GENERATE",
-        modality: "video",
-        status: "queued",
-        progress: 0,
-        prompt,
-        provider: "local-comfyui",
-        upstreamId: null,
-        artifactId: null,
-        retryOfJobId: null,
-        error: null,
-        createdAt,
-        updatedAt: createdAt,
-        startedAt: null,
-        executionStage: "queued",
-        stageUpdatedAt: createdAt,
-        completedAt: null,
-        settingsStamp: {
-          schemaVersion: 1,
-          source: "comfyui-workflow",
-          createdAt,
-          reusedFromJobId: null,
-          prompt,
-          provider: "local-comfyui",
-          modality: "video",
-          videoPerformance: input.videoPerformanceMode ? {
-            schemaVersion: "creative-studio-video-performance/1.0",
-            mode: input.videoPerformanceMode,
-            workflowRevisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
-            trustedPreset: input.trustedVideoPresetId ? trustedVideoPresetStamp() : undefined,
-            workload: {
-              durationSeconds: input.videoDurationSeconds ?? null,
-              width: null,
-              height: null,
-              megapixels: Number(workflow.currentRevision.parameters.find((parameter) => parameter.id === MEGAPIXELS_PARAMETER_ID)?.value ?? 0),
-              frames: null,
-              fps: 24,
-              requiresExplicitHeavy: input.videoPerformanceMode === "explicit-heavy",
-              reasons: [],
-            },
-          } : undefined,
-          videoDurationSeconds: input.videoDurationSeconds,
-          workflow: {
-            workflowId: workflow.id,
-            revisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
-            version: workflow.currentRevision.version,
-            name: workflow.name,
-            format: workflow.currentRevision.format,
-            contentHash: workflow.currentRevision.contentHash,
-          },
-          parameters: Object.fromEntries(workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])),
-          models: workflow.currentRevision.models,
-          inputAssetIds: [SOURCE_ID],
-          inputBindings: input.workflow?.inputBindings,
-          videoVariant: input.videoVariant,
-          videoSpeech: input.videoSpeech,
-          outputBatch: input.outputBatch,
-        },
-      };
-      jobs.unshift(job);
+      const job = materializeJob(input);
       await json(route, { job }, 202);
+      return;
+    }
+
+    if (request.method() === "POST" && pathname === "/api/creative-studio/jobs/batches") {
+      const input = request.postDataJSON() as SubmitJobBatchRequest;
+      batchRequests.push(input);
+      const createdJobs = input.jobs.map(materializeJob);
+      await json(route, {
+        batch: {
+          batchId: input.batchId,
+          status: "completed",
+          completedLanes: createdJobs.length,
+          laneCount: createdJobs.length,
+        },
+        jobs: createdJobs,
+      }, 202);
       return;
     }
 
@@ -424,7 +453,7 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     await json(route, { error: `unhandled_e2e_api_route:${request.method()}:${pathname}` }, 500);
   });
 
-  return { jobs: jobRequests, enhancementRequests, revisionRequests, workflow: () => workflow };
+  return { jobs: jobRequests, batchRequests, enhancementRequests, revisionRequests, workflow: () => workflow };
 }
 
 async function openRetainedMedia(page: Page) {
@@ -473,6 +502,8 @@ test("Standard animate ignores a stored heavy draft and queues the speed-safe wo
   await expect(page).toHaveURL(/#\/queue$/);
 
   expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["aligned", "discovery"]);
+  expect(backend.batchRequests).toHaveLength(1);
+  expect(backend.batchRequests[0].jobs).toHaveLength(2);
   const pairIds = backend.jobs.map((job) => job.videoVariant?.pairId ?? "");
   expect(new Set(pairIds).size).toBe(1);
   expect(pairIds[0]).toMatch(/^video_pair_[a-z0-9-]{8,80}$/i);
@@ -510,6 +541,8 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
     videoDurationSeconds: 5,
   });
   expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["exact", "enhanced", "left-field", "awe"]);
+  expect(backend.batchRequests).toHaveLength(1);
+  expect(backend.batchRequests[0].jobs).toHaveLength(4);
   const pairIds = backend.jobs.map((job) => job.videoVariant?.pairId ?? "");
   expect(new Set(pairIds).size).toBe(1);
   expect(pairIds[0]).toMatch(/^video_pair_[a-z0-9-]{8,80}$/i);
@@ -579,12 +612,13 @@ test("Longer video settings require an explicit workload confirmation", async ({
 
   await confirmation.getByRole("button", { name: "Confirm & queue" }).click();
   await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
+  expect(backend.batchRequests).toHaveLength(1);
   expect(backend.jobs.every((job) => job.videoDurationSeconds === 10)).toBe(true);
   expect(backend.jobs.every((job) => job.videoPerformanceMode === "explicit-heavy")).toBe(true);
   expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
 });
 
-test("Retained-image Automatic 30s applies trusted LTX without a preset click and queues one proven render", async ({ page }) => {
+test("Retained-image Fast 30s remains an explicit single-render choice and queues one proven render", async ({ page }) => {
   const backend = await installVideoBackend(page, false);
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
@@ -594,8 +628,8 @@ test("Retained-image Automatic 30s applies trusted LTX without a preset click an
   const authoredDirection = "A glass-robed figure turns toward a luminous storm gathering above the city.";
   await page.getByLabel("Describe the video").fill(authoredDirection);
 
-  // Choose an unsaved seed before choosing 30s. Automatic routing must retain
-  // the authored source, direction, and seed while applying the measured recipe.
+  // Choose an unsaved seed before selecting Fast 30s. The explicit recipe must
+  // retain the authored source, direction, and seed.
   await page.locator("details.quick-create-advanced > summary").click();
   await page.locator("details.quick-render-panel > summary").click();
   await page.locator("details.quick-render-more > summary").click();
@@ -604,9 +638,9 @@ test("Retained-image Automatic 30s applies trusted LTX without a preset click an
   const preservedSeed = Number(await newSeed.locator("small").textContent());
   expect(Number.isInteger(preservedSeed)).toBe(true);
 
-  const trustedPreset = page.getByRole("region", { name: "Trusted 30 second video preset" });
+  const trustedPreset = page.getByRole("region", { name: "Fast 30 second single-render option" });
   await expect(trustedPreset).toBeVisible();
-  await expect(trustedPreset).toContainText("Fastest proven 30-second video");
+  await expect(trustedPreset).toContainText("Fast 30s");
   await expect(trustedPreset).toContainText("6/6 portrait");
   await trustedPreset.locator("details > summary").click();
   await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("One native 30s render");
@@ -614,8 +648,10 @@ test("Retained-image Automatic 30s applies trusted LTX without a preset click an
   await expect(trustedPreset.locator(".quick-video-simulations")).toContainText("8 measured samples");
 
   await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "30s" }).click();
-  await expect(trustedPreset.getByRole("button", { name: "Trusted 30s selected" })).toBeVisible();
-  await expect(page.locator(".quick-video-essentials > header")).toContainText("AUTO MODEL");
+  await expect(trustedPreset.getByRole("button", { name: /Use Fast 30s/ })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("group", { name: "Number of video outputs" }).getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await trustedPreset.getByRole("button", { name: /Use Fast 30s/ }).click();
+  await expect(trustedPreset.getByRole("button", { name: "Return to Standard Pair" })).toBeVisible();
   await expect(page.locator(".quick-video-essentials > header")).toContainText("LTX 2.5 Image to Video");
   await expect(page.getByRole("group", { name: "Canvas shape" }).getByRole("button", { name: "9:16 Portrait" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("group", { name: "Number of video outputs" }).getByRole("button", { name: "1", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -633,8 +669,8 @@ test("Retained-image Automatic 30s applies trusted LTX without a preset click an
   expect(savedSession?.sourceAssetIds).toContain(SOURCE_ID);
   expect(savedSession?.graphicalSettings?.[`value:${SEED_PARAMETER_ID}`]).toBe(preservedSeed);
   await page.reload();
-  await expect(page.getByRole("region", { name: "Trusted 30 second video preset" })
-    .getByRole("button", { name: "Trusted 30s selected" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Fast 30 second single-render option" })
+    .getByRole("button", { name: "Return to Standard Pair" })).toBeVisible();
   await expect(page.getByLabel("Describe the video")).toHaveValue(authoredDirection);
 
   await expect(page.getByRole("alert", { name: "Confirm heavy video render" })).toHaveCount(0);
@@ -642,6 +678,7 @@ test("Retained-image Automatic 30s applies trusted LTX without a preset click an
   await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(1);
 
   const [request] = backend.jobs;
+  expect(backend.batchRequests).toHaveLength(0);
   expect(backend.enhancementRequests).toHaveLength(0);
   expect(request).toMatchObject({
     modality: "video",
@@ -671,4 +708,44 @@ test("Retained-image Automatic 30s applies trusted LTX without a preset click an
   expect(submittedParameters["398:357::strength"]).toBe(0.7);
   expect(submittedParameters["398:349::strength"]).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("Fast 30s exits cleanly to the standard Aligned and Discovery pair", async ({ page }) => {
+  await installVideoBackend(page, false);
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  await page.locator(".quick-compose-source > summary").click();
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
+  await page.getByLabel("Describe the video").fill("A glass figure discovers a ribbon of light and follows it through the upright city.");
+
+  await page.locator("details.quick-create-advanced > summary").click();
+  await page.locator("details.quick-render-panel > summary").click();
+  await page.locator("details.quick-render-more > summary").click();
+  const seedControl = page.locator(".quick-seed-control button");
+  await seedControl.click();
+  const ownerSeed = await seedControl.locator("small").textContent();
+
+  const trustedPreset = page.getByRole("region", { name: "Fast 30 second single-render option" });
+  await trustedPreset.getByRole("button", { name: /Use Fast 30s/ }).click();
+  await expect(trustedPreset.getByRole("button", { name: "Return to Standard Pair" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Number of video outputs" }).getByRole("button", { name: "1", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  // Changing a render-defining setting exits the single-render recipe, keeps
+  // the owner's seed, and restores the normal paired semantics.
+  await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
+  await expect(trustedPreset.getByRole("button", { name: /Use Fast 30s/ })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("group", { name: "Number of video outputs" }).getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Video length")).toContainText("Aligned follows your direction; Discovery uses 70% random DNA.");
+  await expect(seedControl.locator("small")).toHaveText(ownerSeed ?? "");
+
+  // The selected recipe itself also presents an obvious, single-action return
+  // to the fast 5s standard pair.
+  await trustedPreset.getByRole("button", { name: /Use Fast 30s/ }).click();
+  await trustedPreset.getByRole("button", { name: "Return to Standard Pair" }).click();
+  await expect(page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "5s", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("group", { name: "Number of video outputs" }).getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(trustedPreset.getByRole("button", { name: /Use Fast 30s/ })).toBeVisible();
+  await expect(page.getByText("Standard Pair restored: Aligned + Discovery will render with trusted overrides cleared.")).toBeVisible();
+  await expect(seedControl.locator("small")).toHaveText(ownerSeed ?? "");
 });

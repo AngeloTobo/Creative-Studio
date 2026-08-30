@@ -44,6 +44,7 @@ describe("CreativeDNA v1", () => {
     });
     expect(versions[1].prompt).toContain(versions[0].prompt);
     expect(versions[1].prompt).not.toBe(versions[0].prompt);
+    expect(versions[1].prompt).toContain("Keep the horizon upright and the camera level");
     expect(versions[1].variant.effectiveDimensions).not.toEqual(dimensions);
     expect(createVideoGenerationVersions({ direction: versions[0].prompt, dimensions, pairId: "video_pair_test-12345678", discoverySeed: 4_294_967_294, hasSource: true })[1]).toEqual(versions[1]);
     expect(normalizeVideoGenerationVariant(versions[0].variant)).toEqual(versions[0].variant);
@@ -81,6 +82,8 @@ describe("CreativeDNA v1", () => {
     expect(versions[3].variant).toMatchObject({ schemaVersion: "creative-studio-video-variant/1.1", personalStyleWeight: 10, randomDnaWeight: 90 });
     expect(versions[2].prompt).toMatch(/Preserve the source subject/);
     expect(versions[3].prompt).toMatch(/opening frame must remain unmistakable/);
+    expect(versions.slice(2).map((version) => version.prompt).join(" ")).not.toMatch(/fall sideways|frame rotate/i);
+    expect(versions.slice(2).every((version) => version.prompt.includes("no sideways framing or camera roll"))).toBe(true);
     expect(createFourWayVideoGenerationVersions(input)).toEqual(versions);
     versions.forEach((version) => expect(normalizeVideoGenerationVariant(version.variant)).toEqual(version.variant));
   });

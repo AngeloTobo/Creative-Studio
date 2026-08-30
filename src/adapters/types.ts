@@ -5,6 +5,8 @@ import type {
   ReviewArtifactResponse,
   StudioSnapshot,
   SubmitJobRequest,
+  SubmitJobBatchRequest,
+  SubmitJobBatchResponse,
   Job,
   MediaAsset,
   Project,
@@ -54,6 +56,10 @@ import type {
   OvernightSession,
   ConfigureLoveLoopRequest,
   LoveLoop,
+  RefreshStoryBankRequest,
+  StoryBankRefresh,
+  StoryThread,
+  UpdateStoryThreadRequest,
 } from "../../shared/contracts";
 
 export interface StudioAdapter {
@@ -71,6 +77,7 @@ export interface StudioAdapter {
   getVideoScriptDraft(videoScriptDraftId: string): Promise<VideoScriptDraft>;
   updateVideoScriptDraft(videoScriptDraftId: string, input: UpdateVideoScriptDraftRequest): Promise<VideoScriptDraft>;
   submitJob(input: SubmitJobRequest): Promise<Job>;
+  submitJobBatch(input: SubmitJobBatchRequest): Promise<SubmitJobBatchResponse>;
   retryJob(jobId: string, idempotencyKey: string): Promise<Job>;
   reuseJob(jobId: string, idempotencyKey: string): Promise<Job>;
   cancelJob(jobId: string): Promise<Job>;
@@ -113,4 +120,6 @@ export interface StudioAdapter {
   pauseLoveLoop(): Promise<LoveLoop>;
   resumeLoveLoop(): Promise<LoveLoop>;
   disableLoveLoop(): Promise<LoveLoop>;
+  refreshStoryBank(input: RefreshStoryBankRequest): Promise<StoryBankRefresh>;
+  updateStoryThread(storyId: string, input: UpdateStoryThreadRequest): Promise<StoryThread>;
 }

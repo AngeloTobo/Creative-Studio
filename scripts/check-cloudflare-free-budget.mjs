@@ -24,6 +24,9 @@ if (!provider.includes('document.visibilityState === "visible"')) issues.push("B
 if (!adapter.includes("CREATIVE_STUDIO_ROUTES.snapshot")) issues.push("Browser reads must use the consolidated snapshot route.");
 if (!jobs.includes("enqueueJob(env, job.id, 60)")) issues.push("AFDFW Queue reconciliation must wait at least 60 seconds.");
 if (workerEntry.includes("reconcileLoveLoops")) issues.push("Love Loop must reuse Local Runner claims instead of the scheduled Worker trigger.");
+if (workerEntry.includes("ensureAutomaticStoryRefresh") || workerEntry.includes("claimStoryPlan")) {
+  issues.push("Story Bank planning must reuse Local Runner claims instead of the scheduled Worker trigger.");
+}
 for (const binding of ["durable_objects", "workflows", "containers", "browser"]) {
   if (production[binding]) issues.push(`Paid-only binding must not be configured: ${binding}.`);
 }

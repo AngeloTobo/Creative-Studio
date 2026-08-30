@@ -114,6 +114,20 @@ export async function listCreativeDnaTrainingReviews(env: Env, ownerId: string):
   return (result.results ?? []) as CreativeDnaTrainingReview[];
 }
 
+export async function creativeDnaTrainingReviewsByDnaIds(
+  env: Env,
+  ownerId: string,
+  dnaArtifactIds: string[],
+): Promise<CreativeDnaTrainingReview[]> {
+  const ids = [...new Set(dnaArtifactIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const result = await env.DB.prepare(`select ${TRAINING_REVIEW_COLUMNS} from creative_dna_training_reviews
+    where owner_id = ? and dna_artifact_id in (select value from json_each(?))
+    order by created_at desc, rowid desc`)
+    .bind(ownerId, JSON.stringify(ids)).all<TrainingReviewRow>();
+  return (result.results ?? []) as CreativeDnaTrainingReview[];
+}
+
 export async function creativeDnaTrainingEvidencePool(env: Env, ownerId: string, projectId: string) {
   const [allExamples, reservations] = await Promise.all([
     listTrainingExamples(env, ownerId),

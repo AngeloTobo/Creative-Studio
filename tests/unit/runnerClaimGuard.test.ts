@@ -12,7 +12,7 @@ const config = {
   comfyUrl: "http://127.0.0.1:8188",
 };
 const machineState = {
-  version: "1.16.0",
+  version: "1.17.0",
   comfyUrl: config.comfyUrl,
   comfyReady: true,
   comfyVersion: "0.33.0",

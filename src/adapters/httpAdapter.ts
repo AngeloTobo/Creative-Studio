@@ -10,6 +10,8 @@ import {
   type RetryJobResponse,
   type StudioSnapshot,
   type SubmitJobRequest,
+  type SubmitJobBatchRequest,
+  type SubmitJobBatchResponse,
   type SubmitJobResponse,
   type UpdateProjectRequest,
   type UpdateProjectResponse,
@@ -61,6 +63,10 @@ import {
   type OvernightSessionResponse,
   type ConfigureLoveLoopRequest,
   type LoveLoopResponse,
+  type RefreshStoryBankRequest,
+  type StoryBankRefreshResponse,
+  type StoryThreadResponse,
+  type UpdateStoryThreadRequest,
 } from "../../shared/contracts";
 import type { StudioAdapter } from "./types";
 import { resolveHttpPollInterval } from "../config/runtime";
@@ -209,6 +215,13 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify(input),
       });
       return result.job;
+    },
+    async submitJobBatch(input: SubmitJobBatchRequest) {
+      const result = await request<SubmitJobBatchResponse>(CREATIVE_STUDIO_ROUTES.jobBatches, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return { batch: result.batch, jobs: result.jobs };
     },
     async retryJob(jobId: string, idempotencyKey: string) {
       const result = await request<RetryJobResponse>(`${CREATIVE_STUDIO_ROUTES.jobs}/${encodeURIComponent(jobId)}/retry`, {
@@ -423,6 +436,20 @@ export function createHttpAdapter(): StudioAdapter {
         body: JSON.stringify({}),
       });
       return result.overnightSession;
+    },
+    async refreshStoryBank(input: RefreshStoryBankRequest) {
+      const result = await request<StoryBankRefreshResponse>(`${CREATIVE_STUDIO_ROUTES.storyBank}/refresh`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.storyBankRefresh;
+    },
+    async updateStoryThread(storyId: string, input: UpdateStoryThreadRequest) {
+      const result = await request<StoryThreadResponse>(`${CREATIVE_STUDIO_ROUTES.storyBank}/stories/${encodeURIComponent(storyId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
+      return result.storyThread;
     },
     async configureLoveLoop(input: ConfigureLoveLoopRequest) {
       const result = await request<LoveLoopResponse>(CREATIVE_STUDIO_ROUTES.loveLoop, {

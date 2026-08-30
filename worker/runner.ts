@@ -48,6 +48,14 @@ export function supportsSongPromptEnhancement(version: string | null) {
   return major > 1 || (major === 1 && minor >= 7);
 }
 
+export function supportsStoryPlanning(version: string | null) {
+  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 1 || (major === 1 && minor >= 17);
+}
+
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
   comfy_version as comfyVersion, device, active_job_id as activeJobId, last_error as lastError,
   model_training_providers_json as modelTrainingProvidersJson,
@@ -128,6 +136,10 @@ export async function revokeLocalRunner(env: Env, ownerId: string, runnerId: str
       .bind(now, ownerId, runnerId),
     env.DB.prepare(`update creative_video_script_drafts set status = 'waiting-for-runner', progress = 0,
       runner_id = null, runner_lease_until = null, error = null, updated_at = ?, started_at = null
+      where owner_id = ? and runner_id = ? and status = 'running'`)
+      .bind(now, ownerId, runnerId),
+    env.DB.prepare(`update creative_story_refreshes set status = 'waiting-for-runner', runner_id = null,
+      runner_lease_until = null, error = null, updated_at = ?, started_at = null
       where owner_id = ? and runner_id = ? and status = 'running'`)
       .bind(now, ownerId, runnerId),
   ]);
@@ -428,7 +440,9 @@ export function isLocalRunnerRoute(route: string) {
     || route === "runner-video-script-heartbeat" || route === "runner-video-script-complete"
     || route === "runner-video-script-fail"
     || route === "runner-overnight-heartbeat" || route === "runner-overnight-complete"
-    || route === "runner-overnight-fail";
+    || route === "runner-overnight-fail"
+    || route === "runner-story-plan-heartbeat" || route === "runner-story-plan-complete"
+    || route === "runner-story-plan-fail";
 }
 
 export function localRunnerJobLabel(job: Job) {

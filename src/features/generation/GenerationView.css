@@ -16,6 +16,7 @@
 .quick-create-card > .quick-source-conflict { order: 2; }
 .quick-create-card > .quick-prompt-ideas { order: 3; }
 .quick-create-card > .quick-song-analysis { order: 4; }
+.quick-create-card > .quick-story-directions { order: 4; }
 .quick-create-card > .quick-direction,
 .quick-create-card > .quick-training-paths { order: 5; }
 .quick-create-card > .quick-video-speech { order: 6; }
@@ -35,6 +36,7 @@
 .quick-create-card.video-create > .quick-create-head { order: 0; }
 .quick-create-card.video-create > .quick-compose-source { order: 1; }
 .quick-create-card.video-create > .quick-source-conflict { order: 1; }
+.quick-create-card.video-create > .quick-story-directions { order: 2; }
 .quick-create-card.video-create > .quick-direction { order: 2; }
 .quick-create-card.video-create > .quick-video-essentials { order: 3; }
 .quick-create-card.video-create > .quick-setting-panel.quick-extension-panel { order: 4; }

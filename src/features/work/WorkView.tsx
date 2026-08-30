@@ -55,6 +55,12 @@ export function WorkView({
     () => cockpit?.actions.filter((action) => action.projectId === null || action.projectId === activeProjectId) ?? [],
     [activeProjectId, cockpit?.actions],
   );
+  const failedGenerationBatches = useMemo(
+    () => (snapshot?.generationBatches ?? [])
+      .filter((batch) => batch.projectId === activeProjectId && batch.status === "failed")
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    [activeProjectId, snapshot?.generationBatches],
+  );
   const resultCount = useMemo(
     () => snapshot?.artifacts.filter((artifact) => artifact.projectId === activeProjectId && artifact.status !== "archived").length ?? 0,
     [activeProjectId, snapshot?.artifacts],
@@ -106,7 +112,7 @@ export function WorkView({
   };
 
   const tabs: Array<{ id: WorkSegment; label: string; count: number; icon: "bell" | "queue" | "gallery" }> = [
-    { id: "needs-action", label: "Needs action", count: projectActions.length, icon: "bell" },
+    { id: "needs-action", label: "Needs action", count: projectActions.length + failedGenerationBatches.length, icon: "bell" },
     { id: "running", label: "Running", count: runningCount, icon: "queue" },
     { id: "results", label: "Results", count: resultCount, icon: "gallery" },
   ];
@@ -129,6 +135,20 @@ export function WorkView({
       </header>
 
       <LoveLoopWorkStatus onResults={() => setSegment("results")} onNeedsAction={() => setSegment("needs-action")} onRepair={onManageLoveLoop} />
+
+      {failedGenerationBatches.length ? <section className="work-batch-failures" aria-label="Video batches that need attention">
+        {failedGenerationBatches.slice(0, 3).map((batch) => <article className="work-batch-failure glass" key={batch.batchId}>
+          <Icon name="bell" size={18} />
+          <div>
+            <strong>Video set stopped at version {batch.failedLane ?? Math.min(batch.laneCount, batch.completedLanes + 1)} of {batch.laneCount}</strong>
+            <p>{batch.error ?? "Creative Studio could not finish this version."}</p>
+            <small>{batch.failureKind === "permanent"
+              ? "The saved lane needs corrected settings before it can run. Completed versions remain retained."
+              : "Automatic retries were exhausted. Completed versions remain retained; submit again when the runner is healthy."}</small>
+          </div>
+          <button type="button" className="btn btn-primary" onClick={onContinueLoop}>Open Create</button>
+        </article>)}
+      </section> : null}
 
       <nav className="work-segments glass" aria-label="Work lifecycle">
         {tabs.map((tab) => (

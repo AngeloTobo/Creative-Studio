@@ -69,6 +69,12 @@ import type {
   OvernightSession,
   ConfigureLoveLoopRequest,
   LoveLoop,
+  StoryBankRefresh,
+  StoryRecommendationSelection,
+  StoryThread,
+  SubmitJobBatchResponse,
+  SubmitJobRequest,
+  UpdateStoryThreadRequest,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 
@@ -96,6 +102,7 @@ type StudioContextValue = {
   submitAfdfwJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitDevelopmentPreviewJob: (modality: Exclude<GenerationModality, "video">, dnaArtifactId?: string) => Promise<void>;
   submitWorkflowJob: (input: SubmitWorkflowJobInput) => Promise<Job>;
+  submitWorkflowBatch: (input: SubmitWorkflowBatchInput) => Promise<SubmitJobBatchResponse>;
   retryJob: (jobId: string) => Promise<Job>;
   reuseJob: (jobId: string) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -136,6 +143,8 @@ type StudioContextValue = {
   pauseLoveLoop: () => Promise<LoveLoop>;
   resumeLoveLoop: () => Promise<LoveLoop>;
   disableLoveLoop: () => Promise<LoveLoop>;
+  refreshStoryBank: () => Promise<StoryBankRefresh>;
+  updateStoryThread: (storyId: string, input: UpdateStoryThreadRequest) => Promise<StoryThread>;
   refresh: () => Promise<void>;
 };
 
@@ -158,7 +167,51 @@ export type SubmitWorkflowJobInput = {
   continuity?: GenerationContinuitySelection;
   promptEnhancement?: { requestId: string; basePrompt: string; appliedPrompt: string };
   videoScript?: VideoScriptUse;
+  storyRecommendation?: StoryRecommendationSelection;
 };
+
+export type SubmitWorkflowBatchInput = {
+  batchId: string;
+  jobs: SubmitWorkflowJobInput[];
+};
+
+function workflowJobRequest(
+  projectId: string,
+  activeDnaArtifactId: string | undefined,
+  input: SubmitWorkflowJobInput,
+): SubmitJobRequest {
+  const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoPerformanceMode, trustedVideoPresetId, videoVariant, videoSpeech, evolution, outputBatch, promptReference, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript, storyRecommendation } = input;
+  const dnaId = dnaArtifactId ?? activeDnaArtifactId;
+  if (!dnaId) throw new Error("creative_dna_required");
+  const modality: GenerationModality = workflow.modality === "audio" || workflow.modality === "music" ? "music" : workflow.modality === "video" ? "video" : "image";
+  if (workflow.modality === "3d") throw new Error("workflow_modality_not_supported");
+  const promptParameter = primaryWorkflowPromptParameter(workflow.currentRevision.parameters, workflow.modality);
+  const workflowPrompt = String(promptParameter?.value ?? "").trim();
+  const expectedPrompt = expectedPromptValue.trim();
+  if (!workflowPrompt || !expectedPrompt) throw new Error("workflow_positive_prompt_missing");
+  if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
+  return {
+    projectId,
+    dnaArtifactId: dnaId,
+    modality,
+    idempotencyKey: stableIdempotencyKey?.trim() || operationKey("workflow"),
+    workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings, expectedPrompt },
+    performanceMode,
+    videoPerformanceMode,
+    trustedVideoPresetId,
+    videoDurationSeconds,
+    videoVariant,
+    videoSpeech,
+    videoOperation,
+    evolution,
+    outputBatch,
+    promptReference,
+    continuity,
+    promptEnhancement,
+    videoScript,
+    storyRecommendation,
+  };
+}
 
 const StudioContext = createContext<StudioContextValue | null>(null);
 
@@ -166,6 +219,9 @@ function message(error: unknown) {
   if (!(error instanceof Error)) return "Creative Studio request failed";
   if (error.message === "invalid_video_generation_variant") {
     return "Creative Studio could not prepare this video batch. No render started; refresh Create and try again.";
+  }
+  if (error.message === "generation_batch_terminal") {
+    return "The set stopped before every version could be queued. Completed versions remain retained. Open Work to see the failed version and correction guidance.";
   }
   if (error.message === "image_custom_mode_required") {
     return "This image setup exceeds the fast limits. Open Create and choose Custom · can be slow only when you want that longer render.";
@@ -330,9 +386,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return () => { live = false; };
   }, [adapter, applySnapshot]);
 
-  const hasActiveWork = Boolean(snapshot?.jobs.some((job) => job.status === "queued" || job.status === "running")
-    || snapshot?.trainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")
-    || snapshot?.modelTrainingJobs.some((job) => job.status === "waiting-for-runner" || job.status === "running")
+  const hasActiveWork = Boolean((snapshot?.jobs ?? []).some((job) => job.status === "queued" || job.status === "running")
+    || (snapshot?.generationBatches ?? []).some((batch) => batch.status === "waiting" || batch.status === "running")
+    || (snapshot?.trainingJobs ?? []).some((job) => job.status === "waiting-for-runner" || job.status === "running")
+    || (snapshot?.modelTrainingJobs ?? []).some((job) => job.status === "waiting-for-runner" || job.status === "running")
     || (snapshot?.overnightSessions ?? []).some((session) => ["armed", "planning", "running"].includes(session.status)));
 
   useEffect(() => {
@@ -480,38 +537,27 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [adapter, mergeVideoScriptDraft]);
 
   const submitWorkflowJob = useCallback(async (input: SubmitWorkflowJobInput) => {
-    const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoPerformanceMode, trustedVideoPresetId, videoVariant, videoSpeech, evolution, outputBatch, promptReference, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript } = input;
     if (!activeProjectId) throw new Error("project_required");
-    const dnaId = dnaArtifactId ?? activeDna?.artifactId;
-    if (!dnaId) throw new Error("creative_dna_required");
-    const modality: GenerationModality = workflow.modality === "audio" || workflow.modality === "music" ? "music" : workflow.modality === "video" ? "video" : "image";
-    if (workflow.modality === "3d") throw new Error("workflow_modality_not_supported");
-    const promptParameter = primaryWorkflowPromptParameter(workflow.currentRevision.parameters, workflow.modality);
-    const workflowPrompt = String(promptParameter?.value ?? "").trim();
-    const expectedPrompt = expectedPromptValue.trim();
-    if (!workflowPrompt || !expectedPrompt) throw new Error("workflow_positive_prompt_missing");
-    if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
-    return transact(() => adapter.submitJob({
-      projectId: activeProjectId,
-      dnaArtifactId: dnaId,
-      modality,
-      idempotencyKey: stableIdempotencyKey?.trim() || operationKey("workflow"),
-      workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, inputBindings, expectedPrompt },
-      performanceMode,
-      videoPerformanceMode,
-      trustedVideoPresetId,
-      videoDurationSeconds,
-      videoVariant,
-      videoSpeech,
-      videoOperation,
-      evolution,
-      outputBatch,
-      promptReference,
-      continuity,
-      promptEnhancement,
-      videoScript,
-    }));
+    return transact(() => adapter.submitJob(workflowJobRequest(activeProjectId, activeDna?.artifactId, input)));
   }, [activeDna?.artifactId, activeProjectId, adapter, transact]);
+
+  const submitWorkflowBatch = useCallback(async (input: SubmitWorkflowBatchInput) => {
+    if (!activeProjectId) throw new Error("project_required");
+    const batchId = input.batchId.trim();
+    if (!batchId || !input.jobs.length) throw new Error("invalid_generation_batch");
+    const jobs = input.jobs.map((job) => workflowJobRequest(activeProjectId, activeDna?.artifactId, job));
+    try {
+      return await transact(() => adapter.submitJobBatch({
+        schemaVersion: "creative-studio-job-batch/1.0",
+        batchId,
+        jobs,
+      }));
+    } catch (error) {
+      await refresh();
+      setError(message(error));
+      throw error;
+    }
+  }, [activeDna?.artifactId, activeProjectId, adapter, refresh, transact]);
 
   const retryJob = useCallback((jobId: string) => (
     transact(() => adapter.retryJob(jobId, operationKey("retry")))
@@ -712,6 +758,15 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const resumeLoveLoop = useCallback(() => transact(() => adapter.resumeLoveLoop()), [adapter, transact]);
   const disableLoveLoop = useCallback(() => transact(() => adapter.disableLoveLoop()), [adapter, transact]);
 
+  const refreshStoryBank = useCallback(() => {
+    if (!activeProjectId) throw new Error("project_required");
+    return transact(() => adapter.refreshStoryBank({ projectId: activeProjectId, idempotencyKey: operationKey("story") }));
+  }, [activeProjectId, adapter, transact]);
+
+  const updateStoryThread = useCallback((storyId: string, input: UpdateStoryThreadRequest) => (
+    transact(() => adapter.updateStoryThread(storyId, input))
+  ), [adapter, transact]);
+
   const createProject = useCallback(async (input: CreateProjectRequest) => {
     const project = await transact(() => adapter.createProject(input));
     setActiveProjectId(project.id);
@@ -758,6 +813,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     submitAfdfwJob,
     submitDevelopmentPreviewJob,
     submitWorkflowJob,
+    submitWorkflowBatch,
     retryJob,
     reuseJob,
     cancelJob,
@@ -798,8 +854,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     pauseLoveLoop,
     resumeLoveLoop,
     disableLoveLoop,
+    refreshStoryBank,
+    updateStoryThread,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, configureLoveLoop, pauseLoveLoop, resumeLoveLoop, disableLoveLoop, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, submitWorkflowBatch, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, configureLoveLoop, pauseLoveLoop, resumeLoveLoop, disableLoveLoop, refreshStoryBank, updateStoryThread, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

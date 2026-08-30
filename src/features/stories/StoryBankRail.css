@@ -1,0 +1,95 @@
+.story-bank-rail {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 1px 1px 3px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.story-bank-stack { display: grid; min-width: 0; gap: 7px; }
+
+.story-bank-card {
+  display: grid;
+  width: 238px;
+  min-width: 238px;
+  min-height: 126px;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 5px;
+  scroll-snap-align: start;
+  border: 1px solid color-mix(in oklab,var(--violet) 24%,var(--border-soft));
+  border-radius: 14px;
+  padding: 10px;
+  background: linear-gradient(145deg,color-mix(in oklab,var(--violet) 8%,var(--surface-strong)),color-mix(in oklab,var(--cyan) 5%,var(--surface)));
+  box-shadow: 0 14px 34px -32px color-mix(in oklab,var(--violet) 80%,transparent);
+}
+
+.story-bank-card > header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.story-bank-card > header span { display: inline-flex; align-items: center; gap: 4px; color: var(--violet); font-size: 10px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+.story-bank-card > header small { color: var(--text-faint); font-family: var(--font-mono); font-size: 10px; }
+.story-bank-card > header .story-bank-manage { min-width: 0; gap: 2px; letter-spacing: normal; }
+.story-bank-manage > small { overflow: hidden; max-width: 72px; text-overflow: ellipsis; white-space: nowrap; }
+.story-bank-manage > button { display: grid; width: 25px; height: 25px; flex: none; place-items: center; border: 0; border-radius: 8px; color: var(--text-muted); }
+.story-bank-manage > button:hover { background: color-mix(in oklab,var(--violet) 10%,transparent); color: var(--violet); }
+.story-bank-manage > button:disabled { opacity: .45; }
+.story-bank-card > strong { overflow: hidden; font-family: var(--font-display); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.story-bank-card > p { display: -webkit-box; overflow: hidden; color: var(--text-muted); font-size: 12px; line-height: 1.38; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.story-bank-actions { display: flex; gap: 5px; }
+.story-bank-actions button { display: inline-flex; min-height: 34px; flex: 1; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--border-soft); border-radius: 9px; background: color-mix(in oklab,var(--surface-strong) 78%,transparent); color: var(--text-soft); font-size: 11px; font-weight: 800; }
+.story-bank-actions button:hover { border-color: color-mix(in oklab,var(--violet) 45%,var(--border-soft)); color: var(--text-main); }
+
+.story-bank-parked { border: 1px solid var(--border-soft); border-radius: 11px; background: color-mix(in oklab,var(--surface-inset) 76%,transparent); }
+.story-bank-parked > summary { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; color: var(--text-muted); cursor: pointer; font-size: 11px; font-weight: 800; list-style: none; }
+.story-bank-parked > summary::-webkit-details-marker { display: none; }
+.story-bank-parked > summary span { display: grid; min-width: 21px; height: 21px; place-items: center; border-radius: 999px; background: color-mix(in oklab,var(--violet) 10%,transparent); color: var(--violet); font-family: var(--font-mono); font-size: 9px; }
+.story-bank-parked > div { display: grid; gap: 0; border-top: 1px solid var(--border-soft); padding: 0 9px; }
+.story-bank-parked article { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--border-soft); }
+.story-bank-parked article:last-child { border-bottom: 0; }
+.story-bank-parked article > span { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.story-bank-parked article > span:first-child { flex-direction: column; align-items: flex-start; }
+.story-bank-parked article strong, .story-bank-parked article small { overflow: hidden; max-width: min(54vw,420px); text-overflow: ellipsis; white-space: nowrap; }
+.story-bank-parked article strong { color: var(--text-main); font-size: 11px; }
+.story-bank-parked article small { color: var(--text-faint); font-size: 9px; }
+.story-bank-parked button { min-height: 30px; border: 1px solid var(--border-soft); border-radius: 8px; padding: 0 8px; color: var(--text-soft); font-size: 10px; font-weight: 800; }
+.story-bank-parked button:hover { border-color: color-mix(in oklab,var(--violet) 45%,var(--border-soft)); color: var(--violet); }
+
+.story-bank-empty {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  gap: 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 13px;
+  padding: 11px;
+  color: var(--text-muted);
+}
+.story-bank-empty > span:first-child { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: 11px; background: color-mix(in oklab,var(--violet) 12%,transparent); color: var(--violet); }
+.story-bank-empty > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.story-bank-empty strong { color: var(--text-main); font-size: 12px; }
+.story-bank-empty small { color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+
+.quick-story-directions { display: grid; min-width: 0; gap: 7px; border: 1px solid color-mix(in oklab,var(--violet) 22%,var(--border-soft)); border-radius: 13px; padding: 9px; background: linear-gradient(135deg,color-mix(in oklab,var(--violet) 7%,var(--surface-inset)),color-mix(in oklab,var(--cyan) 5%,var(--surface-inset))); }
+.quick-story-directions > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.quick-story-directions > header span { display: inline-flex; align-items: center; gap: 6px; color: var(--violet); }
+.quick-story-directions > header strong { color: var(--text-main); font-size: 12px; }
+.quick-story-directions > header small { color: var(--text-faint); font-size: 10px; }
+.quick-story-directions > div { display: flex; min-width: 0; gap: 6px; overflow-x: auto; padding-bottom: 2px; scroll-snap-type: x proximity; scrollbar-width: thin; }
+.quick-story-directions > div > button { display: flex; width: 174px; min-width: 174px; flex-direction: column; gap: 2px; scroll-snap-align: start; border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px; background: color-mix(in oklab,var(--surface-strong) 78%,transparent); text-align: left; }
+.quick-story-directions > div > button.on { border-color: color-mix(in oklab,var(--violet) 58%,var(--border-soft)); background: color-mix(in oklab,var(--violet) 11%,var(--surface-strong)); box-shadow: 0 0 0 2px color-mix(in oklab,var(--violet) 8%,transparent); }
+.quick-story-directions button > span { color: var(--violet); font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+.quick-story-directions button > strong,
+.quick-story-directions button > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-story-directions button > strong { color: var(--text-main); font-size: 12px; }
+.quick-story-directions button > small { color: var(--text-muted); font-size: 10px; }
+
+@media (max-width: 859px) {
+  .story-bank-card { width: min(74vw,250px); min-width: min(74vw,250px); min-height: 116px; }
+  .quick-story-directions { padding: 8px; }
+  .quick-story-directions > header small { display: none; }
+  .quick-story-directions > div > button { width: 158px; min-width: 158px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-bank-rail, .quick-story-directions > div { scroll-behavior: auto; }
+}

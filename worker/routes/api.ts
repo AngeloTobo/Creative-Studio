@@ -37,6 +37,7 @@ import {
   type RetryJobRequest,
   type SaveWorkflowRevisionRequest,
   type StudioSnapshot,
+  type SubmitJobBatchRequest,
   type SubmitJobRequest,
   type VideoDurationSeconds,
   type VideoPerformanceMode,
@@ -75,6 +76,11 @@ import {
   type RunnerVideoScriptDraftHeartbeatRequest,
   type RunnerCompleteVideoScriptDraftRequest,
   type RunnerFailVideoScriptDraftRequest,
+  type CompleteStoryPlanRequest,
+  type FailStoryPlanRequest,
+  type RefreshStoryBankRequest,
+  type StoryPlanHeartbeatRequest,
+  type UpdateStoryThreadRequest,
   videoScriptWordRange,
   videoWorkflowDurationParameters,
   videoWorkflowPromptProfile,
@@ -88,6 +94,7 @@ import { mediaContent, requestedMediaRange, uploadMedia } from "../media";
 import {
   artifactMediaPath,
   artifactThumbnailPath,
+  artifactsByIds,
   archiveProject,
   cancelOwnedJob,
   createDevelopmentJob,
@@ -109,6 +116,8 @@ import {
   listTrainingExamples,
   listProjects,
   projectById,
+  localDnaByIds,
+  mediaAssetsByIds,
   reconcileDevelopmentJobs,
   reviewArtifact,
   runnerInputById,
@@ -140,6 +149,7 @@ import {
   promptSafeWorkflowExecutionPlan,
   workflowContent,
   workflowExecutionPlan,
+  workflowsByIds,
 } from "../workflows";
 import {
   authenticateLocalRunner,
@@ -156,10 +166,12 @@ import {
   revokeLocalRunner,
   supportsCreativeDnaMediaDescriptions,
   supportsSongPromptEnhancement,
+  supportsStoryPlanning,
 } from "../runner";
 import {
   cancelCreativeDnaTrainingJob,
   creativeDnaTrainingEvidencePool,
+  creativeDnaTrainingReviewsByDnaIds,
   assertCreativeDnaReviewed,
   claimLocalRunnerTrainingJob,
   completeLocalRunnerTrainingJob,
@@ -228,6 +240,33 @@ import {
   reconcileLoveLoops,
   resumeLoveLoop,
 } from "../loveLoop";
+import {
+  claimStoryPlan,
+  completeStoryPlan,
+  createStoryBankRefresh,
+  ensureAutomaticStoryRefresh,
+  failStoryPlan,
+  heartbeatStoryPlan,
+  listStoryBank,
+  markStoryRecommendationUsed,
+  storyRecommendationStampForJob,
+  updateStoryThread,
+} from "../stories";
+import {
+  advanceGenerationBatch,
+  cancelGenerationBatch,
+  claimGenerationBatch,
+  deferGenerationBatch,
+  generationBatchById,
+  generationBatchJobs,
+  generationBatchLaneJobs,
+  listGenerationBatches,
+  prioritizeGenerationBatchJobs,
+  registerGenerationBatch,
+  releaseGenerationBatch,
+  settleGenerationBatch,
+  type GenerationBatchRecord,
+} from "../generationBatches";
 
 function developmentMode(env: Env) {
   return backendMode(env) === "development";
@@ -276,6 +315,9 @@ function statusFor(error: string) {
     || error === "overnight_plan_not_completable" || error === "overnight_plan_conflict") return 409;
   if (error === "love_loop_already_configured" || error === "love_loop_not_pauseable"
     || error === "love_loop_not_resumable" || error === "love_loop_not_active") return 409;
+  if (error === "story_plan_not_completable" || error === "story_thread_version_conflict"
+    || error === "story_recommendation_changed") return 409;
+  if (error === "generation_batch_conflict" || error === "generation_batch_terminal") return 409;
   if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
     || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
     || error === "artifact_already_canonical") return 409;
@@ -319,6 +361,104 @@ function reconciliationEmail(request: Request) {
   const email = String(request.headers.get("cf-access-authenticated-user-email") ?? "").trim().toLowerCase();
   if (!email || email.length > 320 || !email.includes("@")) throw new Error("background_identity_required");
   return email;
+}
+
+function generationBatchErrorIsPermanent(error: string) {
+  return /^(?:invalid_|unknown_|creative_dna_not_found|dna_project_mismatch|project_not_found|project_archived|workflow_.*(?:required|missing|mismatch|not_found|not_supported)|runner_input_.*(?:not_found|mismatch)|video_.*(?:required|missing|mismatch|not_supported)|generation_batch_conflict)/i.test(error);
+}
+
+function internalBatchLaneRequest(incoming: Request, batch: GenerationBatchRecord, input: SubmitJobRequest) {
+  const headers = new Headers(incoming.headers);
+  headers.set("content-type", "application/json");
+  headers.delete("content-length");
+  headers.delete("authorization");
+  headers.delete("x-creative-studio-runner-token");
+  if (batch.reconcileEmail) headers.set("cf-access-authenticated-user-email", batch.reconcileEmail);
+  return new Request(new URL("/api/creative-studio/jobs", incoming.url), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(input),
+  });
+}
+
+function batchLaneRetryKey(lane: number, failedJobId: string) {
+  const stableJobId = failedJobId.replace(/[^a-z0-9_-]/gi, "_").slice(-72);
+  return `batch_retry_${lane}_${stableJobId}`;
+}
+
+function internalBatchLaneRetryRequest(incoming: Request, batch: GenerationBatchRecord, failedJob: Job, lane: number) {
+  const headers = new Headers(incoming.headers);
+  headers.set("content-type", "application/json");
+  headers.delete("content-length");
+  headers.delete("authorization");
+  headers.delete("x-creative-studio-runner-token");
+  if (batch.reconcileEmail) headers.set("cf-access-authenticated-user-email", batch.reconcileEmail);
+  return new Request(new URL(`/api/creative-studio/jobs/${failedJob.id}/retry`, incoming.url), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ idempotencyKey: batchLaneRetryKey(lane, failedJob.id) }),
+  });
+}
+
+async function reconcileGenerationBatch(
+  incoming: Request,
+  env: Env,
+  ownerId: string,
+  requestedBatchId?: string,
+) {
+  let batch = await claimGenerationBatch(env, ownerId, requestedBatchId);
+  if (!batch) return requestedBatchId ? generationBatchById(env, ownerId, requestedBatchId) : null;
+  try {
+    await prioritizeGenerationBatchJobs(env, ownerId, batch.id);
+    const materialized = await generationBatchLaneJobs(env, ownerId, batch.id);
+    const cancelled = materialized.find((job) => job.status === "cancelled");
+    if (cancelled) {
+      const cancelledLane = Number(cancelled.settingsStamp.outputBatch?.index ?? batch.nextLane);
+      batch = (await cancelGenerationBatch(env, ownerId, batch.id, cancelledLane))!;
+      return batch;
+    }
+    for (let lane = 1; lane <= batch.laneCount; lane += 1) {
+      const laneRequest = batch.request.jobs[lane - 1];
+      const laneJobs = materialized.filter((job) => Number(job.settingsStamp.outputBatch?.index) === lane);
+      const completed = laneJobs.find((job) => job.status === "completed");
+      const active = laneJobs.find((job) => job.status === "queued" || job.status === "running");
+      const failed = laneJobs.filter((job) => job.status === "failed").at(-1);
+      if (!completed && !active && failed) {
+        const error = boundedText(failed.error, 500) || `generation_batch_lane_${lane}_render_failed`;
+        if (batch.failedLane !== lane || !batch.nextAttemptAt) {
+          batch = (await deferGenerationBatch(env, ownerId, batch.id, lane, error, generationBatchErrorIsPermanent(error)))!;
+          return batch;
+        }
+        const response = await routeCreativeStudioApi(internalBatchLaneRetryRequest(incoming, batch, failed, lane), env);
+        const payload = await response.json() as { ok?: boolean; error?: string; job?: Job };
+        if (!response.ok || payload.ok !== true || !payload.job) {
+          const retryError = boundedText(payload.error, 500) || `generation_batch_lane_${lane}_retry_failed`;
+          batch = (await deferGenerationBatch(env, ownerId, batch.id, lane, retryError, generationBatchErrorIsPermanent(retryError)))!;
+          return batch;
+        }
+        continue;
+      }
+      if (!completed && !active) {
+        const response = await routeCreativeStudioApi(internalBatchLaneRequest(incoming, batch, laneRequest), env);
+        const payload = await response.json() as { ok?: boolean; error?: string };
+        if (!response.ok || payload.ok !== true) {
+          const error = boundedText(payload.error, 500) || `generation_batch_lane_${lane}_failed`;
+          batch = (await deferGenerationBatch(env, ownerId, batch.id, lane, error, generationBatchErrorIsPermanent(error)))!;
+          return batch;
+        }
+      }
+      if (lane >= batch.nextLane) batch = (await advanceGenerationBatch(env, ownerId, batch.id, lane))!;
+    }
+    batch = (await settleGenerationBatch(env, ownerId, batch.id))!;
+    return batch;
+  } catch (caught) {
+    const error = caught instanceof Error ? caught.message : "generation_batch_reconciliation_failed";
+    batch = (await deferGenerationBatch(env, ownerId, batch.id, batch.nextLane, error, generationBatchErrorIsPermanent(error)))!;
+    return batch;
+  } finally {
+    const current = await generationBatchById(env, ownerId, batch.id);
+    if (current?.status === "running") await releaseGenerationBatch(env, ownerId, batch.id);
+  }
 }
 
 function workflowJobModality(value: string): GenerationModality {
@@ -502,6 +642,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
     const promptEnhancementAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoPromptEnhancement(runner.version));
     const videoScriptAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoScriptDrafts(runner.version));
+    const storyPlannerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsStoryPlanning(runner.version));
     const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
       && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
     if (localHardwareMode(env)) return [
@@ -518,6 +659,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local ComfyUI", detail: "A real executable video workflow is required and runs on this machine.", checkedAt },
       { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: promptEnhancementAvailable ? "Gemma 4 can inspect the selected first frame and compile an editable, model-specific video direction." : "Start Local Runner 1.10 or newer with Gemma 4 available.", checkedAt },
       { key: "script-builder", label: "Full Video Script", state: videoScriptAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: videoScriptAvailable ? "Turn one idea into an editable model-specific scene with action, camera, sound, and optional dialogue." : "Start Local Runner 1.12 or newer with Gemma 4 available.", checkedAt },
+      { key: "story-bank", label: "Story Bank", state: storyPlannerAvailable ? "available" : "degraded", provider: "Local ComfyUI + Gemma 4", detail: storyPlannerAvailable ? "The idle Local Runner prepares reusable story, image, video, and music directions in one batch, then unloads the model." : "Start Local Runner 1.17 or newer to prepare durable recommendations.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends music generation to AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "remote mode only", detail: "Local hardware mode never sends image generation to AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Local Creative Studio D1", detail: "Review decisions are explicit, append-only, and local.", checkedAt },
@@ -538,6 +680,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
       { key: "video-generation", label: "Video generation", state: "unavailable", provider: "local runner required", detail: "Video workflow execution requires a paired Local Runner.", checkedAt },
       { key: "prompt-enhancement", label: "Video prompt enhancement", state: "unavailable", provider: "local runner required", detail: "Real prompt enhancement is never simulated by the development adapter.", checkedAt },
       { key: "script-builder", label: "Full Video Script", state: "unavailable", provider: "local runner required", detail: "Real full-scene writing is never simulated by the development adapter.", checkedAt },
+      { key: "story-bank", label: "Story Bank", state: "unavailable", provider: "local runner required", detail: "The development adapter never invents placeholder stories or prompt recommendations.", checkedAt },
       { key: "afdfw-music-generation", label: "AFDFW music generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "afdfw-image-generation", label: "AFDFW image generation", state: "unavailable", provider: "not configured", detail: "Development mode does not call AFDFW.", checkedAt },
       { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Accept, reject, and archive decisions are explicit and append-only.", checkedAt },
@@ -552,6 +695,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
   const musicRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsSongPromptEnhancement(runner.version));
   const promptEnhancementAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoPromptEnhancement(runner.version));
   const videoScriptAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsVideoScriptDrafts(runner.version));
+  const storyPlannerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsStoryPlanning(runner.version));
   const aceStepTrainingAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy")
     && runner.modelTrainingProviders.includes("ace-step-1.5-lora"));
   const generationState = session.status === "approved" ? "available" : "unavailable";
@@ -569,6 +713,7 @@ async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awai
     { key: "video-generation", label: "Video generation", state: runnerAvailable ? "available" : "degraded", provider: "Local Runner + ComfyUI", detail: runnerAvailable ? "Versioned API-format video workflows can execute on the paired machine." : "Video jobs remain durable and wait for the paired machine to come online.", checkedAt },
     { key: "prompt-enhancement", label: "Video prompt enhancement", state: promptEnhancementAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: promptEnhancementAvailable ? "Gemma 4 can inspect a selected image or extension frame and return an editable prompt compiled for the selected video model." : "Prompt requests stay durable until Local Runner 1.10 or newer is online.", checkedAt },
     { key: "script-builder", label: "Full Video Script", state: videoScriptAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + ComfyUI", detail: videoScriptAvailable ? "Gemma 4 expands even one seed into an owner-reviewed, model-specific full scene with optional exact dialogue." : "Full-script drafts stay durable until Local Runner 1.12 or newer is online.", checkedAt },
+    { key: "story-bank", label: "Story Bank", state: storyPlannerAvailable ? "available" : "degraded", provider: "Local Runner + Gemma 4 + Creative Studio D1", detail: storyPlannerAvailable ? "Reusable story and model-ready prompt packs are prepared locally only while the runner is otherwise idle." : "Recommendations stay durable and wait for Local Runner 1.17 or newer; browsing them never loads a model.", checkedAt },
     { key: "afdfw-music-generation", label: "AFDFW music generation", state: generationState, provider: "AFDFW Stable Audio adapter", detail: "Optional remote route through the exact allowlisted AFDFW music capability; it is never selected automatically.", checkedAt },
     { key: "afdfw-image-generation", label: "AFDFW image generation", state: generationState, provider: "AFDFW Z-Image adapter", detail: "Optional remote route through the exact allowlisted AFDFW image capability; it is never selected automatically.", checkedAt },
     { key: "artifact-review", label: "Artifact review", state: "available", provider: "Creative Studio D1", detail: "Creative Studio decisions do not silently mutate AFDFW profile or feed state.", checkedAt },
@@ -583,12 +728,18 @@ async function syncJobs(env: Env, ownerId: string) {
   }
 }
 
+function mergeSnapshotExact<T>(current: T[], exact: T[], key: (item: T) => string) {
+  const represented = new Set(current.map(key));
+  return [...current, ...exact.filter((item) => !represented.has(key(item)))];
+}
+
 async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<StudioSnapshot> {
   await syncJobs(env, session.userId);
-  const [projects, dnaArtifacts, jobs, jobRuntime, artifacts, mediaAssets, acceptances, trainingExamples, workflows, recipes, trainingJobs, trainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, overnightSessions, loveLoop, runners, worldRecords] = await Promise.all([
+  const [projects, recentDnaArtifacts, jobs, generationBatches, jobRuntime, recentArtifacts, recentMediaAssets, acceptances, trainingExamples, recentWorkflows, recipes, trainingJobs, recentTrainingReviews, modelTrainingJobs, modelAdapters, modelAdapterReviews, promptEnhancements, videoScriptDrafts, overnightSessions, loveLoop, storyBank, runners, worldRecords] = await Promise.all([
     listProjects(env, session.userId),
     listLocalDna(env, session.userId),
     listJobs(env, session.userId),
+    listGenerationBatches(env, session.userId),
     listJobRuntime(env, session.userId),
     listArtifacts(env, session.userId),
     listMediaAssets(env, session.userId),
@@ -605,9 +756,33 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     listVideoScriptDrafts(env, session.userId),
     listOvernightSessions(env, session.userId),
     loveLoopForOwner(env, session.userId),
+    listStoryBank(env, session.userId),
     listLocalRunners(env, session.userId),
     listWorldRecords(env, session.userId),
   ]);
+  const visibleRecommendations = storyBank.storyThreads.flatMap((story) => story.recommendations);
+  const requiredDnaIds = [...new Set([
+    ...projects.map((project) => project.activeDnaArtifactId).filter((value): value is string => Boolean(value)),
+    ...storyBank.storyThreads.map((story) => story.dnaArtifactId),
+  ])];
+  const [exactDnaArtifacts, exactArtifacts, exactMediaAssets, exactWorkflows, exactTrainingReviews] = await Promise.all([
+    localDnaByIds(env, session.userId, requiredDnaIds),
+    artifactsByIds(env, session.userId, visibleRecommendations
+      .filter((recommendation) => recommendation.sourceType === "artifact" && recommendation.sourceId)
+      .map((recommendation) => recommendation.sourceId!)),
+    mediaAssetsByIds(env, session.userId, visibleRecommendations
+      .filter((recommendation) => recommendation.sourceType === "upload" && recommendation.sourceId)
+      .map((recommendation) => recommendation.sourceId!)),
+    workflowsByIds(env, session.userId, visibleRecommendations
+      .map((recommendation) => recommendation.workflowId)
+      .filter((value): value is string => Boolean(value))),
+    creativeDnaTrainingReviewsByDnaIds(env, session.userId, requiredDnaIds),
+  ]);
+  const dnaArtifacts = mergeSnapshotExact(recentDnaArtifacts, exactDnaArtifacts, (artifact) => artifact.artifactId);
+  const artifacts = mergeSnapshotExact(recentArtifacts, exactArtifacts, (artifact) => artifact.id);
+  const mediaAssets = mergeSnapshotExact(recentMediaAssets, exactMediaAssets, (asset) => asset.id);
+  const workflows = mergeSnapshotExact(recentWorkflows, exactWorkflows, (workflow) => workflow.id);
+  const trainingReviews = mergeSnapshotExact(recentTrainingReviews, exactTrainingReviews, (review) => review.id);
   const computedAt = new Date().toISOString();
   const tasteMemory = compileCreativeTasteMemory({ projects, artifacts, acceptances, trainingReviews, dnaArtifacts });
   const evidencePools = await Promise.all(projects.map((project) => creativeDnaTrainingEvidencePool(env, session.userId, project.id)));
@@ -627,10 +802,13 @@ async function buildStudioSnapshot(env: Env, session: OwnerSession): Promise<Stu
     projects,
     dnaArtifacts,
     jobs,
+    generationBatches,
     promptEnhancements,
     videoScriptDrafts,
     overnightSessions,
     loveLoop,
+    storyThreads: storyBank.storyThreads,
+    storyBankRefreshes: storyBank.storyBankRefreshes,
     artifacts,
     mediaAssets,
     workflows,
@@ -670,6 +848,7 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (promptEnhancement) return json({ ok: true, kind: "prompt-enhancement", bundle: promptEnhancement });
     const videoScript = await claimVideoScriptDraft(env, currentRunner);
     if (videoScript) return json({ ok: true, kind: "video-script", bundle: videoScript });
+    await reconcileGenerationBatch(request, env, currentRunner.ownerId);
     const generation = await claimLocalRunnerJob(env, currentRunner);
     if (generation) return json({ ok: true, kind: "generation", bundle: generation });
     const training = await claimLocalRunnerTrainingJob(env, currentRunner);
@@ -678,6 +857,11 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (modelTraining) return json({ ok: true, kind: "model-training", bundle: modelTraining });
     const overnightPlan = await claimOvernightPlan(env, currentRunner);
     if (overnightPlan) return json({ ok: true, kind: "overnight-plan", bundle: overnightPlan });
+    if (supportsStoryPlanning(currentRunner.version)) {
+      await ensureAutomaticStoryRefresh(env, currentRunner.ownerId);
+      const storyPlan = await claimStoryPlan(env, currentRunner);
+      if (storyPlan) return json({ ok: true, kind: "story-plan", bundle: storyPlan });
+    }
     return json({ ok: true, kind: null, bundle: null });
   }
   if (route === "runner-heartbeat") {
@@ -702,6 +886,24 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const input = await body<FailOvernightPlanRequest>(request);
     if (!match || !input) throw new Error("invalid_runner_request");
     return json({ ok: true, overnightSession: await failOvernightPlan(env, runner, match[1], input) });
+  }
+  if (route === "runner-story-plan-heartbeat") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/story-plans\/([a-z0-9_]+)\/heartbeat$/i);
+    const input = await body<StoryPlanHeartbeatRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, storyBankRefresh: await heartbeatStoryPlan(env, runner, match[1], input) });
+  }
+  if (route === "runner-story-plan-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/story-plans\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<CompleteStoryPlanRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, storyBankRefresh: await completeStoryPlan(env, runner, match[1], input) });
+  }
+  if (route === "runner-story-plan-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/story-plans\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<FailStoryPlanRequest>(request);
+    if (!match || !input) throw new Error("invalid_runner_request");
+    return json({ ok: true, storyBankRefresh: await failStoryPlan(env, runner, match[1], input) });
   }
   if (route === "runner-prompt-enhancement-heartbeat") {
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/prompt-enhancements\/([a-z0-9_]+)\/heartbeat$/i);
@@ -740,6 +942,7 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     return json({ ok: true, videoScriptDraft: await failVideoScriptDraft(env, runner, match[1], input.error) });
   }
   if (route === "runner-job-claim") {
+    await reconcileGenerationBatch(request, env, runner.ownerId);
     return json({ ok: true, bundle: await claimLocalRunnerJob(env, runner) });
   }
   if (route === "runner-job-heartbeat") {
@@ -752,7 +955,11 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/jobs\/([a-z0-9_]+)\/fail$/i);
     const input = await body<RunnerFailJobRequest>(request);
     if (!match || !input) throw new Error("invalid_runner_request");
-    return json({ ok: true, job: await failLocalRunnerJob(env, runner, match[1], input.error) });
+    const job = await failLocalRunnerJob(env, runner, match[1], input.error);
+    if (job.settingsStamp.outputBatch) {
+      await reconcileGenerationBatch(request, env, runner.ownerId, job.settingsStamp.outputBatch.batchId);
+    }
+    return json({ ok: true, job });
   }
   if (route === "runner-job-complete") {
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/jobs\/([a-z0-9_]+)\/complete$/i);
@@ -831,7 +1038,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     const session = await ownerSession(env, request);
     const responseHeaders = session.setCookie ? { "set-cookie": session.setCookie } : undefined;
 
-    if (route === "snapshot") return json({ ok: true, snapshot: await buildStudioSnapshot(env, session) }, { headers: responseHeaders });
+    if (route === "snapshot") {
+      return json({ ok: true, snapshot: await buildStudioSnapshot(env, session) }, { headers: responseHeaders });
+    }
     if (route === "session") return json({ ok: true, session: { status: session.status, userId: session.userId, displayName: session.displayName } }, { headers: responseHeaders });
     if (route === "projects") return json({ ok: true, projects: await listProjects(env, session.userId) });
     if (route === "project-create") {
@@ -990,6 +1199,22 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           : await disableLoveLoop(env, session.userId);
       return json({ ok: true, loveLoop });
     }
+    if (route === "story-bank-list") {
+      const projectId = boundedText(url.searchParams.get("projectId"), 100) || null;
+      const limit = Number(url.searchParams.get("limit") ?? 24);
+      return json({ ok: true, ...await listStoryBank(env, session.userId, projectId, limit) });
+    }
+    if (route === "story-bank-refresh") {
+      const input = await body<RefreshStoryBankRequest>(request);
+      if (!input) throw new Error("invalid_story_bank_refresh");
+      return json({ ok: true, storyBankRefresh: await createStoryBankRefresh(env, session.userId, input) }, { status: 202 });
+    }
+    if (route === "story-thread-update") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/story-bank\/stories\/([a-z0-9_]+)$/i);
+      const input = await body<UpdateStoryThreadRequest>(request);
+      if (!match || !input) throw new Error("invalid_story_thread_update");
+      return json({ ok: true, storyThread: await updateStoryThread(env, session.userId, match[1], input) });
+    }
     if (route === "prompt-enhancement-create") {
       const input = await body<CreateVideoPromptEnhancementRequest>(request);
       if (!input) throw new Error("invalid_prompt_enhancement_request");
@@ -1015,6 +1240,30 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const input = await body<UpdateVideoScriptDraftRequest>(request);
       if (!match || !input) throw new Error("invalid_video_script_request");
       return json({ ok: true, videoScriptDraft: await updateVideoScriptDraft(env, session.userId, match[1], input) });
+    }
+    if (route === "job-batch-create") {
+      const input = await body<SubmitJobBatchRequest>(request);
+      if (!input) throw new Error("invalid_generation_batch");
+      const registered = await registerGenerationBatch(
+        env,
+        session.userId,
+        input,
+        developmentMode(env) ? null : reconciliationEmail(request),
+      );
+      if (registered.status === "failed" || registered.status === "cancelled") throw new Error("generation_batch_terminal");
+      const reconciled = await reconcileGenerationBatch(request, env, session.userId, registered.id) ?? registered;
+      if (reconciled.status === "failed" || reconciled.status === "cancelled") throw new Error("generation_batch_terminal");
+      const jobs = await generationBatchJobs(env, session.userId, reconciled);
+      return json({
+        ok: true,
+        batch: {
+          batchId: reconciled.id,
+          status: reconciled.status,
+          completedLanes: jobs.length,
+          laneCount: reconciled.laneCount,
+        },
+        jobs,
+      }, { status: 202 });
     }
     if (route === "jobs-create") {
       const input = await body<SubmitJobRequest>(request);
@@ -1097,6 +1346,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         throw new Error("invalid_generation_provider");
       }
       if (input.promptReference && !input.workflow) throw new Error("prompt_reference_workflow_required");
+      if (input.storyRecommendation && !input.workflow) throw new Error("story_recommendation_workflow_required");
       if (input.workflow) {
         if (input.provider) throw new Error("workflow_provider_conflict");
         if (!input.workflow.workflowId || !input.workflow.revisionId || !input.workflow.inputBindings || typeof input.workflow.inputBindings !== "object") {
@@ -1276,6 +1526,17 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           projectTasteSignalIds: Object.values(evolutionTaste.projects[input.projectId]?.taste ?? { preserve: [], redirect: [], avoid: [] }).flatMap((value) => Array.isArray(value) ? value.map((signal) => signal.id) : []),
           createdAt,
         } : undefined;
+        const storyRecommendation = input.storyRecommendation
+          ? await storyRecommendationStampForJob(env, session.userId, {
+            projectId: input.projectId,
+            dnaArtifactId: dna.artifactId,
+            modality,
+            prompt,
+            workflowId: plan.workflow.id,
+            workflowRevisionId: plan.workflow.currentRevision.id,
+            selection: input.storyRecommendation,
+          })
+          : undefined;
         const created = await createQueuedJob(env, session.userId, {
           projectId: input.projectId,
           dna,
@@ -1287,6 +1548,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           executionTarget: "local-comfyui",
           workflowId: plan.workflow.id,
           workflowRevisionId: plan.workflow.currentRevision.id,
+          priority: outputBatch ? 900 : undefined,
           settingsStampOverride: {
             schemaVersion: 1,
             source: "comfyui-workflow",
@@ -1333,8 +1595,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
             } : undefined,
             continuity,
             promptEnhancement,
+            storyRecommendation,
           },
         });
+        if (input.storyRecommendation) await markStoryRecommendationUsed(env, session.userId, input.storyRecommendation);
         return json({ ok: true, job: created.job }, { status: 202 });
       }
       if (input.continuity) throw new Error("continuity_workflow_required");
@@ -1441,6 +1705,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         workflowId: original.settingsStamp.workflow?.workflowId ?? null,
         workflowRevisionId: original.settingsStamp.workflow?.revisionId ?? null,
         upstreamId: resumeLocalUpstream ? original.upstreamId : null,
+        priority: original.settingsStamp.outputBatch ? 900 : undefined,
         settingsStampOverride: {
           ...original.settingsStamp,
           createdAt,
@@ -1458,7 +1723,11 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     if (route === "job-cancel") {
       const match = url.pathname.match(/^\/api\/creative-studio\/jobs\/([a-z0-9_]+)\/cancel$/i);
       if (!match) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
-      return json({ ok: true, job: await cancelOwnedJob(env, session.userId, match[1]) });
+      const job = await cancelOwnedJob(env, session.userId, match[1]);
+      if (job.settingsStamp.outputBatch) {
+        await cancelGenerationBatch(env, session.userId, job.settingsStamp.outputBatch.batchId, job.settingsStamp.outputBatch.index);
+      }
+      return json({ ok: true, job });
     }
     if (route === "artifacts-list") {
       if (url.search) return json({ ok: true, page: await listArtifactHistoryPage(env, session.userId, artifactHistoryQuery(url)) });

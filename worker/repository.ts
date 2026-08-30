@@ -481,6 +481,15 @@ export async function listMediaAssets(env: Env, ownerId: string): Promise<MediaA
   return (result.results ?? []).map(mapMedia);
 }
 
+export async function mediaAssetsByIds(env: Env, ownerId: string, mediaIds: string[]): Promise<MediaAsset[]> {
+  const ids = [...new Set(mediaIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const result = await env.DB.prepare(`select ${MEDIA_COLUMNS} from creative_media_assets
+    where owner_id = ? and id in (select value from json_each(?)) order by created_at desc, id desc`)
+    .bind(ownerId, JSON.stringify(ids)).all<MediaRow>();
+  return (result.results ?? []).map(mapMedia);
+}
+
 export async function createMediaAsset(
   env: Env,
   ownerId: string,
@@ -601,6 +610,16 @@ export async function listLocalDna(env: Env, ownerId: string): Promise<CreativeD
   return (result.results ?? []).map(parseDna).filter((item): item is CreativeDnaArtifact => Boolean(item));
 }
 
+export async function localDnaByIds(env: Env, ownerId: string, dnaArtifactIds: string[]): Promise<CreativeDnaArtifact[]> {
+  const ids = [...new Set(dnaArtifactIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const result = await env.DB.prepare(`select id, root_artifact_id as rootArtifactId,
+    parent_artifact_id as parentArtifactId, version, dna_json as dnaJson from creative_dna_artifacts
+    where owner_id = ? and id in (select value from json_each(?)) order by created_at desc, id desc`)
+    .bind(ownerId, JSON.stringify(ids)).all<DnaRow>();
+  return (result.results ?? []).map(parseDna).filter((item): item is CreativeDnaArtifact => Boolean(item));
+}
+
 export async function createLocalDna(env: Env, ownerId: string, input: CreateCreativeDnaRequest) {
   const project = await env.DB.prepare("select id, status from creative_projects where id = ? and owner_id = ?").bind(input.projectId, ownerId).first<{ id: string; status: Project["status"] }>();
   if (!project) throw new Error("project_not_found");
@@ -717,6 +736,12 @@ export async function listJobRuntime(env: Env, ownerId: string) {
 export async function jobById(env: Env, ownerId: string, jobId: string) {
   const row = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where id = ? and owner_id = ?`)
     .bind(jobId, ownerId).first<JobRow>();
+  return row ? mapJob(row) : null;
+}
+
+export async function jobByIdempotencyKey(env: Env, ownerId: string, key: string) {
+  const row = await env.DB.prepare(`select ${PUBLIC_JOB_COLUMNS} from creative_jobs where owner_id = ? and idempotency_key = ?`)
+    .bind(ownerId, key).first<JobRow>();
   return row ? mapJob(row) : null;
 }
 
@@ -1197,6 +1222,15 @@ function mapArtifact(row: ArtifactRow): Artifact {
 
 export async function listArtifacts(env: Env, ownerId: string): Promise<Artifact[]> {
   const result = await env.DB.prepare(`select ${ARTIFACT_COLUMNS} from creative_artifacts where owner_id = ? order by created_at desc, id desc limit ?`).bind(ownerId, ARTIFACT_SNAPSHOT_LIMIT).all<ArtifactRow>();
+  return (result.results ?? []).map(mapArtifact);
+}
+
+export async function artifactsByIds(env: Env, ownerId: string, artifactIds: string[]): Promise<Artifact[]> {
+  const ids = [...new Set(artifactIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const result = await env.DB.prepare(`select ${ARTIFACT_COLUMNS} from creative_artifacts
+    where owner_id = ? and id in (select value from json_each(?)) order by created_at desc, id desc`)
+    .bind(ownerId, JSON.stringify(ids)).all<ArtifactRow>();
   return (result.results ?? []).map(mapArtifact);
 }
 
