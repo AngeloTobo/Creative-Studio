@@ -14,8 +14,8 @@ Creative Studio is deployed independently at `https://cs.angelotoborg.com`.
 - Custom domain: `cs.angelotoborg.com`
 - Local Runner API domain: `runner.cs.angelotoborg.com` (runner routes only; no shell)
 - Cloudflare Access: application `Creative Studio`, destination `cs.angelotoborg.com/*`, policy `Angelo only`
-- Production Worker version verified on 2026-08-29: `e747d286-84a2-472c-bf6f-91e65394727c`
-- Installed runner process: `Angelo RTX 3090 workstation`, runner `1.15.0`; D1 recorded a healthy idle heartbeat at `2026-08-29T18:25:13.152Z` with no active job or runner error
+- Production Worker version deployed on 2026-08-30 at `2026-08-30T06:12:33.765219Z`: `8781c59a-4254-4307-9ebd-d6d4ed0f3ecb`
+- Installed runner process: `Angelo RTX 3090 workstation`, runner `1.17.1`; D1 recorded a healthy idle heartbeat at `2026-08-30T06:13:48.379Z` with no active job or runner error
 
 ## Release sequence
 
@@ -33,9 +33,9 @@ This runs the complete local verification suite, validates the production contra
 4. Anonymous requests to both `/` and `/api/creative-studio/session` redirect to Cloudflare Access.
 5. The Access destination remains `cs.angelotoborg.com/*`; a hostname-only destination protects `/` but not deeper API paths.
 6. `runner.cs.angelotoborg.com/` returns `404`; its unauthenticated claim route returns `401`; the main product root still redirects through Cloudflare Access.
-7. An authenticated product check reports Local Runner, video generation, multimodal CreativeDNA descriptions, Full Video Script v2, Overnight Studio, the opt-in Angelo daily Love Loop, and trusted 30-second video generation available while a recent Local Runner 1.15 heartbeat is healthy.
-8. Remote D1 has no pending migration after `0021_love_loop.sql`; runner registration exists and deployment verification adds no job, artifact, training-review, overnight-session, overnight-task, Love Loop, or Love Loop drop fixtures.
-9. Windows Scheduled Task `Creative Studio Local Runner` is running with sign-in and daily recovery triggers, StartWhenAvailable, WakeToRun, and 12 restart attempts; its config ACL permits only the current user and SYSTEM, and D1 reports no runner error.
+7. An authenticated product check reports Local Runner, video generation, multimodal CreativeDNA descriptions, Full Video Script v2, Overnight Studio, the opt-in Angelo daily Love Loop, trusted 30-second video generation, Story Bank planning, and resilient paired-generation recovery available while a recent Local Runner 1.17 heartbeat is healthy.
+8. Remote D1 has no pending migration after `0023_generation_batches.sql`; `0022_story_bank.sql` and `0023_generation_batches.sql` are applied. The first automatic Story Bank scan created one scheduler row and retained one failed planner refresh after Gemma used valid inline MiniMax Music headings; it created zero story threads, recommendations, generation batches, media jobs, artifacts, training reviews, acceptances, or canon changes. The `1.17.1` hotfix preserves that audit row and requires an explicit owner retry.
+9. Windows Scheduled Task `Creative Studio Local Runner` is running exactly one runner process with sign-in and daily recovery triggers, StartWhenAvailable, WakeToRun, and 12 restart attempts; its config ACL permits only the current user and SYSTEM, and D1 reports no active job or runner error.
 10. `npm run check:cloudflare-free` reports no more than 2,904 baseline Worker invocations per day, and deployment output confirms the hourly schedule with Queue retries capped at three.
 
 ## Rollback
