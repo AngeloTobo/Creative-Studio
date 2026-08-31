@@ -4,7 +4,7 @@ import type {
   ProductionCockpitDecision,
   ProductionCockpitRun,
 } from "../../../shared/contracts";
-import { videoGenerationVariantLabel } from "../../../shared/contracts";
+import { primaryVideoDoctorFinding, videoDoctorGuidance, videoGenerationVariantLabel } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
 import { videoSpeechLabel, videoSpeechSummary } from "../generation/videoContextPresentation";
@@ -244,6 +244,9 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
           const videoVariant = job?.settingsStamp.videoVariant ?? null;
           const videoSpeech = job?.settingsStamp.videoSpeech ?? null;
           const videoRole = videoVariant ? videoGenerationVariantLabel(videoVariant.role) : null;
+          const videoDoctor = snapshot?.runners.find((runner) => runner.videoDoctor?.queue.creativeStudioJobId === run.id)?.videoDoctor ?? null;
+          const videoDoctorFinding = primaryVideoDoctorFinding(videoDoctor);
+          const videoDoctorCopy = videoDoctorFinding ? videoDoctorGuidance(videoDoctorFinding.code) : null;
           return <article className={`cockpit-run${focusRunId === run.id ? " cockpit-focus" : ""}`} id={`cockpit-run-${run.id}`} key={run.id}>
           <span className="cockpit-run-kind"><Icon name={iconFor(run)} size={18} /><i className={run.status} /></span>
           <span className="cockpit-run-primary"><span className="cockpit-run-context"><small>{run.projectName} · {timestamp(run.createdAt)}</small>{videoRole ? <span className="video-context-chip role">{videoRole}</span> : null}{videoSpeech ? <span className="video-context-chip speech" aria-label={videoSpeechSummary(videoSpeech)} title={videoSpeechSummary(videoSpeech)}>{videoSpeechLabel(videoSpeech)}</span> : null}</span><strong>{run.title}</strong><p>{run.detail}</p></span>
@@ -268,6 +271,7 @@ export function CockpitView({ focusRunId, onOpen, embedded = false, mode = "dash
               <span className="cockpit-run-detail-wide"><small>Models</small><b>{run.models.length ? run.models.join(" · ") : "No model inventory stamped"}</b></span>
               <span className="cockpit-run-detail-wide"><small>Run ID</small><code>{run.id}</code></span>
               {run.error ? <span className="cockpit-run-error cockpit-run-detail-wide"><small>Failure</small><b>{run.error.replaceAll("_", " ")}</b></span> : null}
+              {videoDoctorCopy ? <span className="cockpit-run-doctor cockpit-run-detail-wide"><small>Video Doctor</small><b>{videoDoctorCopy.title}</b><em>{videoDoctorCopy.action}</em></span> : null}
             </div>
             <footer>
               {(run.status === "failed" || run.status === "cancelled") && run.kind === "generation" ? <button className="btn btn-ghost" disabled={busy} onClick={() => void act({ id: `retry-generation:${run.id}`, kind: "retry-generation", severity: "warning", projectId: run.projectId, projectName: run.projectName, entityId: run.id, modality: run.modality, title: run.title, detail: run.error ?? run.detail, actionLabel: "Retry", surface: "queue", createdAt: run.updatedAt })}><Icon name="rerun" size={14} /> Retry</button> : null}

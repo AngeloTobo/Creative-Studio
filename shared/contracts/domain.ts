@@ -449,10 +449,12 @@ export type LocalRunner = {
   version: string | null;
   comfyUrl: string | null;
   comfyVersion: string | null;
+  comfyReady: boolean | null;
   device: string | null;
   activeJobId: string | null;
   modelTrainingProviders: import("./modelTraining").ModelTrainingProvider[];
   lastError: string | null;
+  videoDoctor: import("./videoDoctor").VideoDoctorReport | null;
   lastHeartbeatAt: IsoDateString | null;
   createdAt: IsoDateString;
   revokedAt: IsoDateString | null;

@@ -21,8 +21,9 @@ import {
   acquireRunnerGpuLock,
   ensureLmStudioUnloaded,
 } from "./gpuCoordinator.mjs";
+import { collectVideoDoctor } from "./videoDoctor.mjs";
 
-export const RUNNER_VERSION = "1.18.0";
+export const RUNNER_VERSION = "1.19.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -124,11 +125,12 @@ export function loadConfig(path = configPath()) {
   const apiBase = String(process.env.CS_RUNNER_API_BASE || parsed.apiBase || "").replace(/\/+$/, "");
   const token = String(process.env.CS_RUNNER_TOKEN || parsed.token || "");
   const comfyUrl = String(process.env.CS_COMFY_URL || parsed.comfyUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
+  const comfyLogPath = String(process.env.CS_COMFY_LOG_PATH || parsed.comfyLogPath || "").trim() || null;
   const pollIntervalMs = resolveRunnerPollInterval(apiBase, process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs);
   if (!/^https:\/\//.test(apiBase) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase)) throw new Error("Runner apiBase must use HTTPS or local HTTP.");
   if (!/^csr_[A-Za-z0-9_-]{40,80}$/.test(token)) throw new Error("Runner token is missing or invalid.");
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(comfyUrl)) throw new Error("ComfyUI must be bound to localhost.");
-  return { apiBase, token, comfyUrl, pollIntervalMs };
+  return { apiBase, token, comfyUrl, comfyLogPath, pollIntervalMs };
 }
 
 export function resolveRunnerPollInterval(apiBase, value) {
@@ -379,10 +381,13 @@ async function machineState(config, activeJobId = null, error = null) {
   };
 }
 
-async function machineHeartbeat(config, activeJobId = null, error = null) {
+async function machineHeartbeat(config, activeJobId = null, error = null, videoDoctor = null) {
   return runnerRequest(config, "/api/creative-studio/runner/heartbeat", {
     method: "POST",
-    body: JSON.stringify(await machineState(config, activeJobId, error)),
+    body: JSON.stringify({
+      ...await machineState(config, activeJobId, error),
+      ...(videoDoctor ? { videoDoctor } : {}),
+    }),
   });
 }
 
@@ -1962,6 +1967,8 @@ export async function waitForOutput(config, bundle, promptId, options = {}) {
   const wait = options.sleep || sleep;
   const observe = options.observe || observeComfyPrompt;
   const heartbeat = options.heartbeat || ((payload) => requireJobHeartbeat(config, bundle.job.id, payload, promptId));
+  const diagnoseVideo = options.videoDoctor || collectVideoDoctor;
+  const includeVideoDoctor = !options.heartbeat || Boolean(options.videoDoctor);
   const heartbeatIntervalMs = Math.max(0, Number.isFinite(options.heartbeatIntervalMs)
     ? Number(options.heartbeatIntervalMs) : ACTIVE_HEARTBEAT_INTERVAL_MS);
   const pollIntervalMs = Math.max(0, Number.isFinite(options.pollIntervalMs)
@@ -1973,16 +1980,40 @@ export async function waitForOutput(config, bundle, promptId, options = {}) {
   const started = now();
   let lastHeartbeat = -Infinity;
   let lastComfyObservationAt = options.initialObservationAt || null;
+  let lastComfyState = options.initialObservationAt ? "queue" : "unknown";
   let absentSince = null;
   while (now() - started < executionTimeoutMs) {
     const current = now();
     if (current - lastHeartbeat >= heartbeatIntervalMs) {
       if (options.gpuGuard) await options.gpuGuard();
-      const result = await heartbeat({
+      const heartbeatPayload = {
         progress: COMFY_RENDER_PROGRESS,
         stage: "rendering",
         ...(lastComfyObservationAt ? { comfyObservationAt: lastComfyObservationAt } : {}),
-      });
+      };
+      if (includeVideoDoctor) {
+        const queueObservation = lastComfyState === "unreachable"
+          ? { state: "unreachable", error: "comfyui_queue_unreachable" }
+          : {
+            state: "busy",
+            runningCount: 1,
+            pendingCount: 0,
+            queue: {
+              queue_running: [[0, promptId, null, {
+                creative_studio_job_id: bundle.job.id,
+                create_time: started / 1_000,
+              }]],
+              queue_pending: [],
+            },
+          };
+        const videoDoctor = await diagnoseVideo(config, {
+          activeJobId: bundle.job.id,
+          queueObservation,
+          systemStats: "unknown",
+        }).catch(() => null);
+        if (videoDoctor) heartbeatPayload.videoDoctor = videoDoctor;
+      }
+      const result = await heartbeat(heartbeatPayload);
       if (result?.continue === false) {
         await cancelAndDrainComfyPrompt(config, promptId, options);
         throw new Error("creative_studio_job_cancelled");
@@ -1990,6 +2021,7 @@ export async function waitForOutput(config, bundle, promptId, options = {}) {
       lastHeartbeat = now();
     }
     const observation = await observe(config, promptId, bundle.graph, bundle.job.modality, options);
+    lastComfyState = observation.state;
     if (observation.state === "queue" || observation.state === "history") {
       lastComfyObservationAt = observation.observedAt;
       absentSince = null;
@@ -2979,14 +3011,21 @@ export async function runOnce(config, options = {}) {
   const heartbeat = options.machineHeartbeat || machineHeartbeat;
   const currentMachineState = await getMachineState(config);
   const queue = await observeQueue(config, options);
+  const videoDoctor = await (options.videoDoctor || collectVideoDoctor)(config, {
+    activeJobId: currentMachineState.activeJobId,
+    queueObservation: queue,
+    systemStats: currentMachineState.comfyReady ? "available" : "unavailable",
+  }).catch(() => null);
   if (queue.state !== "idle") {
     const reason = comfyQueueClaimBlockReason(queue);
-    await heartbeat(config, null, reason).catch(() => undefined);
+    if (videoDoctor) await heartbeat(config, null, reason, videoDoctor).catch(() => undefined);
+    else await heartbeat(config, null, reason).catch(() => undefined);
     return false;
   }
+  const claimState = videoDoctor ? { ...currentMachineState, videoDoctor } : currentMachineState;
   const work = await claimRequest(config, "/api/creative-studio/runner/work/claim", {
     method: "POST",
-    body: JSON.stringify(currentMachineState),
+    body: JSON.stringify(claimState),
   });
   if (work.kind === "overnight-plan" && work.bundle) {
     process.stdout.write(`[Creative Studio Runner] claimed overnight plan ${work.bundle.session.id}\n`);

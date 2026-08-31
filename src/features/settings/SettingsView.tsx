@@ -18,7 +18,7 @@ function runnerIssue(value: string) {
 function RunnerRow({ runner, busy, onRevoke }: { runner: LocalRunner; busy: boolean; onRevoke: (id: string) => void }) {
   return <article>
     <span className={`runner-state ${runner.state}`}><i />{runner.state}</span>
-    <div><strong>{runner.name}</strong><small>{runner.device || "Device details arrive with the first heartbeat"}</small><small>{heartbeat(runner.lastHeartbeatAt)}{runner.comfyVersion ? ` · ComfyUI ${runner.comfyVersion}` : ""}</small>{runner.lastError ? <span className="runner-issue"><em>{runnerIssue(runner.lastError)}</em><details><summary>Technical detail</summary><code>{runner.lastError}</code></details></span> : null}</div>
+    <div><strong>{runner.name}</strong><small>{runner.device || "Device details arrive with the first heartbeat"}</small><small>{heartbeat(runner.lastHeartbeatAt)}{runner.comfyVersion ? ` · ComfyUI ${runner.comfyVersion}` : ""}</small>{runner.videoDoctor ? <small className={`runner-doctor-summary ${runner.videoDoctor.status}`}>Video Doctor: {runner.videoDoctor.status === "blocked" ? "video needs attention" : runner.videoDoctor.status}</small> : null}{runner.lastError ? <span className="runner-issue"><em>{runnerIssue(runner.lastError)}</em><details><summary>Technical detail</summary><code>{runner.lastError}</code></details></span> : null}</div>
     <code>{runner.version ? `runner v${runner.version}` : runner.id}</code>
     {!runner.revokedAt ? <button className="btn btn-ghost" disabled={busy} onClick={() => onRevoke(runner.id)}>Revoke</button> : null}
   </article>;

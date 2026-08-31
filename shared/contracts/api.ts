@@ -59,6 +59,7 @@ import type {
 } from "./modelTraining";
 import type { ProjectProductionLoop } from "./productionLoop";
 import type { ProductionCockpit } from "./productionCockpit";
+import type { VideoDoctorReport } from "./videoDoctor";
 import type {
   CompleteOvernightPlanRequest,
   CreateOvernightSessionRequest,
@@ -511,6 +512,7 @@ export type RunnerHeartbeatRequest = {
   activeJobId?: string | null;
   error?: string | null;
   modelTrainingProviders?: ModelTrainingProvider[];
+  videoDoctor?: VideoDoctorReport;
 };
 
 export type RunnerMediaInput = {
@@ -548,6 +550,7 @@ export type RunnerJobHeartbeatRequest = {
   /** Last time queue or history returned this exact Comfy prompt. Omitted while Comfy's API is unreachable. */
   comfyObservationAt?: string | null;
   promptEnhancement?: SongPromptEnhancementStamp & { parameterId: string };
+  videoDoctor?: VideoDoctorReport;
 };
 export type RunnerJobHeartbeatResponse = { continue: boolean; job: Job };
 export type { RunnerPromptEnhancementHeartbeatRequest, RunnerCompletePromptEnhancementRequest, RunnerFailPromptEnhancementRequest };

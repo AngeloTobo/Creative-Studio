@@ -53,6 +53,7 @@ describe("Local Runner pre-claim Comfy idle guard", () => {
       observeQueue: async () => observation,
       request,
       machineHeartbeat: heartbeat,
+      videoDoctor: async () => null,
     })).resolves.toBe(false);
 
     expect(request).not.toHaveBeenCalled();
@@ -75,6 +76,7 @@ describe("Local Runner pre-claim Comfy idle guard", () => {
       observeQueue,
       request,
       machineHeartbeat: heartbeat,
+      videoDoctor: async () => null,
     })).resolves.toBe(false);
 
     expect(observeQueue).toHaveBeenCalledOnce();

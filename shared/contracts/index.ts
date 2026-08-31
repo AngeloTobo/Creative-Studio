@@ -16,5 +16,6 @@ export * from "./songPrompts";
 export * from "./storyRecommendations";
 export * from "./videoDuration";
 export * from "./videoScripts";
+export * from "./videoDoctor";
 export * from "./worlds";
 export * from "./workflows";

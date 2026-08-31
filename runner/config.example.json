@@ -2,5 +2,6 @@
   "apiBase": "https://runner.cs.angelotoborg.com",
   "token": "paste-the-one-time-token-from-creative-studio-settings",
   "comfyUrl": "http://127.0.0.1:8188",
+  "comfyLogPath": "D:\\ComfyUI\\ComfyUI\\user\\comfyui_8188.log",
   "pollIntervalMs": 60000
 }

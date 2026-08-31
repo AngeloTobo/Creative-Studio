@@ -3,8 +3,10 @@ import type {
   LocalRunner,
   RunnerHeartbeatRequest,
   RunnerJobHeartbeatRequest,
+  VideoDoctorFinding,
+  VideoDoctorReport,
 } from "../shared/contracts";
-import { musicPromptProfileForIdentity } from "../shared/contracts";
+import { musicPromptProfileForIdentity, VIDEO_DOCTOR_FINDING_CODES, VIDEO_DOCTOR_SCHEMA_VERSION } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
 import { completeLocalRunnerJob, jobById, retainLocalRunnerVideoThumbnail, runnerInputById } from "./repository";
 import type { Env } from "./types";
@@ -21,10 +23,13 @@ type RunnerRow = {
   version: string | null;
   comfyUrl: string | null;
   comfyVersion: string | null;
+  comfyReady: number | null;
   device: string | null;
   activeJobId: string | null;
   modelTrainingProvidersJson: string;
   lastError: string | null;
+  videoDoctorJson: string | null;
+  videoDoctorCheckedAt: string | null;
   lastHeartbeatAt: string | null;
   createdAt: string;
   revokedAt: string | null;
@@ -57,21 +62,143 @@ export function supportsStoryPlanning(version: string | null) {
 }
 
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
-  comfy_version as comfyVersion, device, active_job_id as activeJobId, last_error as lastError,
+  comfy_version as comfyVersion, comfy_ready as comfyReady, device, active_job_id as activeJobId, last_error as lastError,
+  video_doctor_json as videoDoctorJson, video_doctor_checked_at as videoDoctorCheckedAt,
   model_training_providers_json as modelTrainingProvidersJson,
   last_heartbeat_at as lastHeartbeatAt, created_at as createdAt, revoked_at as revokedAt`;
+
+const VIDEO_DOCTOR_CODES = new Set<string>(VIDEO_DOCTOR_FINDING_CODES);
+const VIDEO_DOCTOR_STATUSES = new Set(["ready", "working", "attention", "blocked", "unknown"]);
+const VIDEO_DOCTOR_QUEUE_STATES = new Set(["idle", "busy", "unreachable", "invalid", "unknown"]);
+const VIDEO_DOCTOR_LOG_STATES = new Set(["current", "stale", "unavailable", "not-configured"]);
+const VIDEO_DOCTOR_API_STATES = new Set(["available", "unavailable", "unknown"]);
+const VIDEO_DOCTOR_SEVERITIES = new Set(["info", "warning", "critical"]);
+const VIDEO_DOCTOR_JOB_STATES = new Set(["queued", "running", "retaining", "completed", "failed", "cancelled"]);
+const VIDEO_DOCTOR_FRESHNESS_MS = 3 * 60_000;
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function diagnosticIdentifier(value: unknown, maximum: number) {
+  const text = boundedText(value, maximum);
+  return text && /^[a-z0-9_.:-]+$/i.test(text) ? text : null;
+}
+
+function diagnosticDate(value: unknown) {
+  const text = boundedText(value, 40);
+  const time = Date.parse(text);
+  if (!Number.isFinite(time) || time > Date.now() + 60_000) return null;
+  return new Date(time).toISOString();
+}
+
+function normalizeVideoDoctor(value: unknown, trustedStoredFields = false): VideoDoctorReport | null {
+  const input = record(value);
+  const queueInput = record(input?.queue);
+  const logInput = record(input?.log);
+  if (!input || input.schemaVersion !== VIDEO_DOCTOR_SCHEMA_VERSION || !queueInput || !logInput) return null;
+  const status = boundedText(input.status, 20);
+  const queueState = boundedText(queueInput.state, 20);
+  const logState = boundedText(logInput.state, 24);
+  const systemStats = boundedText(input.systemStats, 20);
+  const checkedAt = diagnosticDate(input.checkedAt);
+  if (!checkedAt || !VIDEO_DOCTOR_STATUSES.has(status) || !VIDEO_DOCTOR_QUEUE_STATES.has(queueState)
+    || !VIDEO_DOCTOR_LOG_STATES.has(logState) || !VIDEO_DOCTOR_API_STATES.has(systemStats)) return null;
+  const findings = (Array.isArray(input.findings) ? input.findings : []).slice(0, 8).flatMap((candidate): VideoDoctorFinding[] => {
+    const item = record(candidate);
+    const code = boundedText(item?.code, 50);
+    const severity = boundedText(item?.severity, 20);
+    if (!item || !VIDEO_DOCTOR_CODES.has(code) || !VIDEO_DOCTOR_SEVERITIES.has(severity)) return [];
+    const count = item.count === null || item.count === undefined ? Number.NaN : Number(item.count);
+    return [{
+      code: code as VideoDoctorFinding["code"],
+      severity: severity as VideoDoctorFinding["severity"],
+      count: Number.isFinite(count) ? Math.max(0, Math.min(10_000, Math.round(count))) : null,
+      nodeId: diagnosticIdentifier(item.nodeId, 80),
+      nodeType: diagnosticIdentifier(item.nodeType, 120),
+    }];
+  });
+  const storedStatus = boundedText(queueInput.jobStatus, 20);
+  return {
+    schemaVersion: VIDEO_DOCTOR_SCHEMA_VERSION,
+    status: status as VideoDoctorReport["status"],
+    canClaimVideo: input.canClaimVideo === true,
+    checkedAt,
+    systemStats: systemStats as VideoDoctorReport["systemStats"],
+    queue: {
+      state: queueState as VideoDoctorReport["queue"]["state"],
+      running: Math.max(0, Math.min(100, Math.round(Number(queueInput.running) || 0))),
+      pending: Math.max(0, Math.min(100, Math.round(Number(queueInput.pending) || 0))),
+      promptId: diagnosticIdentifier(queueInput.promptId, 120),
+      creativeStudioJobId: diagnosticIdentifier(queueInput.creativeStudioJobId, 100),
+      promptStartedAt: diagnosticDate(queueInput.promptStartedAt),
+      activeJobMatch: typeof queueInput.activeJobMatch === "boolean" ? queueInput.activeJobMatch : null,
+      jobStatus: trustedStoredFields && VIDEO_DOCTOR_JOB_STATES.has(storedStatus)
+        ? storedStatus as VideoDoctorReport["queue"]["jobStatus"] : null,
+      blockedVideoJobs: trustedStoredFields ? Math.max(0, Math.min(1_000, Math.round(Number(queueInput.blockedVideoJobs) || 0))) : 0,
+    },
+    log: { state: logState as VideoDoctorReport["log"]["state"], updatedAt: diagnosticDate(logInput.updatedAt) },
+    findings,
+  };
+}
+
+async function enrichVideoDoctor(env: Env, runner: RunnerIdentity, report: VideoDoctorReport) {
+  const jobId = report.queue.creativeStudioJobId;
+  if (report.queue.state !== "busy" || !jobId || report.queue.activeJobMatch !== false) return report;
+  const context = await env.DB.prepare(`select
+    (select status from creative_jobs where owner_id = ? and id = ?) as jobStatus,
+    (select upstream_id from creative_jobs where owner_id = ? and id = ?) as upstreamId,
+    (select count(*) from creative_jobs where owner_id = ? and execution_target = 'local-comfyui'
+      and modality = 'video' and status = 'queued') as blockedVideoJobs`)
+    .bind(runner.ownerId, jobId, runner.ownerId, jobId, runner.ownerId)
+    .first<{ jobStatus: string | null; upstreamId: string | null; blockedVideoJobs: number | null }>();
+  const jobStatus = VIDEO_DOCTOR_JOB_STATES.has(context?.jobStatus ?? "")
+    ? context!.jobStatus as VideoDoctorReport["queue"]["jobStatus"] : null;
+  const terminal = jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled";
+  const exactPrompt = Boolean(report.queue.promptId && context?.upstreamId === report.queue.promptId);
+  const findings = terminal && exactPrompt
+    ? [
+      { code: "orphaned-terminal-prompt", severity: "critical", count: null, nodeId: null, nodeType: null } as VideoDoctorFinding,
+      ...report.findings.filter((item) => item.code !== "unowned-comfy-prompt" && item.code !== "orphaned-terminal-prompt"),
+    ].slice(0, 8)
+    : report.findings;
+  return {
+    ...report,
+    status: terminal && exactPrompt ? "blocked" as const : report.status,
+    canClaimVideo: terminal && exactPrompt ? false : report.canClaimVideo,
+    queue: {
+      ...report.queue,
+      jobStatus,
+      blockedVideoJobs: Math.max(0, Math.min(1_000, Math.round(Number(context?.blockedVideoJobs) || 0))),
+    },
+    findings,
+  };
+}
 
 function mapRunner(row: RunnerRow): LocalRunner {
   const live = Boolean(row.lastHeartbeatAt && Date.now() - new Date(row.lastHeartbeatAt).getTime() <= 90_000);
   const state: LocalRunner["state"] = row.revokedAt ? "revoked" : !live ? "offline" : row.activeJobId ? "busy" : "online";
-  const { ownerId: _ownerId, modelTrainingProvidersJson, ...runner } = row;
+  const {
+    ownerId: _ownerId,
+    modelTrainingProvidersJson,
+    comfyReady: storedComfyReady,
+    videoDoctorJson,
+    videoDoctorCheckedAt,
+    ...runner
+  } = row;
   void _ownerId;
   let modelTrainingProviders: LocalRunner["modelTrainingProviders"] = [];
   try {
     const parsed = JSON.parse(modelTrainingProvidersJson || "[]") as unknown;
     if (Array.isArray(parsed)) modelTrainingProviders = parsed.filter((value): value is "ace-step-1.5-lora" => value === "ace-step-1.5-lora");
   } catch { modelTrainingProviders = []; }
-  return { ...runner, modelTrainingProviders, state };
+  const storedVideoDoctor = (() => {
+    try { return normalizeVideoDoctor(JSON.parse(videoDoctorJson || "null"), true); } catch { return null; }
+  })();
+  const doctorTime = Date.parse(videoDoctorCheckedAt || storedVideoDoctor?.checkedAt || "");
+  const videoDoctor = storedVideoDoctor && Number.isFinite(doctorTime) && Date.now() - doctorTime <= VIDEO_DOCTOR_FRESHNESS_MS
+    ? storedVideoDoctor : null;
+  return { ...runner, comfyReady: storedComfyReady === null ? null : storedComfyReady === 1, videoDoctor, modelTrainingProviders, state };
 }
 
 async function hashToken(token: string) {
@@ -164,14 +291,25 @@ export async function heartbeatLocalRunner(env: Env, runner: RunnerIdentity, inp
   const version = boundedText(input.version, 40) || "unknown";
   const comfyUrl = boundedText(input.comfyUrl, 240);
   const comfyVersion = boundedText(input.comfyVersion, 80) || null;
+  const comfyReady = typeof input.comfyReady === "boolean" ? (input.comfyReady ? 1 : 0) : null;
   const device = boundedText(input.device, 160) || null;
   const activeJobId = boundedText(input.activeJobId, 100) || null;
   const error = boundedText(input.error, 500) || null;
   const modelTrainingProviders = [...new Set((input.modelTrainingProviders ?? []).filter((provider) => provider === "ace-step-1.5-lora"))];
+  const normalizedDoctor = normalizeVideoDoctor(input.videoDoctor);
+  const videoDoctor = normalizedDoctor ? await enrichVideoDoctor(env, runner, normalizedDoctor) : null;
   await env.DB.prepare(`update creative_runners set version = ?, comfy_url = ?, comfy_version = ?, device = ?,
-    active_job_id = ?, model_training_providers_json = ?, last_error = ?, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null`)
-    .bind(version, comfyUrl, comfyVersion, device, activeJobId, JSON.stringify(modelTrainingProviders), error, now, runner.id, runner.ownerId).run();
-  return mapRunner({ ...runner, version, comfyUrl, comfyVersion, device, activeJobId, modelTrainingProvidersJson: JSON.stringify(modelTrainingProviders), lastError: error, lastHeartbeatAt: now });
+    comfy_ready = coalesce(?, comfy_ready), active_job_id = ?, model_training_providers_json = ?, last_error = ?,
+    video_doctor_json = coalesce(?, video_doctor_json), video_doctor_checked_at = coalesce(?, video_doctor_checked_at),
+    last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null`)
+    .bind(version, comfyUrl, comfyVersion, device, comfyReady, activeJobId, JSON.stringify(modelTrainingProviders), error,
+      videoDoctor ? JSON.stringify(videoDoctor) : null, videoDoctor?.checkedAt ?? null, now, runner.id, runner.ownerId).run();
+  return mapRunner({
+    ...runner, version, comfyUrl, comfyVersion, comfyReady: comfyReady ?? runner.comfyReady, device, activeJobId,
+    modelTrainingProvidersJson: JSON.stringify(modelTrainingProviders), lastError: error,
+    videoDoctorJson: videoDoctor ? JSON.stringify(videoDoctor) : runner.videoDoctorJson,
+    videoDoctorCheckedAt: videoDoctor?.checkedAt ?? runner.videoDoctorCheckedAt, lastHeartbeatAt: now,
+  });
 }
 
 async function automationJobMayContinue(env: Env, runner: RunnerIdentity, jobId: string, now: string) {
@@ -263,6 +401,8 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
     ? new Date(Math.min(observationTime, now.getTime())).toISOString()
     : null;
   const stageUpdatedAt = stage === "rendering" ? comfyObservationAt : stage ? nowValue : null;
+  const normalizedDoctor = normalizeVideoDoctor(input.videoDoctor);
+  const videoDoctor = normalizedDoctor ? await enrichVideoDoctor(env, runner, normalizedDoctor) : null;
   if (!await automationJobMayContinue(env, runner, jobId, nowValue)) {
     const job = await jobById(env, runner.ownerId, jobId);
     if (!job) throw new Error("job_not_found");
@@ -366,8 +506,10 @@ export async function heartbeatLocalRunnerJob(env: Env, runner: RunnerIdentity, 
         ))`)
       .bind(progress, upstreamId, stage, stageUpdatedAt, stageUpdatedAt, stageUpdatedAt,
         new Date(now.getTime() + 2 * 60_000).toISOString(), nowValue, jobId, runner.ownerId, runner.id, nowValue),
-    env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null")
-      .bind(jobId, nowValue, runner.id, runner.ownerId),
+    env.DB.prepare(`update creative_runners set active_job_id = ?, last_error = null,
+      video_doctor_json = coalesce(?, video_doctor_json), video_doctor_checked_at = coalesce(?, video_doctor_checked_at),
+      last_heartbeat_at = ? where id = ? and owner_id = ? and revoked_at is null`)
+      .bind(jobId, videoDoctor ? JSON.stringify(videoDoctor) : null, videoDoctor?.checkedAt ?? null, nowValue, runner.id, runner.ownerId),
   ]);
   if (!changed.meta.changes) await automationJobMayContinue(env, runner, jobId, nowValue);
   const job = await jobById(env, runner.ownerId, jobId);

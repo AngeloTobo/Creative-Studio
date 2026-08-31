@@ -6,6 +6,7 @@ import { ArtifactsView, type ArtifactsViewProps } from "../artifacts/ArtifactsVi
 import { CockpitView } from "../cockpit/CockpitView";
 import { LoveLoopWorkStatus } from "../loveLoop";
 import { OvernightRunGroup, newestOvernightSessions } from "../overnight";
+import { VideoDoctorCard } from "../runtime/VideoDoctorCard";
 import "./work.css";
 
 export type WorkSegment = "needs-action" | "running" | "results";
@@ -84,8 +85,16 @@ export function WorkView({
     if (projectActions.length) return "needs-action";
     return runningCount ? "running" : "results";
   });
-  const runnerAvailable = cockpit?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
+  const liveRunners = (snapshot?.runners ?? []).filter((runner) => runner.state === "online" || runner.state === "busy");
+  const diagnosticRunner = [...liveRunners].sort((left, right) => {
+    const priority = { blocked: 0, attention: 1, working: 2, unknown: 3, ready: 4 } as const;
+    return (priority[left.videoDoctor?.status ?? "unknown"] ?? 3) - (priority[right.videoDoctor?.status ?? "unknown"] ?? 3);
+  }).find((runner) => runner.videoDoctor);
+  const videoDoctor = diagnosticRunner?.videoDoctor ?? null;
+  const runnerAvailable = liveRunners.some((runner) => runner.videoDoctor?.status !== "blocked");
+  const videoDoctorBlocked = videoDoctor?.status === "blocked" && !runnerAvailable;
   const runnerBusy = cockpit?.runners.some((runner) => runner.state === "busy") ?? false;
+  const projectHasWaitingVideo = projectRuns.some((run) => run.modality === "video" && isRunning(run));
 
   useEffect(() => {
     if (!focusArtifactId && !focusRunId) return;
@@ -126,13 +135,16 @@ export function WorkView({
           <p>Make progress, recover runs, and decide what stays.</p>
         </div>
         <div className="work-header-actions">
-          <span className={`work-runner-chip ${runnerBusy ? "busy" : runnerAvailable ? "online" : "offline"}`} title="Local Runner state">
-            <i /> {runnerBusy ? "Runner busy" : runnerAvailable ? "Runner ready" : "Runner offline"}
+          <span className={`work-runner-chip ${videoDoctorBlocked ? "blocked" : runnerBusy ? "busy" : runnerAvailable ? "online" : "offline"}`} title="Local Runner state">
+            <i /> {videoDoctorBlocked ? "Video blocked" : runnerBusy ? "Runner busy" : runnerAvailable ? "Runner ready" : "Runner offline"}
           </span>
           <button type="button" className="icon-button" aria-label="Refresh work" disabled={busy} onClick={() => void refresh()}><Icon name="rerun" size={17} /></button>
           <button type="button" className="btn btn-primary work-create" onClick={onContinueLoop}><Icon name="star" size={15} /><span>Create</span></button>
         </div>
       </header>
+
+      {videoDoctor && (videoDoctorBlocked || (videoDoctor.status === "attention" && (projectHasWaitingVideo || videoDoctor.queue.blockedVideoJobs > 0)))
+        ? <VideoDoctorCard report={videoDoctor} compact /> : null}
 
       <LoveLoopWorkStatus onResults={() => setSegment("results")} onNeedsAction={() => setSegment("needs-action")} onRepair={onManageLoveLoop} />
 
