@@ -15,7 +15,7 @@ import {
 import { boundedText, id } from "./lib/http";
 import type { Env } from "./types";
 import { workflowExecutionPlan } from "./workflows";
-import { runnerInputById } from "./repository";
+import { projectById, runnerInputById } from "./repository";
 import { listWorldRecords } from "./worlds";
 
 type PromptEnhancementRow = {
@@ -123,6 +123,9 @@ export async function createVideoPromptEnhancement(
     throw new Error("invalid_prompt_enhancement_request");
   }
   if (!/^[a-z0-9_-]{16,100}$/i.test(idempotencyKey)) throw new Error("invalid_idempotency_key");
+  const project = await projectById(env, ownerId, projectId);
+  if (!project) throw new Error("project_not_found");
+  if (project.status === "archived") throw new Error("project_archived");
   const existing = await env.DB.prepare(`select ${COLUMNS} from creative_prompt_enhancements where owner_id = ? and idempotency_key = ?`)
     .bind(ownerId, idempotencyKey).first<PromptEnhancementRow>();
   if (existing) {
@@ -132,7 +135,9 @@ export async function createVideoPromptEnhancement(
     return publicEnhancement(existing);
   }
   const plan = await workflowExecutionPlan(env, ownerId, workflowId, revisionId);
-  if (plan.workflow.projectId !== projectId) throw new Error("workflow_project_mismatch");
+  // Workflows are an owner-wide model library. Their project is import
+  // provenance; the active project below still owns the helper request,
+  // sources, continuity checks, generated job, and retained output.
   if (plan.workflow.modality !== "video") throw new Error("prompt_enhancement_video_workflow_required");
   const worldRecords = await listWorldRecords(env, ownerId);
   if (containsCommercialReferenceIdentity(sourcePrompt,

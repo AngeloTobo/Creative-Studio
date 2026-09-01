@@ -280,7 +280,10 @@ export async function createVideoScriptDraft(env: Env, ownerId: string, input: C
   const project = await projectById(env, ownerId, projectId);
   if (!project || project.status !== "active") throw new Error("project_not_found");
   const plan = await workflowExecutionPlan(env, ownerId, workflowId, workflowRevisionId);
-  if (plan.workflow.projectId !== projectId || plan.workflow.modality !== "video") throw new Error("video_script_workflow_mismatch");
+  // A workflow's project records where it entered the owner's reusable model
+  // library. Script drafts belong to the active project, while source and
+  // continuity validation below remain active-project scoped.
+  if (plan.workflow.modality !== "video") throw new Error("video_script_workflow_mismatch");
   const durationParameters = videoWorkflowDurationParameters(plan.workflow.currentRevision.parameters);
   if (!durationParameters.length || !workflowSupportsVideoDuration(plan.workflow, videoDurationSeconds)
     || durationParameters.some((parameter) => Number(parameter.value) !== videoDurationSeconds)) {

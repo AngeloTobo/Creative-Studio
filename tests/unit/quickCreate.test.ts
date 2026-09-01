@@ -112,28 +112,51 @@ describe("quick Create routing", () => {
     expect(recovered.has(h3Fast)).toBe(false);
   });
 
-  it("uses retained source evidence to invent a concrete three-beat animation instead of captioning it", () => {
+  it("uses retained source evidence internally and returns only a concise motion direction", () => {
     const prompt = quickAnimationDirection("A hand-built ceramic figure stands under a warm side light.");
-    expect(prompt).toContain("A hand-built ceramic figure stands under a warm side light.");
+    expect(prompt).not.toContain("A hand-built ceramic figure stands under a warm side light.");
+    expect(prompt).not.toContain("Opening-frame evidence:");
     expect(prompt).toContain("exact first frame");
-    expect(prompt).toContain("Beat 1:");
-    expect(prompt).toContain("Beat 2:");
-    expect(prompt).toContain("Beat 3:");
-    expect(prompt).toContain("central figure turns toward the strongest visible light");
-    expect(prompt).toContain("no sideways roll");
-    expect(prompt).toContain("no dialogue, narration, lyrics, text, captions, logos, black frames");
+    expect(prompt).not.toMatch(/Beat [123]:/);
+    expect(prompt).toMatch(/^The figure makes one small, motivated gesture/);
+    expect(prompt).toContain("figure makes one small, motivated gesture");
+    expect(prompt).toContain("preserve identity, anatomy, materials, palette, and light");
+    expect(prompt).toContain("camera level");
+    expect(prompt).toContain("coherent ambient sound and original nonverbal music");
+    expect(prompt).toContain("No dialogue, narration, lyrics, added text, captions, logos, black frames");
+    expect(prompt).toContain("camera roll");
+    expect(prompt.length).toBeLessThan(700);
     expect(prompt).not.toContain("cybernetic");
     expect(quickAnimationDirection(null)).toContain("focal subject turns or tilts");
   });
 
+  it("treats a character with anatomical and organic details as a person, not an embryo", () => {
+    const prompt = quickAnimationDirection("Rebecca is a non-binary intergalactic alien with elongated pale-lavender anatomy, caught mid-laugh with a hand mirror beside an organic form and an anatomical seam.");
+    expect(prompt).toContain("checks the hand mirror and breaks into a brief, natural laugh");
+    expect(prompt).toContain("slow, level push-in");
+    expect(prompt).not.toContain("Rebecca");
+    expect(prompt).not.toContain("pale-lavender anatomy");
+    expect(prompt).not.toContain("central organic form");
+  });
+
+  it("keeps explicitly biological human references on the biological motion path", () => {
+    const embryo = quickAnimationDirection("A human embryo floats inside a membrane while cells divide around its body.");
+    expect(embryo).toContain("fine light pulse crosses the central form");
+    expect(embryo).not.toContain("figure makes one small, motivated gesture");
+
+    const pluralOnly = quickAnimationDirection("Cells and organs divide inside the human body.");
+    expect(pluralOnly).toContain("fine light pulse crosses the central form");
+    expect(pluralOnly).not.toContain("figure makes one small, motivated gesture");
+  });
+
   it("chooses motion vocabulary grounded in biological and architectural source descriptions", () => {
     const embryo = quickAnimationDirection("A translucent embryo floats inside a softly lit membrane with suspended particles.");
-    expect(embryo).toContain("fine pulse of light travels across the central organic form");
-    expect(embryo).toContain("surrounding fluid and suspended particles curl into a slow spiral");
+    expect(embryo).toContain("fine light pulse crosses the central form");
+    expect(embryo).toContain("Nearby particles curl into a slow spiral");
 
     const city = quickAnimationDirection("A rain-dark city rooftop overlooks towers and traffic below.");
-    expect(city).toContain("one bank of practical light ignites across the visible structure");
-    expect(city).toContain("newly revealed architectural relationship");
+    expect(city).toContain("Practical lights wake across the visible structure");
+    expect(city).toContain("newly revealed spatial relationship");
   });
 
   it("automatically binds one compatible retained source without overwriting explicit inputs", () => {

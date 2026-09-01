@@ -119,7 +119,7 @@ npm ci
 npm run local
 ```
 
-Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.19.0, and starts Vite. A machine-local process lock prevents a second Creative Studio runner from competing for the same GPU.
+Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.19.1, and starts Vite. A machine-local process lock prevents a second Creative Studio runner from competing for the same GPU.
 
 Local Runner 1.19 includes a read-only Video Doctor. It correlates the exact Creative Studio job and Comfy prompt with queue reachability, system-status health, and a bounded local log tail, then sends only allowlisted diagnostic facts through the existing heartbeat. It uses no LLM or GPU and never cancels, restarts, retries, unloads, or changes a workflow on its own. System and Work show one prioritized next step while keeping evidence collapsed.
 

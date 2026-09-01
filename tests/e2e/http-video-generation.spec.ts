@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type {
   CreateCreativeDnaRequest,
   CreateVideoPromptEnhancementRequest,
+  CreateVideoScriptDraftRequest,
   CreativeDnaArtifact,
   Job,
   MediaAsset,
@@ -11,6 +12,7 @@ import type {
   SubmitJobBatchRequest,
   SubmitJobRequest,
   VideoPromptEnhancement,
+  VideoScriptDraft,
   WorkflowDefinition,
   WorkflowScalar,
 } from "../../shared/contracts";
@@ -18,6 +20,7 @@ import {
   TRUSTED_LTX_25_I2V_PORTRAIT_30S,
   inspectWorkflowGraph,
   trustedVideoPresetStamp,
+  videoWorkflowDurationParameters,
 } from "../../shared/contracts";
 import { TRUSTED_LTX_25_I2V_GRAPH_FIXTURE } from "../worker/fixtures/trustedLtx25I2vGraph";
 
@@ -125,7 +128,7 @@ function initialWorkflow(): WorkflowDefinition {
   const inspection = inspectWorkflowGraph(structuredClone(TRUSTED_LTX_25_I2V_GRAPH_FIXTURE));
   return {
     id: "workflow_ltx_i2v_e2e",
-    projectId: "project_video_e2e",
+    projectId: "project_model_library_origin",
     name: "LTX 2.5 Image to Video",
     description: "Local LTX image-to-video workflow",
     sourceFileName: "video_ltx2_5_i2v.json",
@@ -184,7 +187,10 @@ function baseSnapshot(
   return {
     adapter: { id: "creative-studio-bff", label: "Creative Studio Worker", development: false, durableScope: "backend" },
     session: { status: "approved", userId: "angelo-e2e", displayName: "Angelo" },
-    projects: [{ id: "project_video_e2e", activeDnaArtifactId: "dna_video_e2e", name: "Animation proof", type: "Video", status: "active", description: "", note: "", hue: "#d946ef", initials: "AP", createdAt: NOW, updatedAt: NOW }],
+    projects: [
+      { id: "project_video_e2e", activeDnaArtifactId: "dna_video_e2e", name: "Animation proof", type: "Video", status: "active", description: "", note: "", hue: "#d946ef", initials: "AP", createdAt: NOW, updatedAt: NOW },
+      { id: "project_video_other", activeDnaArtifactId: null, name: "Second project", type: "Video", status: "active", description: "", note: "", hue: "#0ea5e9", initials: "SP", createdAt: NOW, updatedAt: NOW },
+    ],
     dnaArtifacts: createdDna ? [createdDna, initialDna()] : [initialDna()],
     jobs,
     generationBatches: [],
@@ -225,6 +231,13 @@ function baseSnapshot(
       provider: "Local ComfyUI + Gemma 4",
       detail: enhancementAvailable ? "Gemma is available for this local test fixture." : "Not needed for standard animation.",
       checkedAt: NOW,
+    }, {
+      key: "script-builder",
+      label: "Full video script",
+      state: "available",
+      provider: "Local ComfyUI + Gemma 4",
+      detail: "Gemma Script Builder is available for this local test fixture.",
+      checkedAt: NOW,
     }],
     acceptances: [],
     worlds: [],
@@ -244,30 +257,51 @@ type MockVideoBackend = {
   jobs: SubmitJobRequest[];
   batchRequests: SubmitJobBatchRequest[];
   enhancementRequests: CreateVideoPromptEnhancementRequest[];
-  revisionRequests: Array<{ baseRevisionId: string; values: Record<string, WorkflowScalar> }>;
+  videoScriptRequests: CreateVideoScriptDraftRequest[];
+  revisionRequests: Array<{
+    baseRevisionId: string;
+    values: Record<string, WorkflowScalar>;
+    scope?: "library-current" | "execution-only";
+  }>;
   uploads: Array<{ fileName: string; contentType: string; size: number }>;
   workflow: () => WorkflowDefinition;
+  workflowByRevision: (revisionId: string) => WorkflowDefinition | null;
+  releaseRevision: () => void;
 };
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ ok: status < 400, ...body as object }) });
 }
 
-async function installVideoBackend(page: Page, withEnhancement: boolean): Promise<MockVideoBackend> {
+async function installVideoBackend(
+  page: Page,
+  withEnhancement: boolean,
+  options: { delayFirstRevision?: boolean } = {},
+): Promise<MockVideoBackend> {
   let workflow = initialWorkflow();
   let revision = 1;
+  const workflowRevisions = new Map<string, WorkflowDefinition>([[workflow.currentRevision.id, workflow]]);
   const jobs: Job[] = [];
   const jobRequests: SubmitJobRequest[] = [];
   const batchRequests: SubmitJobBatchRequest[] = [];
   const enhancementRequests: CreateVideoPromptEnhancementRequest[] = [];
+  const videoScriptRequests: CreateVideoScriptDraftRequest[] = [];
   const revisionRequests: MockVideoBackend["revisionRequests"] = [];
   const uploads: MockVideoBackend["uploads"] = [];
   const uploadedAssets: MediaAsset[] = [];
   let promptEnhancement: VideoPromptEnhancement | null = null;
+  let videoScriptDraft: VideoScriptDraft | null = null;
   let createdDna: CreativeDnaArtifact | null = null;
+  let releaseRevision = () => undefined;
+  const revisionGate = options.delayFirstRevision
+    ? new Promise<void>((resolveRevision) => { releaseRevision = resolveRevision; })
+    : null;
 
   const materializeJob = (input: SubmitJobRequest): Job => {
     jobRequests.push(input);
+    const submittedWorkflow = input.workflow?.revisionId
+      ? workflowRevisions.get(input.workflow.revisionId) ?? workflow
+      : workflow;
     const createdAt = new Date(Date.parse(NOW) + (20 + jobRequests.length) * 1_000).toISOString();
     const prompt = input.workflow?.expectedPrompt ?? "";
     const job: Job = {
@@ -301,13 +335,13 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
         videoPerformance: input.videoPerformanceMode ? {
           schemaVersion: "creative-studio-video-performance/1.0",
           mode: input.videoPerformanceMode,
-          workflowRevisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
+            workflowRevisionId: input.workflow?.revisionId ?? submittedWorkflow.currentRevision.id,
           trustedPreset: input.trustedVideoPresetId ? trustedVideoPresetStamp() : undefined,
           workload: {
             durationSeconds: input.videoDurationSeconds ?? null,
             width: null,
             height: null,
-            megapixels: Number(workflow.currentRevision.parameters.find((parameter) => parameter.id === MEGAPIXELS_PARAMETER_ID)?.value ?? 0),
+            megapixels: Number(submittedWorkflow.currentRevision.parameters.find((parameter) => parameter.id === MEGAPIXELS_PARAMETER_ID)?.value ?? 0),
             frames: null,
             fps: 24,
             requiresExplicitHeavy: input.videoPerformanceMode === "explicit-heavy",
@@ -316,15 +350,15 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
         } : undefined,
         videoDurationSeconds: input.videoDurationSeconds,
         workflow: {
-          workflowId: workflow.id,
-          revisionId: input.workflow?.revisionId ?? workflow.currentRevision.id,
-          version: workflow.currentRevision.version,
-          name: workflow.name,
-          format: workflow.currentRevision.format,
-          contentHash: workflow.currentRevision.contentHash,
+          workflowId: submittedWorkflow.id,
+          revisionId: input.workflow?.revisionId ?? submittedWorkflow.currentRevision.id,
+          version: submittedWorkflow.currentRevision.version,
+          name: submittedWorkflow.name,
+          format: submittedWorkflow.currentRevision.format,
+          contentHash: submittedWorkflow.currentRevision.contentHash,
         },
-        parameters: Object.fromEntries(workflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])),
-        models: workflow.currentRevision.models,
+        parameters: Object.fromEntries(submittedWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])),
+        models: submittedWorkflow.currentRevision.models,
         inputAssetIds: [SOURCE_ID],
         inputBindings: input.workflow?.inputBindings,
         videoVariant: input.videoVariant,
@@ -401,12 +435,14 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     }
 
     if (request.method() === "POST" && /^\/api\/creative-studio\/workflows\/[^/]+\/revisions$/.test(pathname)) {
-      const input = request.postDataJSON() as { baseRevisionId: string; values: Record<string, WorkflowScalar> };
+      const input = request.postDataJSON() as MockVideoBackend["revisionRequests"][number];
       revisionRequests.push(input);
-      const previous = workflow.currentRevision;
+      if (revisionGate && revisionRequests.length === 1) await revisionGate;
+      const previousWorkflow = workflowRevisions.get(input.baseRevisionId) ?? workflow;
+      const previous = previousWorkflow.currentRevision;
       revision += 1;
-      workflow = {
-        ...workflow,
+      const preparedWorkflow: WorkflowDefinition = {
+        ...previousWorkflow,
         updatedAt: new Date(Date.parse(NOW) + revision * 1_000).toISOString(),
         currentRevision: {
           ...previous,
@@ -420,7 +456,9 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
             : parameter),
         },
       };
-      await json(route, { workflow });
+      workflowRevisions.set(preparedWorkflow.currentRevision.id, preparedWorkflow);
+      if (input.scope !== "execution-only") workflow = preparedWorkflow;
+      await json(route, { workflow: preparedWorkflow });
       return;
     }
 
@@ -480,6 +518,56 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
       return;
     }
 
+    if (request.method() === "POST" && pathname === "/api/creative-studio/video-scripts") {
+      const input = request.postDataJSON() as CreateVideoScriptDraftRequest;
+      videoScriptRequests.push(input);
+      videoScriptDraft = {
+        id: "videoscript_e2e_waiting",
+        projectId: input.projectId,
+        scriptFormat: "full-script-v2",
+        status: "waiting-for-runner",
+        progress: 0,
+        mode: input.mode,
+        seedPhrases: input.mode === "build" ? input.seedPhrases : [],
+        sourceScript: input.mode === "tighten" ? input.sourceScript : null,
+        sceneDirection: input.sceneDirection ?? "",
+        videoDurationSeconds: input.videoDurationSeconds,
+        workflowId: input.workflowId,
+        workflowRevisionId: input.workflowRevisionId,
+        workflowName: workflow.name,
+        workflowVersion: workflowRevisions.get(input.workflowRevisionId)?.currentRevision.version ?? 1,
+        promptProfile: {
+          id: "ltx-2.5-i2v",
+          targetModel: "ltx-2.5",
+          outputFormat: "ltx-natural-sequence",
+          inputMode: input.inputMode,
+        },
+        inputMode: input.inputMode,
+        source: input.sourceId ? { id: input.sourceId, source: "upload", kind: "image", name: "Retained city frame" } : null,
+        generatedScript: null,
+        currentScript: null,
+        generatedSpokenText: null,
+        currentSpokenText: null,
+        editRevision: 0,
+        provider: "local-comfyui",
+        model: null,
+        comfyPromptId: null,
+        runnerId: null,
+        error: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        startedAt: null,
+        completedAt: null,
+      };
+      await json(route, { videoScriptDraft }, 202);
+      return;
+    }
+
+    if (request.method() === "GET" && pathname === "/api/creative-studio/video-scripts/videoscript_e2e_waiting" && videoScriptDraft) {
+      await json(route, { videoScriptDraft });
+      return;
+    }
+
     if (request.method() === "GET" && pathname === "/api/creative-studio/prompt-enhancements/promptenh_e2e_four_way" && promptEnhancement) {
       promptEnhancement = {
         ...promptEnhancement,
@@ -500,7 +588,17 @@ async function installVideoBackend(page: Page, withEnhancement: boolean): Promis
     await json(route, { error: `unhandled_e2e_api_route:${request.method()}:${pathname}` }, 500);
   });
 
-  return { jobs: jobRequests, batchRequests, enhancementRequests, revisionRequests, uploads, workflow: () => workflow };
+  return {
+    jobs: jobRequests,
+    batchRequests,
+    enhancementRequests,
+    videoScriptRequests,
+    revisionRequests,
+    uploads,
+    workflow: () => workflow,
+    workflowByRevision: (revisionId) => workflowRevisions.get(revisionId) ?? null,
+    releaseRevision,
+  };
 }
 
 async function openRetainedMedia(page: Page) {
@@ -564,6 +662,8 @@ test("Standard animate ignores a stored heavy draft and queues the speed-safe wo
   expect(backend.jobs.every((job) => job.videoDurationSeconds === 5)).toBe(true);
   expect(backend.jobs.every((job) => job.videoPerformanceMode === "fast-default")).toBe(true);
   expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
+  expect(backend.revisionRequests.every((request) => request.scope === "execution-only")).toBe(true);
+  expect(backend.workflow().currentRevision.id).toBe("workflowrev_ltx_i2v_e2e_1");
   await expect(page.getByText(/Invalid video variant/i)).toHaveCount(0);
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
 });
@@ -581,12 +681,15 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   await expect(page).toHaveURL(/#\/dna$/);
 
   expect(backend.enhancementRequests[0]).toMatchObject({
+    projectId: "project_video_e2e",
     workflowId: "workflow_ltx_i2v_e2e",
-    workflowRevisionId: "workflowrev_ltx_i2v_e2e_1",
     inputMode: "image-to-video",
     sourceId: SOURCE_ID,
     videoDurationSeconds: 5,
   });
+  expect(backend.enhancementRequests[0].workflowRevisionId).not.toBe("workflowrev_ltx_i2v_e2e_1");
+  expect(backend.workflow().projectId).toBe("project_model_library_origin");
+  expect(backend.workflow().currentRevision.id).toBe("workflowrev_ltx_i2v_e2e_1");
   expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["exact", "enhanced", "left-field", "awe"]);
   expect(backend.batchRequests).toHaveLength(1);
   expect(backend.batchRequests[0].jobs).toHaveLength(4);
@@ -604,8 +707,84 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   expect(backend.jobs.every((job) => job.videoDurationSeconds === 5)).toBe(true);
   expect(backend.jobs.every((job) => job.videoPerformanceMode === "fast-default")).toBe(true);
   expect(backend.revisionRequests.some((request) => request.values[MEGAPIXELS_PARAMETER_ID] === 0.2)).toBe(true);
+  expect(backend.revisionRequests.every((request) => request.scope === "execution-only")).toBe(true);
   await expect(page.getByText(/Invalid video variant/i)).toHaveCount(0);
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
+});
+
+test("Full Script prepares changed run settings without project-locking the reusable model", async ({ page }) => {
+  const backend = await installVideoBackend(page, false);
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  await openRetainedWork(page);
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
+  await page.getByLabel("Describe the video").fill("The figure crosses the glass atrium and ends beneath a violet spotlight.");
+  await openCreatePlan(page);
+  await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
+  await openCreativeControls(page);
+  await page.getByRole("button", { name: "Write full script" }).click();
+
+  const scriptBuilder = page.getByRole("dialog", { name: "Full Video Script" });
+  await scriptBuilder.getByRole("textbox", { name: /What should happen/ }).fill("A precise fashion walk through the atrium");
+  await scriptBuilder.getByRole("button", { name: "Write full video script" }).click();
+  await expect.poll(() => backend.videoScriptRequests.length, { timeout: 10_000 }).toBe(1);
+
+  const [request] = backend.videoScriptRequests;
+  expect(request).toMatchObject({
+    projectId: "project_video_e2e",
+    workflowId: "workflow_ltx_i2v_e2e",
+    inputMode: "image-to-video",
+    sourceId: SOURCE_ID,
+    videoDurationSeconds: 10,
+  });
+  expect(request.workflowRevisionId).not.toBe("workflowrev_ltx_i2v_e2e_1");
+  const preparedWorkflow = backend.workflowByRevision(request.workflowRevisionId);
+  expect(preparedWorkflow).not.toBeNull();
+  expect(videoWorkflowDurationParameters(preparedWorkflow!.currentRevision.parameters)
+    .map((parameter) => Number(parameter.value))).toEqual(expect.arrayContaining([10]));
+  expect(backend.workflow().projectId).toBe("project_model_library_origin");
+  expect(backend.workflow().currentRevision.id).toBe("workflowrev_ltx_i2v_e2e_1");
+  expect(backend.revisionRequests.every((revisionRequest) => revisionRequest.scope === "execution-only")).toBe(true);
+  await expect(scriptBuilder).toContainText("Waiting for your Local Runner");
+});
+
+test("Project switching is locked during preparation and an unmounted Create cannot submit stale work", async ({ page }) => {
+  const backend = await installVideoBackend(page, false, { delayFirstRevision: true });
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+
+  await page.getByRole("button", { name: "Video", exact: true }).click();
+  await openRetainedWork(page);
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
+  await page.getByLabel("Describe the video").fill("The figure crosses the glass atrium and ends beneath a violet spotlight.");
+  await openCreatePlan(page);
+  await page.getByRole("group", { name: "Video duration" }).getByRole("button", { name: "10s" }).click();
+  await openCreativeControls(page);
+  await page.getByRole("button", { name: "Write full script" }).click();
+  const scriptBuilder = page.getByRole("dialog", { name: "Full Video Script" });
+  await scriptBuilder.getByRole("textbox", { name: /What should happen/ }).fill("A precise fashion walk through the atrium");
+  await scriptBuilder.getByRole("button", { name: "Write full video script" }).click();
+  await expect.poll(() => backend.revisionRequests.length, { timeout: 10_000 }).toBe(1);
+
+  const projectSelect = page.getByLabel("Active project");
+  await expect(projectSelect).toBeDisabled();
+  try {
+    await projectSelect.evaluate((element) => {
+      const select = element as HTMLSelectElement;
+      select.disabled = false;
+      select.value = "project_video_other";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await expect(projectSelect).toHaveValue("project_video_other");
+  } finally {
+    backend.releaseRevision();
+  }
+
+  await expect(projectSelect).toBeEnabled({ timeout: 10_000 });
+  await page.waitForTimeout(500);
+  expect(backend.videoScriptRequests).toHaveLength(0);
+  expect(backend.jobs).toHaveLength(0);
+  expect(backend.workflow().currentRevision.id).toBe("workflowrev_ltx_i2v_e2e_1");
 });
 
 test("Mobile video creation keeps prompt and Create ahead of optional controls", async ({ page }) => {
@@ -897,7 +1076,9 @@ test("Retained-image Fast 30s remains an explicit single-render choice and queue
     workflow: { inputBindings: { [IMAGE_PARAMETER_ID]: SOURCE_ID } },
   });
   expect(request.workflow?.expectedPrompt).toContain(authoredDirection);
-  const submittedParameters = Object.fromEntries(backend.workflow().currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
+  const submittedWorkflow = backend.workflowByRevision(request.workflow?.revisionId ?? "");
+  expect(submittedWorkflow).not.toBeNull();
+  const submittedParameters = Object.fromEntries(submittedWorkflow!.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]));
   expect(submittedParameters).toMatchObject({
     "398:362::value": 30,
     "398:361::value": 24,
@@ -915,6 +1096,8 @@ test("Retained-image Fast 30s remains an explicit single-render choice and queue
   });
   expect(submittedParameters["398:357::strength"]).toBe(0.7);
   expect(submittedParameters["398:349::strength"]).toBe(1);
+  expect(backend.workflow().currentRevision.id).toBe("workflowrev_ltx_i2v_e2e_1");
+  expect(backend.revisionRequests.every((revisionRequest) => revisionRequest.scope === "execution-only")).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 

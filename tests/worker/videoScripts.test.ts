@@ -75,11 +75,13 @@ async function enrollRunner(name: string) {
 const fullTimeline = "SHOT 1 (0.00-3.00 seconds): In a white fashion studio, the subject turns one shoulder toward the key light while fabric drifts behind them. The camera begins a slow waist-high push, preserving the clean background and long floor shadow.\nSHOT 2 (3.00-7.00 seconds): They cross the set with a measured step as the lens pans beside them; reflected silver light travels over the jacket and the surrounding curtains move gently.\nSHOT 3 (7.00-10.00 seconds): The camera settles into a close-up as they hold a final pose, the studio glow softens, and the frame becomes still.\nAudio: soft room tone, fabric movement, restrained footsteps, a quiet shutter click, and low ambient music without dialogue.";
 
 describe("durable video Script Builder", () => {
-  it("builds a full provider-profiled script from a seed and stamps exact owner/job lineage", async () => {
+  it("uses an owner-library workflow across projects and stamps exact owner/job lineage", async () => {
+    const workflowProject = await createProject("Reusable Video Models");
     const project = await createProject("Full Script Lab");
-    const imported = await importVideoWorkflow(project.project.id);
+    const imported = await importVideoWorkflow(workflowProject.project.id);
     const created = await result<{ videoScriptDraft: {
       id: string;
+      projectId: string;
       status: string;
       scriptFormat: string;
       seedPhrases: string[];
@@ -103,6 +105,7 @@ describe("durable video Script Builder", () => {
       }),
     }), env));
     expect(created.videoScriptDraft).toMatchObject({
+      projectId: project.project.id,
       status: "waiting-for-runner",
       scriptFormat: "full-script-v2",
       seedPhrases: ["They are posing for a fashion shoot"],
@@ -297,6 +300,87 @@ describe("durable video Script Builder", () => {
         },
       },
     });
+  });
+
+  it("reuses an origin-project image workflow without crossing the active project's media boundary", async () => {
+    const workflowProject = await createProject("Script Model Origin");
+    const activeProject = await createProject("Active Script Project");
+    const imported = await importImageVideoWorkflow(workflowProject.project.id);
+    const uploadImage = async (projectId: string, fileName: string) => {
+      const bytes = new Uint8Array([137, 80, 78, 71]);
+      return result<{ asset: { id: string } }>(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+        method: "POST",
+        headers: {
+          "content-type": "image/png",
+          "x-cs-project-id": projectId,
+          "x-cs-file-name": encodeURIComponent(fileName),
+          "x-cs-file-size": String(bytes.byteLength),
+          "x-cs-training-eligible": "false",
+        },
+        body: bytes,
+      }), env));
+    };
+    const activeSource = await uploadImage(activeProject.project.id, "active-script-source.png");
+    const originSource = await uploadImage(workflowProject.project.id, "origin-script-source.png");
+    const scriptInput = (sourceId: string, idempotencyKey: string) => ({
+      scriptFormat: "full-script-v2",
+      projectId: activeProject.project.id,
+      workflowId: imported.workflow.id,
+      workflowRevisionId: imported.workflow.currentRevision.id,
+      mode: "build",
+      seedPhrases: ["They cross a violet fashion set"],
+      sceneDirection: "A precise editorial walk with no dialogue.",
+      inputMode: "image-to-video",
+      sourceId,
+      videoDurationSeconds: 10,
+      idempotencyKey,
+    });
+
+    const accepted = await routeCreativeStudioApi(request("/api/creative-studio/video-scripts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scriptInput(activeSource.asset.id, "script_active_source_001")),
+    }), env);
+    expect(accepted.status).toBe(202);
+    const acceptedPayload = await accepted.json() as {
+      ok: boolean;
+      videoScriptDraft: { id: string; projectId: string; workflowId: string; source: { id: string } };
+    };
+    expect(acceptedPayload).toMatchObject({
+      ok: true,
+      videoScriptDraft: {
+        projectId: activeProject.project.id,
+        workflowId: imported.workflow.id,
+        source: { id: activeSource.asset.id },
+      },
+    });
+
+    const rejected = await routeCreativeStudioApi(request("/api/creative-studio/video-scripts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scriptInput(originSource.asset.id, "script_origin_source_001")),
+    }), env);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ ok: false, error: "video_script_source_project_mismatch" });
+
+    const runner = await enrollRunner("Cross-project source runner");
+    const claimed = await result<{ kind: string; bundle: { videoScriptDraft: { id: string }; source: { id: string; projectId: string } } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      headers: runner.headers,
+      body: JSON.stringify({ version: "1.12.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
+    }), env));
+    expect(claimed).toMatchObject({
+      kind: "video-script",
+      bundle: {
+        videoScriptDraft: { id: acceptedPayload.videoScriptDraft.id },
+        source: { id: activeSource.asset.id, projectId: activeProject.project.id },
+      },
+    });
+    await result(await routeCreativeStudioApi(request(`/api/creative-studio/runner/video-scripts/${acceptedPayload.videoScriptDraft.id}/fail`, {
+      method: "POST",
+      headers: runner.headers,
+      body: JSON.stringify({ error: "cross_project_source_boundary_test_complete" }),
+    }), env));
   });
 
   it("authoritatively rejects wrong workflow duration/source context and invented dialogue", async () => {

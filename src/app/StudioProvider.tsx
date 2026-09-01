@@ -121,7 +121,12 @@ type StudioContextValue = {
   promoteArtifactToCanon: (worldId: string, input: PromoteArtifactToCanonRequest) => Promise<PromoteArtifactToCanonResult>;
   uploadMedia: (file: File, trainingEligible: boolean) => Promise<MediaAsset>;
   uploadWorkflow: (file: File, name?: string, description?: string) => Promise<WorkflowDefinition>;
-  saveWorkflowRevision: (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => Promise<WorkflowDefinition>;
+  saveWorkflowRevision: (
+    workflowId: string,
+    baseRevisionId: string,
+    values: Record<string, WorkflowScalar>,
+    scope?: SaveWorkflowRevisionRequest["scope"],
+  ) => Promise<WorkflowDefinition>;
   createGenerationRecipe: (input: CreateGenerationRecipeRequest) => Promise<GenerationRecipe>;
   updateGenerationRecipe: (recipeId: string, input: UpdateGenerationRecipeRequest) => Promise<GenerationRecipe>;
   archiveGenerationRecipe: (recipeId: string) => Promise<GenerationRecipe>;
@@ -655,8 +660,13 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return transact(() => adapter.uploadWorkflow(activeProjectId, file, name, description));
   }, [activeProjectId, adapter, transact]);
 
-  const saveWorkflowRevision = useCallback(async (workflowId: string, baseRevisionId: string, values: Record<string, WorkflowScalar>) => {
-    const input: SaveWorkflowRevisionRequest = { baseRevisionId, values };
+  const saveWorkflowRevision = useCallback(async (
+    workflowId: string,
+    baseRevisionId: string,
+    values: Record<string, WorkflowScalar>,
+    scope: SaveWorkflowRevisionRequest["scope"] = "library-current",
+  ) => {
+    const input: SaveWorkflowRevisionRequest = { baseRevisionId, values, scope };
     return transact(() => adapter.saveWorkflowRevision(workflowId, input));
   }, [adapter, transact]);
 

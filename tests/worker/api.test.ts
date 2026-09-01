@@ -1564,6 +1564,72 @@ describe("Creative Studio Worker API", () => {
     expect(revisedPayload.workflow.currentRevision).toMatchObject({ version: 2, parentRevisionId: importedPayload.workflow.currentRevision.id });
     expect(revisedPayload.workflow.currentRevision.contentHash).not.toBe(importedPayload.workflow.currentRevision.contentHash);
 
+    const executionOnlyInput = {
+      baseRevisionId: revisedPayload.workflow.currentRevision.id,
+      values: { "2::value": "A chrome object in precise violet light", "3::seed": 314 },
+      scope: "execution-only",
+    };
+    const executionOnly = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify(executionOnlyInput),
+    }), local);
+    expect(executionOnly.status).toBe(201);
+    const executionOnlyPayload = await result(executionOnly) as { workflow: { currentRevision: { id: string; version: number; parentRevisionId: string; contentHash: string } } };
+    expect(executionOnlyPayload.workflow.currentRevision).toMatchObject({
+      version: 3,
+      parentRevisionId: revisedPayload.workflow.currentRevision.id,
+    });
+    expect(executionOnlyPayload.workflow.currentRevision.contentHash).not.toBe(revisedPayload.workflow.currentRevision.contentHash);
+
+    const duplicateExecutionOnly = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify(executionOnlyInput),
+    }), local);
+    expect(duplicateExecutionOnly.status).toBe(201);
+    const duplicateExecutionOnlyPayload = await result(duplicateExecutionOnly) as { workflow: { currentRevision: { id: string; version: number; parentRevisionId: string; contentHash: string } } };
+    expect(duplicateExecutionOnlyPayload.workflow.currentRevision).toMatchObject(executionOnlyPayload.workflow.currentRevision);
+
+    const invalidScope = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify({ ...executionOnlyInput, scope: "project-current" }),
+    }), local);
+    expect(invalidScope.status).toBe(400);
+    expect(await result(invalidScope)).toMatchObject({ error: "invalid_workflow_revision_scope" });
+
+    const nullScope = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-authenticated-user-email": "workflow@example.com" },
+      body: JSON.stringify({ ...executionOnlyInput, scope: null }),
+    }), local);
+    expect(nullScope.status).toBe(400);
+    expect(await result(nullScope)).toMatchObject({ error: "invalid_workflow_revision_scope" });
+
+    const listedAfterExecutionOnly = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      headers: { "cf-access-authenticated-user-email": "workflow@example.com" },
+    }), local)) as { workflows: Array<{ id: string; currentRevision: { id: string; version: number; contentHash: string } }> };
+    expect(listedAfterExecutionOnly.workflows.find((workflow) => workflow.id === importedPayload.workflow.id)?.currentRevision).toMatchObject({
+      id: revisedPayload.workflow.currentRevision.id,
+      version: 2,
+      contentHash: revisedPayload.workflow.currentRevision.contentHash,
+    });
+
+    const executionOnlyExport = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/content?revision=${executionOnlyPayload.workflow.currentRevision.id}`, {
+      headers: { "cf-access-authenticated-user-email": "workflow@example.com" },
+    }), local);
+    expect(executionOnlyExport.status).toBe(200);
+    expect(executionOnlyExport.headers.get("x-creative-studio-workflow-hash")).toBe(executionOnlyPayload.workflow.currentRevision.contentHash);
+    expect(await executionOnlyExport.json()).toMatchObject({ "2": { inputs: { value: "A chrome object in precise violet light" } }, "3": { inputs: { seed: 314 } } });
+
+    const currentExportAfterExecutionOnly = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/content`, {
+      headers: { "cf-access-authenticated-user-email": "workflow@example.com" },
+    }), local);
+    expect(currentExportAfterExecutionOnly.status).toBe(200);
+    expect(currentExportAfterExecutionOnly.headers.get("x-creative-studio-workflow-hash")).toBe(revisedPayload.workflow.currentRevision.contentHash);
+    expect(await currentExportAfterExecutionOnly.json()).toMatchObject({ "2": { inputs: { value: "A chrome object in warm light" } }, "3": { inputs: { seed: 99 } } });
+
     const exported = await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${importedPayload.workflow.id}/content?revision=${revisedPayload.workflow.currentRevision.id}`, {
       headers: { "cf-access-authenticated-user-email": "workflow@example.com" },
     }), local);

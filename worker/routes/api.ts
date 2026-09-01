@@ -144,6 +144,7 @@ import {
 import { retainCompletedArtifact } from "../retention";
 import type { Env, OwnerSession } from "../types";
 import {
+  createAutomationWorkflowRevision,
   createWorkflowRevision,
   importWorkflow,
   listWorkflows,
@@ -1769,7 +1770,14 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const match = url.pathname.match(/^\/api\/creative-studio\/workflows\/([a-z0-9_]+)\/revisions$/i);
       const input = await body<SaveWorkflowRevisionRequest>(request);
       if (!match || !input || !input.values || typeof input.values !== "object") return json({ ok: false, error: "invalid_workflow_revision_request" }, { status: 400 });
-      return json({ ok: true, workflow: await createWorkflowRevision(env, session.userId, match[1], input) }, { status: 201 });
+      const scope = input.scope === undefined ? "library-current" : input.scope;
+      if (scope !== "library-current" && scope !== "execution-only") {
+        return json({ ok: false, error: "invalid_workflow_revision_scope" }, { status: 400 });
+      }
+      const workflow = scope === "execution-only"
+        ? await createAutomationWorkflowRevision(env, session.userId, match[1], input)
+        : await createWorkflowRevision(env, session.userId, match[1], input);
+      return json({ ok: true, workflow }, { status: 201 });
     }
     if (route === "workflow-content") {
       const match = url.pathname.match(/^\/api\/creative-studio\/workflows\/([a-z0-9_]+)\/content$/i);

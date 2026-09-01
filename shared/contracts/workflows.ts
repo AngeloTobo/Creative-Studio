@@ -47,6 +47,12 @@ export type WorkflowDefinition = {
 export type SaveWorkflowRevisionRequest = {
   baseRevisionId: string;
   values: Record<string, WorkflowScalar>;
+  /**
+   * Model-library edits intentionally advance the visible default revision.
+   * Create uses immutable execution revisions so per-run settings never rewrite
+   * the owner's reusable model defaults.
+   */
+  scope?: "library-current" | "execution-only";
 };
 
 export type WorkflowGraphInspection = {

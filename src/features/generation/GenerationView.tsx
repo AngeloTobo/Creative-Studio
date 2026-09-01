@@ -439,6 +439,8 @@ export function GenerationView({
   const evolutionBatchAttemptRef = useRef({ id: evolutionStudyId, signature: "" });
   const videoBatchAttemptRef = useRef({ id: videoPairId, signature: "" });
   const outputBatchAttemptRef = useRef({ id: outputBatchId, signature: "" });
+  const executionSetupSignatureRef = useRef("");
+  const executionSetupMountedRef = useRef(true);
   const recentResultsProjectRef = useRef("");
   const recentNewestArtifactRef = useRef<string | null>(null);
   const trustedVideoRestoreRef = useRef<{
@@ -914,7 +916,15 @@ export function GenerationView({
   const parameterValue = (parameter: WorkflowParameter) => Object.prototype.hasOwnProperty.call(fastImageOverrides, parameter.id)
     ? fastImageOverrides[parameter.id]
     : rawParameterValue(parameter);
-  const settingsChanged = scalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)));
+  const displayedWorkflowValues = Object.fromEntries(
+    scalarParameters.map((parameter) => [parameter.id, parameterValue(parameter)]),
+  ) as Record<string, WorkflowScalar>;
+  const executionWorkflowOverrides = Object.fromEntries(
+    scalarParameters
+      .filter((parameter) => !sameWorkflowValue(parameter.value, displayedWorkflowValues[parameter.id]))
+      .map((parameter) => [parameter.id, displayedWorkflowValues[parameter.id]]),
+  ) as Record<string, WorkflowScalar>;
+  const settingsChanged = Object.keys(executionWorkflowOverrides).length > 0;
   const advancedSettingsChanged = advancedScalarParameters.some((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)));
   const runnerOnline = snapshot?.runners.some((runner) => runner.state === "online" || runner.state === "busy") ?? false;
   const uiOnlyDevelopment = snapshot?.adapter.id === "development-local-storage";
@@ -970,13 +980,14 @@ export function GenerationView({
     }, videoPromptProfile);
   };
   const promptEnhancementMatchesWorkflow = Boolean(workflow && activePromptEnhancement
+    && activePromptEnhancement.projectId === activeProjectId
     && activePromptEnhancement.workflowId === workflow.id
-    && activePromptEnhancement.workflowRevisionId === workflow.currentRevision.id
     && activePromptEnhancement.videoDurationSeconds === videoDurationSeconds
     && activePromptEnhancement.inputMode === promptEnhancementInputMode
     && (activePromptEnhancement.sourceId ?? null) === promptEnhancementSourceId);
   const appliedPromptEnhancementMatchesContext = Boolean(workflow && appliedPromptEnhancement
     && appliedPromptEnhancement.status === "completed"
+    && appliedPromptEnhancement.projectId === activeProjectId
     && appliedPromptEnhancement.workflowId === workflow.id
     && appliedPromptEnhancement.videoDurationSeconds === videoDurationSeconds
     && appliedPromptEnhancement.inputMode === promptEnhancementInputMode
@@ -1276,6 +1287,27 @@ export function GenerationView({
     videoOperation,
     appliedPromptEnhancementId,
   });
+  const executionSetupSignature = JSON.stringify({
+    projectId: activeProjectId,
+    workflowId: workflow?.id ?? null,
+    workflowRevisionId: workflow?.currentRevision.id ?? null,
+    values: displayedWorkflowValues,
+    inputBindings: effectiveInputBindings,
+    sourceId: quickSource?.id ?? null,
+    durationSeconds: generationIntent === "video" ? videoDurationSeconds : null,
+  });
+
+  useEffect(() => {
+    executionSetupSignatureRef.current = executionSetupSignature;
+  }, [executionSetupSignature]);
+
+  useEffect(() => {
+    executionSetupMountedRef.current = true;
+    return () => {
+      executionSetupMountedRef.current = false;
+      executionSetupSignatureRef.current = "";
+    };
+  }, []);
 
   useEffect(() => {
     sessionPersistRef.current = () => {
@@ -1594,15 +1626,48 @@ export function GenerationView({
     setHeavyRenderConfirmationOpen(false);
   };
 
+  const saveExecutionWorkflowRevision = async (
+    baseWorkflow: WorkflowDefinition,
+    values: Record<string, WorkflowScalar>,
+    expectedSetupSignature: string,
+  ) => {
+    const prepared = await saveWorkflowRevision(
+      baseWorkflow.id,
+      baseWorkflow.currentRevision.id,
+      values,
+      "execution-only",
+    );
+    if (!executionSetupMountedRef.current || executionSetupSignatureRef.current !== expectedSetupSignature) {
+      throw new Error("workflow_setup_changed");
+    }
+    return prepared;
+  };
+
+  const prepareExecutionWorkflow = async (expectedSetupSignature = executionSetupSignature) => {
+    if (!workflow) throw new Error("workflow_not_found");
+    if (!executionSetupMountedRef.current || executionSetupSignatureRef.current !== expectedSetupSignature) {
+      throw new Error("workflow_setup_changed");
+    }
+    if (!Object.keys(executionWorkflowOverrides).length) return workflow;
+    return saveExecutionWorkflowRevision(workflow, executionWorkflowOverrides, expectedSetupSignature);
+  };
+
+  const preserveDisplayedWorkflowSettings = () => {
+    if (!workflow) return;
+    setValuesRevisionId(workflow.currentRevision.id);
+    setWorkflowValues(displayedWorkflowValues);
+  };
+
   const requestVideoPromptEnhancement = async () => {
     if (!workflow || generationIntent !== "video" || !directionReady || !promptEnhancementAvailable || promptEnhancementPending) return;
     setLocalError("");
     const sourcePrompt = direction.trim();
     setOriginalVideoDirection((current) => current ?? sourcePrompt);
     try {
+      const helperWorkflow = await prepareExecutionWorkflow();
       const request = await enhanceVideoPrompt({
-        workflowId: workflow.id,
-        workflowRevisionId: workflow.currentRevision.id,
+        workflowId: helperWorkflow.id,
+        workflowRevisionId: helperWorkflow.currentRevision.id,
         sourcePrompt,
         videoDurationSeconds,
         inputMode: promptEnhancementInputMode,
@@ -1611,7 +1676,10 @@ export function GenerationView({
       handledPromptEnhancementId.current = "";
       setPromptEnhancementId(request.id);
       setNotice("");
-    } catch {
+    } catch (requestError) {
+      if (requestError instanceof Error && requestError.message === "workflow_setup_changed") {
+        setLocalError("The model settings changed while Creative Studio was preparing them. Review the current setup, then try Enhance again.");
+      }
       // StudioProvider keeps the normalized error visible; the authored prompt is untouched.
     }
   };
@@ -1654,6 +1722,7 @@ export function GenerationView({
       return;
     }
     try {
+      const helperWorkflow = await prepareExecutionWorkflow();
       const request = mode === "build"
         ? await (() => {
           const seedPhrases = videoScriptSeedPhrases(videoScriptSeedIdeas);
@@ -1664,8 +1733,8 @@ export function GenerationView({
             scriptFormat: "full-script-v2",
             mode: "build",
             seedPhrases,
-            workflowId: workflow.id,
-            workflowRevisionId: workflow.currentRevision.id,
+            workflowId: helperWorkflow.id,
+            workflowRevisionId: helperWorkflow.currentRevision.id,
             inputMode: promptEnhancementInputMode,
             sourceId: promptEnhancementSourceId,
             sceneDirection: direction.trim(),
@@ -1679,8 +1748,8 @@ export function GenerationView({
             scriptFormat: "full-script-v2",
             mode: "tighten",
             sourceScript,
-            workflowId: workflow.id,
-            workflowRevisionId: workflow.currentRevision.id,
+            workflowId: helperWorkflow.id,
+            workflowRevisionId: helperWorkflow.currentRevision.id,
             inputMode: promptEnhancementInputMode,
             sourceId: promptEnhancementSourceId,
             sceneDirection: direction.trim(),
@@ -1695,7 +1764,9 @@ export function GenerationView({
       setVideoScriptBuilderOpen(true);
       setNotice("");
     } catch (requestError) {
-      setVideoScriptError(videoScriptErrorMessage(requestError));
+      setVideoScriptError(requestError instanceof Error && requestError.message === "workflow_setup_changed"
+        ? "The model settings changed while Creative Studio was preparing them. Review the current setup, then write the full script again."
+        : videoScriptErrorMessage(requestError));
     }
   };
 
@@ -1940,7 +2011,7 @@ export function GenerationView({
     setLocalError("");
     const revisionNotice = recipe.workflowRevisionId === recipeWorkflow.currentRevision.id
       ? ""
-      : " Its original immutable model revision is retained, but Create is applying the saved values to the model's current revision; review them before generating.";
+      : " Its original immutable model revision is retained; Create will apply the saved run values to an execution-only revision based on the model's current default. Review them before generating.";
     setNotice(`${recipe.name} loaded · ${recipe.evidenceSummary.runs ? `${recipe.evidenceSummary.runs} proven runs` : "ready for its first evidence run"}.${revisionNotice}${detachedAssistedScript ? " The recipe direction is preserved, and the previous assisted-script lineage was detached; write a new full script for this setup if needed." : ""}`);
   };
 
@@ -1952,12 +2023,7 @@ export function GenerationView({
       return;
     }
     try {
-      const modified = Object.fromEntries(scalarParameters
-        .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
-        .map((parameter) => [parameter.id, parameterValue(parameter)]));
-      const recipeWorkflow = Object.keys(modified).length
-        ? await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified)
-        : workflow;
+      const recipeWorkflow = await prepareExecutionWorkflow();
       const profileIdentity = musicPromptProfile?.id ?? `creative-studio-${generationIntent}-direct-prompt/1.0`;
       const profileSeparator = profileIdentity.lastIndexOf("/");
       const sourceKinds = [...new Set([
@@ -1984,11 +2050,13 @@ export function GenerationView({
         sourceKinds,
         intentTier: generationGoal,
       });
-      setWorkflowId(recipeWorkflow.id);
-      setValuesRevisionId(recipeWorkflow.currentRevision.id);
-      setWorkflowValues(Object.fromEntries(recipeWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+      setWorkflowId(workflow.id);
+      preserveDisplayedWorkflowSettings();
       setNotice(`${recipe.name} saved as a reusable recipe. Future review evidence will show whether it is fast and strong.`);
-    } catch {
+    } catch (recipeError) {
+      if (recipeError instanceof Error && recipeError.message === "workflow_setup_changed") {
+        setLocalError("The model settings changed while Creative Studio was preparing the recipe. Review the current setup, then save it again.");
+      }
       // The provider exposes a normalized visible error.
     }
   };
@@ -2227,6 +2295,7 @@ export function GenerationView({
     }
     beginCreativeSessionSubmission();
     try {
+      const submittedSetupSignature = executionSetupSignature;
       let attemptEvolutionStudyId = evolutionStudyId;
       if (evolutionEnabled) {
         if (evolutionBatchAttemptRef.current.id !== evolutionStudyId) {
@@ -2276,13 +2345,7 @@ export function GenerationView({
         return;
       }
       selectDna(dna);
-      const modified = Object.fromEntries(scalarParameters
-        .filter((parameter) => !sameWorkflowValue(parameter.value, parameterValue(parameter)))
-        .map((parameter) => [parameter.id, parameterValue(parameter)]));
-      let runWorkflow = workflow;
-      if (Object.keys(modified).length) {
-        runWorkflow = await saveWorkflowRevision(workflow.id, workflow.currentRevision.id, modified);
-      }
+      const runWorkflow = await prepareExecutionWorkflow(submittedSetupSignature);
       if (evolutionEnabled && quickSource && workflowPromptParameter && projectTasteMemory && personalTaste) {
         const roles: EvolutionRole[] = ["refine", "correct", "discovery"];
         const videoVersions = generationIntent === "video"
@@ -2316,7 +2379,7 @@ export function GenerationView({
             ? role === "discovery" ? videoVersions?.[1].variant : videoVersions?.[0].variant
             : undefined;
           if (workflowSeedParameter && variant?.seed !== null && variant?.seed !== undefined) values[workflowSeedParameter.id] = variant.seed;
-          branchWorkflow = await saveWorkflowRevision(branchWorkflow.id, branchWorkflow.currentRevision.id, values);
+          branchWorkflow = await saveExecutionWorkflowRevision(branchWorkflow, values, submittedSetupSignature);
           const evolution: EvolutionJobContext = {
             schemaVersion: "creative-studio-evolution-request/1.0",
             studyId: attemptEvolutionStudyId,
@@ -2344,8 +2407,7 @@ export function GenerationView({
             storyRecommendation: selectedStoryRecommendation,
           });
         }
-        setValuesRevisionId(branchWorkflow.currentRevision.id);
-        setWorkflowValues(Object.fromEntries(branchWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+        preserveDisplayedWorkflowSettings();
         setNotice("Refine, Correct, and Discovery queued as one durable evolution study. Review the three retained branches together in Artifacts.");
         const nextEvolutionStudyId = `evolve_${crypto.randomUUID()}`;
         const nextVideoPairId = `video_pair_${crypto.randomUUID()}`;
@@ -2397,7 +2459,7 @@ export function GenerationView({
             return !parameter || !sameWorkflowValue(parameter.value, value);
           });
           if (mustSaveOutputRevision) {
-            outputWorkflow = await saveWorkflowRevision(outputWorkflow.id, outputWorkflow.currentRevision.id, values);
+            outputWorkflow = await saveExecutionWorkflowRevision(outputWorkflow, values, submittedSetupSignature);
           }
           videoJobs.push({
             workflow: outputWorkflow,
@@ -2429,8 +2491,7 @@ export function GenerationView({
           ? await submitWorkflowBatch({ batchId: attemptOutputBatchId, jobs: videoJobs })
           : null;
         if (!batchResult) await submitWorkflowJob(videoJobs[0]!);
-        setValuesRevisionId(outputWorkflow.currentRevision.id);
-        setWorkflowValues(Object.fromEntries(outputWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+        preserveDisplayedWorkflowSettings();
         setNotice(batchResult?.batch.status === "waiting"
           ? `${batchResult.batch.completedLanes} of ${batchResult.batch.laneCount} video jobs were created immediately. The durable set is saved and Local Runner will resume every missing version automatically.`
           : outputCount === 4
@@ -2448,12 +2509,12 @@ export function GenerationView({
       const outputJobs: SubmitWorkflowJobInput[] = [];
       for (let index = 0; index < outputCount; index += 1) {
         if (generationIntent === "image" && outputCount > 1 && workflowSeedParameters.length) {
-          outputWorkflow = await saveWorkflowRevision(outputWorkflow.id, outputWorkflow.currentRevision.id, Object.fromEntries(
+          outputWorkflow = await saveExecutionWorkflowRevision(outputWorkflow, Object.fromEntries(
             workflowSeedParameters.map((parameter, seedIndex) => [
               parameter.id,
               generationBatchSeed(attemptOutputBatchId, index * workflowSeedParameters.length + seedIndex),
             ]),
-          ));
+          ), submittedSetupSignature);
         }
         const outputJob: SubmitWorkflowJobInput = {
           workflow: outputWorkflow,
@@ -2480,8 +2541,7 @@ export function GenerationView({
       const batchResult = outputJobs.length
         ? await submitWorkflowBatch({ batchId: attemptOutputBatchId, jobs: outputJobs })
         : null;
-      setValuesRevisionId(outputWorkflow.currentRevision.id);
-      setWorkflowValues(Object.fromEntries(outputWorkflow.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value])));
+      preserveDisplayedWorkflowSettings();
       setNotice(batchResult?.batch.status === "waiting"
         ? `${batchResult.batch.completedLanes} of ${batchResult.batch.laneCount} image jobs were created immediately. The durable set is saved and Local Runner will resume every missing version automatically.`
         : `${outputCount} durable ${generationIntent === "music" ? "song" : generationIntent} ${outputCount === 1 ? "job" : "jobs"} queued${outputCount > 1 ? " with distinct retained seeds" : ""}. You can keep creating while they run.`);
@@ -2492,7 +2552,9 @@ export function GenerationView({
       if (openQueueAfter) onQueued();
     } catch (queueError) {
       resumeCreativeSessionAutosave();
-      if (queueError instanceof Error && queueError.message.startsWith("video_script")) {
+      if (queueError instanceof Error && queueError.message === "workflow_setup_changed") {
+        setLocalError("The project or model settings changed while Creative Studio was preparing the run. Nothing was queued; review the current setup and generate again.");
+      } else if (queueError instanceof Error && queueError.message.startsWith("video_script")) {
         setLocalError(queueError.message === "video_script_context_mismatch"
           ? "This full script was written for a different model, source, or video length. Write it again for the current setup."
           : videoScriptErrorMessage(queueError));
@@ -2884,7 +2946,7 @@ export function GenerationView({
               <label htmlFor="creative-studio-direction">{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</label>
               <small className="quick-autosave-state">{sessionId ? "Draft saved." : "Saves as you type."}</small>
             </div>
-            <textarea id="creative-studio-direction" value={direction} maxLength={VIDEO_PROMPT_ENHANCED_MAX_LENGTH} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} />
+            <textarea id="creative-studio-direction" value={direction} maxLength={VIDEO_PROMPT_ENHANCED_MAX_LENGTH} disabled={busy} onChange={(event) => setDirection(event.target.value)} placeholder={intent === "music" ? "Tempo, feeling, instruments, structure, and vocals…" : videoOperation ? "Continue the action, camera motion, lighting, and timing…" : intent === "video" ? "Subject, action, camera movement, light, and atmosphere…" : "Subject, composition, materials, light, color, and atmosphere…"} />
             {generationIntent === "video" && (promptEnhancementPending || activePromptEnhancement || promptEnhancementApplied) ? <div className={`quick-prompt-enhancement-state${activePromptEnhancement?.status === "failed" ? " failed" : promptEnhancementApplied ? " applied" : ""}`} role="status">
               <span><Icon name={activePromptEnhancement?.status === "failed" ? "close" : promptEnhancementPending ? "history" : "wand"} size={13} /><small>{promptEnhancementPending
                 ? activePromptEnhancement?.status === "running" ? "Gemma 4 is adding motion, camera, timing, and atmosphere on your machine." : "Waiting for local Gemma 4. Your prompt is safe and unchanged."
@@ -3190,12 +3252,12 @@ export function GenerationView({
               }}>{label}</button>)}
             </div>
             <div className="quick-video-speech-compose">
-              {videoSpeechMode !== "no-speech" ? <label className={`quick-video-speech-line${!videoSpeechFitsDuration ? " over" : ""}`}><span>{videoSpeechMode === "exact-script" ? "Exact spoken words" : "Spoken-line idea"}</span><input value={videoSpeechText} maxLength={VIDEO_SPEECH_TEXT_MAX_LENGTH} onChange={(event) => { setVideoSpeechText(event.target.value); setLocalError(""); }} placeholder={videoSpeechMode === "exact-script" ? "I remember this place." : "A short idea; Creative Studio removes filler and keeps one sentence."} /><small>{!videoSpeechFitsDuration ? `Shorten to ${videoSpeechWordBudget.maximum} words for ${videoDurationSeconds}s.` : videoSpeechMode === "exact-script" ? "Sent verbatim once. No improvised dialogue." : "Reduced to one clear sentence. No improvised dialogue."}</small></label> : <p className="quick-video-speech-safe">No dialogue. The existing model-tuned ambience and sound design stay active.</p>}
+              {videoSpeechMode !== "no-speech" ? <label className={`quick-video-speech-line${!videoSpeechFitsDuration ? " over" : ""}`}><span>{videoSpeechMode === "exact-script" ? "Exact spoken words" : "Spoken-line idea"}</span><input value={videoSpeechText} maxLength={VIDEO_SPEECH_TEXT_MAX_LENGTH} disabled={busy} onChange={(event) => { setVideoSpeechText(event.target.value); setLocalError(""); }} placeholder={videoSpeechMode === "exact-script" ? "I remember this place." : "A short idea; Creative Studio removes filler and keeps one sentence."} /><small>{!videoSpeechFitsDuration ? `Shorten to ${videoSpeechWordBudget.maximum} words for ${videoDurationSeconds}s.` : videoSpeechMode === "exact-script" ? "Sent verbatim once. No improvised dialogue." : "Reduced to one clear sentence. No improvised dialogue."}</small></label> : <p className="quick-video-speech-safe">No dialogue. The existing model-tuned ambience and sound design stay active.</p>}
               <button type="button" className="quick-script-help" disabled={busy || videoScriptPending} title={!videoScriptAvailable ? videoScriptCapability?.detail ?? "Start Local Runner 1.12 and ComfyUI for local Gemma." : !workflow ? "Choose a video model before writing a full script." : undefined} onClick={() => { setVideoScriptBuilderOpen(true); setVideoScriptError(""); }}><Icon name="wand" size={14} />{videoScriptButtonLabel}</button>
               {videoScriptStatus ? <small className={`quick-script-status${videoScriptContextChanged || activeVideoScriptDraft?.status === "failed" ? " warn" : ""}`} role="status">{videoScriptStatus}</small> : null}
             </div>
           </section> : null}
-          {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
+          {intent === "music" && workflowLyricsParameter ? <details className="quick-song-lyrics"><summary><span><Icon name="music" size={14} /><strong>Lyrics</strong></span><small>{lyrics.trim() ? "Included" : "Optional · instrumental when empty"}</small></summary><textarea aria-label="Song lyrics" value={lyrics} maxLength={8_000} disabled={busy} onChange={(event) => setLyrics(event.target.value)} placeholder="Add section labels and lyrics, or leave empty for an instrumental…" /></details> : null}
           {!evolutionEnabled && generationIntent === "image" ? <div className="quick-output-count">
             <span><strong>Outputs</strong><small>{outputCountSeedBlocked ? "This model must expose a sampler seed for that many distinct results." : "Every result is a separate durable job with its own retained settings."}</small></span>
             <div role="group" aria-label={`Number of ${generationIntent} outputs`}>
@@ -3224,10 +3286,10 @@ export function GenerationView({
           {mediaParameters.length > 1 || missingMediaParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Workflow inputs</strong><small>{missingMediaParameters.length ? `${missingMediaParameters.length} required` : "Connected"}</small></header><div className="quick-binding-grid">{mediaParameters.map((parameter) => {
             const uploadChoices = projectMedia.filter((asset) => !parameter.mediaKind || asset.kind === parameter.mediaKind).map((asset) => ({ id: asset.id, label: `${asset.name} · upload` }));
             const artifactChoices = projectArtifacts.filter((artifact) => !parameter.mediaKind || (artifact.kind === "music" ? "audio" : artifact.kind) === parameter.mediaKind).map((artifact) => ({ id: artifact.id, label: `${artifact.name} · generated` }));
-            return <label className="field" key={parameter.id}><span>{parameter.label}</span><select value={effectiveInputBindings[parameter.id] ?? ""} onChange={(event) => setInputBindings((current) => ({ ...current, [parameter.id]: event.target.value }))}><option value="">Choose {parameter.mediaKind ?? "media"}</option>{[...artifactChoices, ...uploadChoices].map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}</select></label>;
+            return <label className="field" key={parameter.id}><span>{parameter.label}</span><select value={effectiveInputBindings[parameter.id] ?? ""} disabled={busy} onChange={(event) => setInputBindings((current) => ({ ...current, [parameter.id]: event.target.value }))}><option value="">Choose {parameter.mediaKind ?? "media"}</option>{[...artifactChoices, ...uploadChoices].map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}</select></label>;
           })}</div></section> : null}
 
-          {advancedScalarParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Exact settings</strong><small>{settingsChanged ? `Will save workflow v${(workflow?.currentRevision.version ?? 0) + 1}` : `Workflow v${workflow?.currentRevision.version}`}</small></header><div className="workflow-run-parameters">{advancedScalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} onChange={(value) => {
+          {advancedScalarParameters.length ? <section className="quick-advanced-section quick-advanced-wide"><header><strong>Exact settings</strong><small>{settingsChanged ? "Run settings · model defaults unchanged" : `Model defaults · v${workflow?.currentRevision.version}`}</small></header><div className="workflow-run-parameters">{advancedScalarParameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={parameterValue(parameter)} showBinding={false} disabled={busy} onChange={(value) => {
             if (!workflow) return;
             if (parameter.id === workflowPromptParameter?.id) {
               setSelectedStoryRecommendation(undefined);

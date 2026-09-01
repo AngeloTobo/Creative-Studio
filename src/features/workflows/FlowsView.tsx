@@ -45,10 +45,10 @@ export function FlowsView({ embedded = false }: { embedded?: boolean } = {}) {
 
   return <section className={`flows-view flows-view-compact fade-up${embedded ? " embedded" : ""}`}>
     <details className="workflow-import-shell glass" open={!workflows.length || undefined}>
-      <summary><span><span className="media-drop-icon"><Icon name="flows" size={18} /></span><span><strong>Import a ComfyUI model</strong><small>{projectRequired ? "Select a project to import · browsing stays available" : "JSON graph · immutable revisions"}</small></span></span><span>{workflows.length} saved</span><Icon name="chevronDown" size={16} /></summary>
+      <summary><span><span className="media-drop-icon"><Icon name="flows" size={18} /></span><span><strong>Import a ComfyUI model</strong><small>{projectRequired ? "Select a project to record import provenance · browsing stays available" : "JSON graph · immutable revisions"}</small></span></span><span>{workflows.length} saved</span><Icon name="chevronDown" size={16} /></summary>
       <section className="workflow-import workflow-import-compact">
-      <div className="workflow-import-copy"><span className="eyebrow">Model library</span><h2>Add a workflow</h2><p>Import into the active project, then use the model from Create. The graph and every settings revision remain immutable and content-hashed.</p></div>
-      {projectRequired ? <div className="workflow-project-required workflow-notice" role="note"><Icon name="projects" size={18} /><span><strong>Create or select a project to import.</strong><small>Models are project-owned. You can still browse and inspect every saved model below.</small></span></div> : null}
+      <div className="workflow-import-copy"><span className="eyebrow">Model library</span><h2>Add a workflow</h2><p>Import once, then reuse the model from Create across your projects. The selected project records where it entered your library; the graph and every settings revision remain immutable and content-hashed.</p></div>
+      {projectRequired ? <div className="workflow-project-required workflow-notice" role="note"><Icon name="projects" size={18} /><span><strong>Create or select a project to record this import.</strong><small>Models are reusable across your projects. You can still browse and inspect every saved model below.</small></span></div> : null}
       <label className="workflow-drop">
         <input ref={inputRef} type="file" accept="application/json,.json" disabled={importDisabled} onChange={(event) => {
           const next = event.target.files?.[0] ?? null;
@@ -88,7 +88,7 @@ export function FlowsView({ embedded = false }: { embedded?: boolean } = {}) {
           <div className="workflow-facts"><span><small>Revision</small><strong>v{selected.currentRevision.version}</strong></span><span><small>Nodes</small><strong>{selected.currentRevision.nodeCount}</strong></span><span><small>Editable</small><strong>{selected.currentRevision.parameters.length}</strong></span><span className="workflow-hash"><small>SHA-256</small><code>{selected.currentRevision.contentHash}</code></span></div>
           {selected.executionState === "api-export-required" ? <div className="workflow-notice"><Icon name="external" size={18} /><span><strong>This is a ComfyUI UI graph.</strong><small>You can version, edit, and download it here. Local automated execution will require its API-format export.</small></span></div> : null}
           <div className="workflow-parameters">
-            {selected.currentRevision.parameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={effectiveValues[parameter.id] ?? parameter.value} onChange={(value) => {
+            {selected.currentRevision.parameters.map((parameter) => <WorkflowParameterField key={parameter.id} parameter={parameter} value={effectiveValues[parameter.id] ?? parameter.value} disabled={busy} onChange={(value) => {
               if (valuesRevisionId !== selected.currentRevision.id) {
                 setValuesRevisionId(selected.currentRevision.id);
                 setValues({ ...Object.fromEntries(selected.currentRevision.parameters.map((item) => [item.id, item.value])), [parameter.id]: value });
@@ -102,7 +102,7 @@ export function FlowsView({ embedded = false }: { embedded?: boolean } = {}) {
           <footer className="workflow-actions">
             <a className="btn btn-ghost" href={`${selected.id ? `/api/creative-studio/workflows/${encodeURIComponent(selected.id)}/content?revision=${encodeURIComponent(selected.currentRevision.id)}` : "#"}`}><Icon name="external" size={15} /> Download JSON</a>
             <button className="btn btn-ghost" disabled={!changed || busy} onClick={() => { setValuesRevisionId(selected.currentRevision.id); setValues(Object.fromEntries(selected.currentRevision.parameters.map((parameter) => [parameter.id, parameter.value]))); }}><Icon name="rerun" size={15} /> Reset</button>
-            <button className="btn btn-primary" disabled={!changed || busy} onClick={() => void saveVersion()}><Icon name="history" size={15} /> Save as v{selected.currentRevision.version + 1}</button>
+            <button className="btn btn-primary" disabled={!changed || busy} onClick={() => void saveVersion()}><Icon name="history" size={15} /> Save new default</button>
           </footer>
         </> : <div className="empty-state"><Icon name="flows" size={34} /><h2>Add your first model</h2><p>Import one working ComfyUI graph here, then reuse it from Create across projects.</p></div>}
       </section>

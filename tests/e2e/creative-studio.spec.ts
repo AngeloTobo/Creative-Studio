@@ -102,8 +102,10 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
   await openRetainedWork(page);
   await expect(page.getByRole("button", { name: "Use Rebecca embryo upload" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
-  await expect(page.getByLabel("Describe the video")).toHaveValue(/Use the provided image as the exact first frame/);
+  await expect(page.getByLabel("Describe the video")).not.toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
+  await expect(page.getByLabel("Describe the video")).not.toHaveValue(/Opening-frame evidence|Beat 1:/);
+  await expect(page.getByLabel("Describe the video")).toHaveValue(/Use this image as the exact first frame/);
+  await expect(page.getByLabel("Describe the video")).toHaveValue(/fine light pulse crosses the central form/);
   await openCreatePlan(page);
   const outputCount = page.getByRole("group", { name: "Number of video outputs" });
   await expect(outputCount.getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
