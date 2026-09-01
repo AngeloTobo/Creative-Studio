@@ -457,7 +457,7 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
       const prompt = `Motion study ${index + 1}`;
       return {
         id: `artifact_video_${index}`, projectId: project.id, jobId: `job_video_${index}`, dnaArtifactId: "dna_video_gallery", kind: "video", name: prompt, status: "ready", provider: "development-adapter", prompt,
-        preview: { kind: "remote-media", url: video, posterUrl: poster, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: [], parentArtifactId: null }, retention: { state: "development-only", size: null },
+        preview: { kind: "remote-media", url: video, posterUrl: poster, colors: ["#6d28d9", "#db2777"] }, lineage: { sourceArtifactIds: [], parentArtifactId: null }, retention: { state: index === 11 ? "retained" : "development-only", size: null },
         settingsStamp: {
           schemaVersion: 1, source: "development-adapter", createdAt: date, reusedFromJobId: null, prompt, provider: "development-adapter", modality: "video", workflow: null, parameters: { prompt }, models: [], inputAssetIds: [],
           ...(index === 11 ? {
@@ -512,6 +512,32 @@ test("video artifact gallery stays thumbnail-only until one video is opened", as
   await queuedRun.getByText("Details", { exact: true }).click();
   await expect(queuedRun.getByText("Awe · 10% personal / 90% random DNA", { exact: true })).toBeVisible();
   await expect(queuedRun.getByText("Exact script · “Look at the light.”", { exact: true })).toBeVisible();
+
+  await page.goto("/#/gallery");
+  await page.locator("#artifact-card-artifact_video_11").getByRole("button", { name: "Extend video" }).click();
+  await openCreativeControls(page);
+  await expect(page.locator(".quick-extension-panel > summary")).toBeVisible();
+  await page.locator(".quick-extension-panel > summary").click();
+  await expect(page.getByText("Final-frame continuation", { exact: true })).toBeVisible();
+  const soundPolicy = page.getByLabel("Sound", { exact: true });
+  await expect(soundPolicy).toHaveValue("new-sound");
+  await expect(page.getByText("Keeps the original sound, then continues with newly generated audio.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Exact script", exact: true }).click();
+  await page.getByLabel("Exact spoken words", { exact: true }).fill("Stay with me.");
+  await soundPolicy.selectOption("keep-source");
+  await expect(page.getByRole("button", { name: "No dialogue", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("No new dialogue. The original soundtrack stays unchanged.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Exact script", exact: true }).click();
+  await expect(soundPolicy).toHaveValue("new-sound");
+  await expect(page.getByLabel("Exact spoken words", { exact: true })).toHaveValue("Stay with me.");
+  await soundPolicy.selectOption("keep-source");
+  const resultPolicy = page.getByLabel("Result", { exact: true });
+  await resultPolicy.selectOption("continuation");
+  await expect(soundPolicy).toHaveValue("new-sound");
+  await expect(page.getByText("Keeps the newly generated audio in the continuation clip.", { exact: true })).toBeVisible();
+  await expect(soundPolicy.locator("option[value='keep-source']")).toHaveCount(0);
+  await expect(page.locator(".quick-extension-panel > summary")).toContainText("New sound");
+  await expect(page.locator(".quick-extension-panel > summary")).not.toContainText("Clean cut");
 });
 
 test("Projects opens the exact pending trained-DNA review instead of the default Create panel", async ({ page }) => {

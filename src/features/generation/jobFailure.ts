@@ -21,6 +21,8 @@ const FAILURE_SUMMARIES: Record<string, string> = {
   comfyui_workflow_media_output_missing: "The selected ComfyUI workflow has no executable saved-media output for this generation type. Add or repair its Save Image, Save Audio, or Save Video node before retrying.",
   comfyui_media_output_not_scheduled: "ComfyUI accepted the graph but did not schedule its saved-media output. The job stopped immediately instead of blocking the runner; repair or re-export the workflow before retrying.",
   comfyui_completed_without_media_output: "ComfyUI completed without returning a saved media file. The job stopped immediately instead of occupying the runner; inspect the workflow output node before retrying.",
+  video_extension_generated_audio_missing: "The model returned the continuation without audible new sound. Start a new extension with an audio-capable workflow such as the trusted LTX 2.5 graph, or choose Source audio only or Silent on that new run.",
+  video_audio_probe_failed: "Creative Studio could not verify the continuation soundtrack. Check the local FFmpeg installation and the workflow's saved video output before starting a new extension.",
   runner_input_source_not_found: "A bound upload or generated artifact is no longer retained. Choose a current retained input and queue a new run.",
   runner_input_media_mismatch: "A bound workflow input has the wrong media type. Choose an image, audio file, or video that matches the workflow control.",
 };
@@ -52,7 +54,9 @@ export function jobIssuePresentation(status: JobStatus, error: string | null, mo
   return {
     title: "Job failed",
     summary,
-    action: `Retry creates a new durable ${modality} job from the same CreativeDNA; this failed job remains in history.`,
+    action: raw === "video_extension_generated_audio_missing"
+      ? "Retry repeats the same sound settings. Open the source video in Create to choose a different model or sound policy for a new extension."
+      : `Retry creates a new durable ${modality} job from the same CreativeDNA; this failed job remains in history.`,
     raw,
   };
 }

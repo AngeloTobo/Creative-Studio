@@ -3917,6 +3917,43 @@ describe("Creative Studio Worker API", () => {
     expect(mismatchedSpeechPolicy.status).toBe(400);
     expect(await result(mismatchedSpeechPolicy)).toMatchObject({ error: "video_speech_prompt_mismatch" });
 
+    const soundlessNormalVideo = compileVideoPromptWithSpeech(
+      "Original H3 motion prompt",
+      { mode: "no-speech" },
+      videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" }),
+      { soundDesign: false },
+    );
+    const soundlessNormalRevision = await result(await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevisionId: imported.workflow.currentRevision.id,
+        values: { [imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "text")!.id]: soundlessNormalVideo.prompt },
+        scope: "execution-only",
+      }),
+    }), local)) as { workflow: { currentRevision: { id: string } } };
+    const soundlessNormalJob = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_soundless_normal_invalid_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: soundlessNormalRevision.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: uploaded.asset.id },
+          expectedPrompt: soundlessNormalVideo.prompt,
+        },
+        videoSpeech: soundlessNormalVideo.speech,
+      }),
+    }), local);
+    expect(soundlessNormalJob.status).toBe(400);
+    expect(await result(soundlessNormalJob)).toMatchObject({ error: "video_speech_prompt_mismatch" });
+
     const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -4050,16 +4087,16 @@ describe("Creative Studio Worker API", () => {
           audioMode: "keep-source",
         },
       }),
-    }), local)) as { job: { id: string; settingsStamp: { videoOperation: { sourceId: string; outputMode: string; transitionSeconds: number }; inputArtifactIds: string[] } } };
+    }), local)) as { job: { id: string; settingsStamp: { videoOperation: { sourceId: string; outputMode: string; transitionSeconds: number; audioMode: string }; inputArtifactIds: string[] } } };
     expect(extension.job.settingsStamp).toMatchObject({
       inputArtifactIds: [history.artifacts[0].id],
-      videoOperation: { sourceId: history.artifacts[0].id, outputMode: "combined", transitionSeconds: 0.5 },
+      videoOperation: { sourceId: history.artifacts[0].id, outputMode: "combined", transitionSeconds: 0.5, audioMode: "keep-source" },
     });
     const extensionClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
       method: "POST", headers: runnerHeaders, body: "{}",
-    }), local)) as { bundle: { job: { id: string; settingsStamp: { videoOperation: { sourceFrame: string } } }; inputs: Array<{ id: string; kind: string; source: string }> } };
+    }), local)) as { bundle: { job: { id: string; settingsStamp: { videoOperation: { sourceFrame: string; audioMode: string } } }; inputs: Array<{ id: string; kind: string; source: string }> } };
     expect(extensionClaim.bundle).toMatchObject({
-      job: { id: extension.job.id, settingsStamp: { videoOperation: { sourceFrame: "last" } } },
+      job: { id: extension.job.id, settingsStamp: { videoOperation: { sourceFrame: "last", audioMode: "keep-source" } } },
       inputs: [{ id: history.artifacts[0].id, kind: "video", source: "artifact" }],
     });
     const extensionBytes = new Uint8Array([...outputBytes, 2]);
@@ -4088,6 +4125,178 @@ describe("Creative Studio Worker API", () => {
     });
     expect(extendedHistory.artifacts[0].settingsStamp.inputSources).toEqual([expect.objectContaining({ kind: "video" })]);
     const extensionArtifact = extendedHistory.artifacts[0];
+    const missingSoundDirective = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_extension_missing_sound_prompt_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
+          expectedPrompt: h3Prompt.prompt,
+        },
+        videoSpeech: h3Prompt.speech,
+        videoOperation: {
+          kind: "extend",
+          sourceId: history.artifacts[0].id,
+          source: "artifact",
+          sourceFrame: "last",
+          outputMode: "combined",
+          transitionSeconds: 0.5,
+          audioMode: "new-sound",
+        },
+      }),
+    }), local);
+    expect(missingSoundDirective.status).toBe(400);
+    expect(await result(missingSoundDirective)).toMatchObject({ error: "video_extension_sound_prompt_required" });
+
+    const promptParameter = imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "text");
+    expect(promptParameter).toBeTruthy();
+    const h3ExtensionPrompt = compileVideoPromptWithSpeech(
+      "The luminous figure continues forward from the retained final frame.",
+      { mode: "no-speech" },
+      videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" }),
+      { continuationSound: true },
+    );
+    const extensionRevision = await result(await routeCreativeStudioApi(request(`/api/creative-studio/workflows/${imported.workflow.id}/revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevisionId: imported.workflow.currentRevision.id,
+        values: { [promptParameter!.id]: h3ExtensionPrompt.prompt },
+        scope: "execution-only",
+      }),
+    }), local)) as { workflow: { currentRevision: { id: string } } };
+    const newSoundExtension = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_extension_new_sound_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: extensionRevision.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
+          expectedPrompt: h3ExtensionPrompt.prompt,
+        },
+        videoSpeech: h3ExtensionPrompt.speech,
+        videoOperation: {
+          kind: "extend",
+          sourceId: history.artifacts[0].id,
+          source: "artifact",
+          sourceFrame: "last",
+          outputMode: "combined",
+          transitionSeconds: 0.5,
+          audioMode: "new-sound",
+        },
+      }),
+    }), local)) as { job: { id: string; settingsStamp: { videoOperation: { audioMode: string } } } };
+    expect(newSoundExtension.job.settingsStamp.videoOperation.audioMode).toBe("new-sound");
+    const incompatibleSoundClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: unknown };
+    expect(incompatibleSoundClaim.bundle).toBeNull();
+    await routeCreativeStudioApi(request("/api/creative-studio/runner/heartbeat", {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ version: "1.20.0", comfyUrl: "http://127.0.0.1:8188", comfyVersion: "0.33.0", device: "RTX 3090" }),
+    }), local);
+    const newSoundClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { id: string; settingsStamp: { videoOperation: { audioMode: string } } } } };
+    expect(newSoundClaim.bundle.job).toMatchObject({ id: newSoundExtension.job.id, settingsStamp: { videoOperation: { audioMode: "new-sound" } } });
+    await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${newSoundExtension.job.id}/fail`, {
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ error: "video_extension_generated_audio_missing" }),
+    }), local);
+    const retriedNewSound = await result(await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${newSoundExtension.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "runner_video_extension_new_sound_retry_001" }),
+    }), local)) as { job: { id: string; settingsStamp: { videoOperation: { audioMode: string } } } };
+    expect(retriedNewSound.job.settingsStamp.videoOperation.audioMode).toBe("new-sound");
+    const retriedNewSoundClaim = await result(await routeCreativeStudioApi(request("/api/creative-studio/runner/jobs/claim", {
+      method: "POST", headers: runnerHeaders, body: "{}",
+    }), local)) as { bundle: { job: { id: string; settingsStamp: { videoOperation: { audioMode: string } } } } };
+    expect(retriedNewSoundClaim.bundle.job).toMatchObject({ id: retriedNewSound.job.id, settingsStamp: { videoOperation: { audioMode: "new-sound" } } });
+    const retriedNewSoundBytes = new Uint8Array([...outputBytes, 3]);
+    const retriedNewSoundComplete = await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${retriedNewSound.job.id}/complete`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${enrollment.token}`, "content-type": "video/mp4", "x-cs-file-size": String(retriedNewSoundBytes.byteLength) },
+      body: retriedNewSoundBytes,
+    }), local);
+    expect(retriedNewSoundComplete.status).toBe(200);
+
+    const continuationOnly = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_extension_continuation_sound_001",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: extensionRevision.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
+          expectedPrompt: h3ExtensionPrompt.prompt,
+        },
+        videoSpeech: h3ExtensionPrompt.speech,
+        videoOperation: {
+          kind: "extend",
+          sourceId: history.artifacts[0].id,
+          source: "artifact",
+          sourceFrame: "last",
+          outputMode: "continuation",
+          transitionSeconds: 0,
+          audioMode: "new-sound",
+        },
+      }),
+    }), local)) as { job: { id: string; settingsStamp: { videoOperation: { outputMode: string; audioMode: string } } } };
+    expect(continuationOnly.job.settingsStamp.videoOperation).toMatchObject({ outputMode: "continuation", audioMode: "new-sound" });
+    const cancelledContinuation = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${continuationOnly.job.id}/cancel`, {
+      method: "POST",
+    }), local);
+    expect(cancelledContinuation.status).toBe(200);
+
+    const invalidContinuationSourceOnly = await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "video",
+        videoPerformanceMode: "explicit-heavy",
+        videoDurationSeconds: 10,
+        idempotencyKey: "runner_video_extension_continuation_source_only_invalid",
+        workflow: {
+          workflowId: imported.workflow.id,
+          revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [mediaParameter!.id]: history.artifacts[0].id },
+          expectedPrompt: h3Prompt.prompt,
+        },
+        videoSpeech: h3Prompt.speech,
+        videoOperation: {
+          kind: "extend",
+          sourceId: history.artifacts[0].id,
+          source: "artifact",
+          sourceFrame: "last",
+          outputMode: "continuation",
+          transitionSeconds: 0,
+          audioMode: "keep-source",
+        },
+      }),
+    }), local);
+    expect(invalidContinuationSourceOnly.status).toBe(400);
+    expect(await result(invalidContinuationSourceOnly)).toMatchObject({ error: "invalid_video_operation" });
+
     const extensionRecipeResponse = await routeCreativeStudioApi(request("/api/creative-studio/recipes", {
       method: "POST",
       headers: { "content-type": "application/json" },

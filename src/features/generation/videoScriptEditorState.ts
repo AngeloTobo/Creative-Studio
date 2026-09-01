@@ -1,3 +1,5 @@
+import type { VideoGenerationOperation } from "../../../shared/contracts";
+
 export type VideoScriptEditorText = {
   proposal: string;
   spokenText: string;
@@ -28,4 +30,13 @@ export function restoredVideoScriptEditorIsDirty(
 ) {
   if (typeof savedDirty === "boolean") return savedDirty;
   return Boolean(draftId && proposal);
+}
+
+/** A Full Script always owns the continuation's new sound design, even when
+ * the script intentionally has no dialogue. Keep the result/join choices. */
+export function videoOperationAfterApplyingFullScript(
+  operation: VideoGenerationOperation | null,
+): VideoGenerationOperation | null {
+  if (!operation || operation.audioMode === "new-sound") return operation;
+  return { ...operation, audioMode: "new-sound" };
 }

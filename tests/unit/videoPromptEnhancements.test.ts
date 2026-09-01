@@ -4,6 +4,8 @@ import {
   matchCreativeStudioRoute,
   normalizeEnhancedVideoPrompt,
   normalizeVideoSpeechStamp,
+  VIDEO_EXTENSION_SOUND_DIRECTIVE,
+  VIDEO_NO_DIALOGUE_DIRECTIVE,
   videoPromptProfileForIdentity,
 } from "../../shared/contracts";
 
@@ -65,6 +67,34 @@ describe("video prompt enhancement contracts", () => {
     expect(compiled.prompt).toContain("bright arpeggiated synths");
     expect(compiled.prompt).not.toMatch(/Owl City/i);
     expect(compiled.prompt).not.toContain("(S1)");
+    expect(normalizeVideoSpeechStamp(compiled.speech)).toEqual(compiled.speech);
+  });
+
+  it("requires fresh synchronized sound inside both H3 and LTX extension prompts", () => {
+    const h3Profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" });
+    const h3 = compileVideoPromptWithSpeech(h3Timeline, undefined, h3Profile, { continuationSound: true });
+    expect(h3.prompt.match(new RegExp(VIDEO_EXTENSION_SOUND_DIRECTIVE, "g"))).toHaveLength(1);
+    expect(h3.prompt).toMatch(new RegExp(`Audio:.*${VIDEO_EXTENSION_SOUND_DIRECTIVE}`));
+
+    const ltxProfile = videoPromptProfileForIdentity({ name: "LTX 2.5 Image to Video" });
+    const ltx = compileVideoPromptWithSpeech("The subject crosses the room in one continuous shot.", undefined, ltxProfile, { continuationSound: true });
+    expect(ltx.prompt.match(new RegExp(VIDEO_EXTENSION_SOUND_DIRECTIVE, "g"))).toHaveLength(1);
+    expect(ltx.prompt).toContain("do not loop the source track or leave the new segment silent");
+    expect(ltx.prompt).toContain("No dialogue or intelligible human speech");
+  });
+
+  it("does not add sound-generation instructions to source-only or silent extensions", () => {
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5 Image to Video" });
+    const compiled = compileVideoPromptWithSpeech(
+      "The subject crosses the room in one continuous shot.",
+      { mode: "no-speech" },
+      profile,
+      { soundDesign: false },
+    );
+    expect(compiled.speech.directive).toBe(VIDEO_NO_DIALOGUE_DIRECTIVE);
+    expect(compiled.prompt).toContain(VIDEO_NO_DIALOGUE_DIRECTIVE);
+    expect(compiled.prompt).not.toContain("Keep sound active");
+    expect(compiled.prompt).not.toContain(VIDEO_EXTENSION_SOUND_DIRECTIVE);
     expect(normalizeVideoSpeechStamp(compiled.speech)).toEqual(compiled.speech);
   });
 

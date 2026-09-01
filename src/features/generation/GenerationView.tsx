@@ -110,7 +110,11 @@ import {
 } from "./createEntry";
 import { VideoScriptBuilderSheet } from "./VideoScriptBuilderSheet";
 import { CreateResultRail } from "./CreateResultRail";
-import { resolveCompletedVideoScriptEditor, restoredVideoScriptEditorIsDirty } from "./videoScriptEditorState";
+import {
+  resolveCompletedVideoScriptEditor,
+  restoredVideoScriptEditorIsDirty,
+  videoOperationAfterApplyingFullScript,
+} from "./videoScriptEditorState";
 import { videoScriptErrorMessage } from "./videoScriptErrorMessage";
 import { directVideoEnhancementDecision, videoPairIdForOutputBatch } from "./directVideo";
 import { RecommendedDirectionsRail, type StoryRecommendationHandoff } from "../stories/StoryBankRail";
@@ -423,7 +427,7 @@ export function GenerationView({
     sourceFrame: "last",
     outputMode: "combined",
     transitionSeconds: 0.5,
-    audioMode: "keep-source",
+    audioMode: "new-sound",
   } : null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionProjectRef = useRef("");
@@ -635,18 +639,30 @@ export function GenerationView({
           && (settings.videoOperationSource === "upload" || settings.videoOperationSource === "artifact")
           && (settings.videoOperationOutputMode === "combined" || settings.videoOperationOutputMode === "continuation")
           && (restoredTransition === 0 || restoredTransition === 0.25 || restoredTransition === 0.5 || restoredTransition === 1)
-          && (settings.videoOperationAudioMode === "keep-source" || settings.videoOperationAudioMode === "mute")
+          && (settings.videoOperationAudioMode === "new-sound" || settings.videoOperationAudioMode === "keep-source" || settings.videoOperationAudioMode === "mute")
           ? {
             kind: "extend" as const,
             sourceId: settings.videoOperationSourceId,
             source: settings.videoOperationSource as VideoGenerationOperation["source"],
             sourceFrame: "last" as const,
             outputMode: settings.videoOperationOutputMode as VideoGenerationOperation["outputMode"],
-            transitionSeconds: restoredTransition as VideoGenerationOperation["transitionSeconds"],
-            audioMode: settings.videoOperationAudioMode as VideoGenerationOperation["audioMode"],
+            transitionSeconds: settings.videoOperationOutputMode === "continuation"
+              ? 0 : restoredTransition as VideoGenerationOperation["transitionSeconds"],
+            audioMode: settings.videoOperationOutputMode === "continuation" && settings.videoOperationAudioMode === "keep-source"
+              ? "new-sound" : settings.videoOperationAudioMode as VideoGenerationOperation["audioMode"],
           }
           : null;
         setVideoOperation(restoredVideoOperation);
+        if (restoredVideoOperation && restoredVideoOperation.audioMode !== "new-sound") {
+          setVideoSpeechMode("no-speech");
+          setVideoScriptDraftId("");
+          setVideoScriptProposal("");
+          setVideoScriptProposalSpokenText("");
+          setVideoScriptProposalDirty(false);
+          setAppliedVideoScriptDraftId("");
+          setAppliedVideoScriptRevision(null);
+          handledVideoScriptDraftId.current = "";
+        }
         const restoredAt = new Date(latestSession.updatedAt).toLocaleString();
         const restoredControlsNotice = restoredHasHiddenControls ? " Creative controls are open so every restored non-default setting is visible before generation." : "";
         if (restoredSelectionMode === "explicit" && latestSession.workflowId && !restoredWorkflow) {
@@ -974,10 +990,15 @@ export function GenerationView({
     || (videoSpeechText.trim().length > 0 && videoSpeechPreview.length > 0 && videoSpeechFitsDuration);
   const compileVideoSpeech = (prompt: string, exactScriptOverride?: string): { prompt: string; speech: VideoSpeechStamp } => {
     if (!videoPromptProfile) throw new Error("video_prompt_profile_required");
+    const generatedSoundEnabled = !videoOperation || videoOperation.audioMode === "new-sound";
+    const effectiveSpeechMode = generatedSoundEnabled ? videoSpeechMode : "no-speech";
     return compileVideoPromptWithSpeech(prompt, {
-      mode: videoSpeechMode,
-      text: videoSpeechMode === "no-speech" ? undefined : exactScriptOverride ?? videoSpeechText,
-    }, videoPromptProfile);
+      mode: effectiveSpeechMode,
+      text: effectiveSpeechMode === "no-speech" ? undefined : exactScriptOverride ?? videoSpeechText,
+    }, videoPromptProfile, {
+      continuationSound: videoOperation?.audioMode === "new-sound",
+      soundDesign: generatedSoundEnabled,
+    });
   };
   const promptEnhancementMatchesWorkflow = Boolean(workflow && activePromptEnhancement
     && activePromptEnhancement.projectId === activeProjectId
@@ -1803,13 +1824,18 @@ export function GenerationView({
       clearVideoPromptEnhancement();
       setDirection(saved.currentScript ?? proposal);
       setVideoSpeechMode(savedSpokenText ? "exact-script" : "no-speech");
+      const appliedVideoOperation = videoOperationAfterApplyingFullScript(videoOperation);
+      const enabledNewSound = appliedVideoOperation !== videoOperation;
+      if (enabledNewSound) {
+        setVideoOperation(appliedVideoOperation);
+      }
       setVideoSpeechText(savedSpokenText ?? "");
       setAppliedVideoScriptDraftId(saved.id);
       setAppliedVideoScriptRevision(saved.editRevision);
       setVideoScriptBuilderOpen(false);
       setNotice(saved.currentScript === saved.generatedScript && savedSpokenText === saved.generatedSpokenText
-        ? `Full video script applied${savedSpokenText ? ` · ${spokenWordCount} spoken words` : " · no dialogue"}. You can still edit it before generating.`
-        : "Your edited full script is applied. Its scene, sound, dialogue choice, and revision will be retained with every result.");
+        ? `Full video script applied${savedSpokenText ? ` · ${spokenWordCount} spoken words` : " · no dialogue"}${enabledNewSound ? " · New sound on" : ""}. You can still edit it before generating.`
+        : `Your edited full script is applied. Its scene, sound, dialogue choice, and revision will be retained with every result.${enabledNewSound ? " New sound is on." : ""}`);
     } catch (updateError) {
       setVideoScriptError(videoScriptErrorMessage(updateError));
     }
@@ -3204,13 +3230,37 @@ export function GenerationView({
         </div> : null}
 
         {videoOperation ? <details className="quick-setting-panel quick-extension-panel">
-          <summary><span><Icon name="video" size={14} /><strong>Extension</strong></span><em>{videoOperation.outputMode === "combined" ? "Join to source" : "Clip only"}</em><small>{videoOperation.transitionSeconds ? `${videoOperation.transitionSeconds}s dissolve` : "Clean cut"}</small><Icon name="chevronDown" size={13} /></summary>
+          <summary><span><Icon name="video" size={14} /><strong>Extension</strong></span><em>{videoOperation.outputMode === "combined" ? "Join to source" : "Clip only"}</em><small>{videoOperation.audioMode === "new-sound" ? "New sound" : videoOperation.audioMode === "keep-source" ? "Source audio only" : "Silent"}{videoOperation.outputMode === "combined" ? ` · ${videoOperation.transitionSeconds ? `${videoOperation.transitionSeconds}s dissolve` : "clean cut"}` : ""}</small><Icon name="chevronDown" size={13} /></summary>
           <section className="quick-video-tools" aria-label="Video extension settings">
-          <header><span><Icon name="video" size={16} /><strong>Final-frame continuation</strong></span><small>Local FFmpeg + ComfyUI</small></header>
+          <header><span><Icon name="video" size={16} /><strong>Final-frame continuation</strong></span><small>Continues from the final frame</small></header>
           <div>
-            <label><span>Result</span><select value={videoOperation.outputMode} disabled={busy} onChange={(event) => setVideoOperation((current) => current ? { ...current, outputMode: event.target.value as VideoGenerationOperation["outputMode"], transitionSeconds: event.target.value === "combined" ? 0.5 : 0, audioMode: event.target.value === "combined" ? "keep-source" : "mute" } : current)}><option value="combined">One longer video</option><option value="continuation">Continuation clip only</option></select></label>
-            <label><span>Join</span><select value={videoOperation.transitionSeconds} disabled={busy || videoOperation.outputMode !== "combined"} onChange={(event) => setVideoOperation((current) => current ? { ...current, transitionSeconds: Number(event.target.value) as VideoGenerationOperation["transitionSeconds"] } : current)}><option value="0">Clean cut</option><option value="0.25">0.25s dissolve</option><option value="0.5">0.5s dissolve</option><option value="1">1s dissolve</option></select></label>
-            <label className="quick-video-audio"><input type="checkbox" checked={videoOperation.audioMode === "keep-source"} disabled={busy || videoOperation.outputMode !== "combined"} onChange={(event) => setVideoOperation((current) => current ? { ...current, audioMode: event.target.checked ? "keep-source" : "mute" } : current)} /><span><strong>Keep source audio</strong><small>Silence continues after the original track ends.</small></span></label>
+            <label><span>Result</span><select aria-label="Result" value={videoOperation.outputMode} disabled={busy} onChange={(event) => setVideoOperation((current) => {
+              if (!current) return current;
+              const outputMode = event.target.value as VideoGenerationOperation["outputMode"];
+              return {
+                ...current,
+                outputMode,
+                transitionSeconds: outputMode === "combined" ? 0.5 : 0,
+                audioMode: outputMode === "continuation" && current.audioMode === "keep-source" ? "new-sound" : current.audioMode,
+              };
+            })}><option value="combined">One longer video</option><option value="continuation">Continuation clip only</option></select></label>
+            {videoOperation.outputMode === "combined" ? <label><span>Join</span><select aria-label="Join" value={videoOperation.transitionSeconds} disabled={busy} onChange={(event) => setVideoOperation((current) => current ? { ...current, transitionSeconds: Number(event.target.value) as VideoGenerationOperation["transitionSeconds"] } : current)}><option value="0">Clean cut</option><option value="0.25">0.25s dissolve</option><option value="0.5">0.5s dissolve</option><option value="1">1s dissolve</option></select></label> : null}
+            <label className="quick-video-sound"><span>Sound</span><select aria-label="Sound" aria-describedby="video-extension-sound-help" value={videoOperation.audioMode} disabled={busy} onChange={(event) => {
+              const audioMode = event.target.value as VideoGenerationOperation["audioMode"];
+              setVideoOperation((current) => current ? { ...current, audioMode } : current);
+              if (audioMode !== "new-sound") {
+                const detached = detachAssistedVideoScript();
+                setVideoSpeechMode("no-speech");
+                if (videoSpeechMode !== "no-speech" || detached) {
+                  setNotice(`${audioMode === "mute" ? "Silent" : "Source audio only"} selected. New dialogue is off; your typed line is preserved if you turn New sound back on.${detached ? " The assisted-script link was detached, but its scene direction remains." : ""}`);
+                }
+              }
+              setLocalError("");
+            }}>
+              <option value="new-sound">New sound</option>
+              {videoOperation.outputMode === "combined" ? <option value="keep-source">Source audio only</option> : null}
+              <option value="mute">Silent</option>
+            </select><small id="video-extension-sound-help" aria-live="polite">{videoOperation.audioMode === "new-sound" ? videoOperation.outputMode === "combined" ? "Keeps the original sound, then continues with newly generated audio." : "Keeps the newly generated audio in the continuation clip." : videoOperation.audioMode === "keep-source" ? "Keeps the original track and pads silence after it ends." : "Removes audio from the result."}</small></label>
           </div>
           </section>
         </details> : null}
@@ -3236,23 +3286,27 @@ export function GenerationView({
           </details>
 
           {generationIntent === "video" ? <section className="quick-video-speech" aria-label="Dialogue and sound">
-            <div className="quick-video-speech-head"><span><Icon name="music" size={14} /><strong>Dialogue & sound</strong></span><small>{videoSpeechMode === "no-speech" ? "Sound on · no dialogue" : `${videoSpeechWordCount} / ${videoSpeechWordBudget.maximum} words`}</small></div>
+            <div className="quick-video-speech-head"><span><Icon name="music" size={14} /><strong>Dialogue & sound</strong></span><small>{videoOperation?.audioMode === "mute" ? "Silent extension" : videoOperation?.audioMode === "keep-source" ? "Source sound only · no new dialogue" : videoSpeechMode === "no-speech" ? "Sound on · no dialogue" : `${videoSpeechWordCount} / ${videoSpeechWordBudget.maximum} words`}</small></div>
             <div className="quick-video-speech-modes" role="group" aria-label="Dialogue mode">
               {([
                 ["no-speech", "No dialogue"],
                 ["short-natural-line", "Simple line"],
                 ["exact-script", "Exact script"],
               ] as const).map(([mode, label]) => <button type="button" key={mode} className={videoSpeechMode === mode ? "on" : ""} aria-pressed={videoSpeechMode === mode} disabled={busy} onClick={() => {
+                const turnsOnGeneratedSound = mode !== "no-speech" && Boolean(videoOperation && videoOperation.audioMode !== "new-sound");
+                if (turnsOnGeneratedSound) setVideoOperation((current) => current ? { ...current, audioMode: "new-sound" } : current);
                 if (mode === "short-natural-line" && appliedFullVideoScriptDraft) {
                   detachAssistedVideoScript();
-                  setNotice("Full scene kept as your direction. Simple line is now manual, so the assisted-script revision was detached.");
+                  setNotice(`Full scene kept as your direction. Simple line is now manual, so the assisted-script revision was detached.${turnsOnGeneratedSound ? " New sound is on so the line can be heard." : ""}`);
+                } else if (turnsOnGeneratedSound) {
+                  setNotice("New sound is on so the continuation can include the dialogue you selected.");
                 }
                 setVideoSpeechMode(mode);
                 setLocalError("");
               }}>{label}</button>)}
             </div>
             <div className="quick-video-speech-compose">
-              {videoSpeechMode !== "no-speech" ? <label className={`quick-video-speech-line${!videoSpeechFitsDuration ? " over" : ""}`}><span>{videoSpeechMode === "exact-script" ? "Exact spoken words" : "Spoken-line idea"}</span><input value={videoSpeechText} maxLength={VIDEO_SPEECH_TEXT_MAX_LENGTH} disabled={busy} onChange={(event) => { setVideoSpeechText(event.target.value); setLocalError(""); }} placeholder={videoSpeechMode === "exact-script" ? "I remember this place." : "A short idea; Creative Studio removes filler and keeps one sentence."} /><small>{!videoSpeechFitsDuration ? `Shorten to ${videoSpeechWordBudget.maximum} words for ${videoDurationSeconds}s.` : videoSpeechMode === "exact-script" ? "Sent verbatim once. No improvised dialogue." : "Reduced to one clear sentence. No improvised dialogue."}</small></label> : <p className="quick-video-speech-safe">No dialogue. The existing model-tuned ambience and sound design stay active.</p>}
+              {videoSpeechMode !== "no-speech" ? <label className={`quick-video-speech-line${!videoSpeechFitsDuration ? " over" : ""}`}><span>{videoSpeechMode === "exact-script" ? "Exact spoken words" : "Spoken-line idea"}</span><input aria-label={videoSpeechMode === "exact-script" ? "Exact spoken words" : "Spoken-line idea"} value={videoSpeechText} maxLength={VIDEO_SPEECH_TEXT_MAX_LENGTH} disabled={busy} onChange={(event) => { setVideoSpeechText(event.target.value); setLocalError(""); }} placeholder={videoSpeechMode === "exact-script" ? "I remember this place." : "A short idea; Creative Studio removes filler and keeps one sentence."} /><small>{!videoSpeechFitsDuration ? `Shorten to ${videoSpeechWordBudget.maximum} words for ${videoDurationSeconds}s.` : videoSpeechMode === "exact-script" ? "Sent verbatim once. No improvised dialogue." : "Reduced to one clear sentence. No improvised dialogue."}</small></label> : <p className="quick-video-speech-safe">{videoOperation?.audioMode === "mute" ? "No dialogue. This extension is explicitly silent." : videoOperation?.audioMode === "keep-source" ? "No new dialogue. The original soundtrack stays unchanged." : "No dialogue. The model-tuned ambience and sound design stay active."}</p>}
               <button type="button" className="quick-script-help" disabled={busy || videoScriptPending} title={!videoScriptAvailable ? videoScriptCapability?.detail ?? "Start Local Runner 1.12 and ComfyUI for local Gemma." : !workflow ? "Choose a video model before writing a full script." : undefined} onClick={() => { setVideoScriptBuilderOpen(true); setVideoScriptError(""); }}><Icon name="wand" size={14} />{videoScriptButtonLabel}</button>
               {videoScriptStatus ? <small className={`quick-script-status${videoScriptContextChanged || activeVideoScriptDraft?.status === "failed" ? " warn" : ""}`} role="status">{videoScriptStatus}</small> : null}
             </div>

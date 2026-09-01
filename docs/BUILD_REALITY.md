@@ -1,6 +1,15 @@
 # Build reality
 
-Last verified: 2026-08-31 (America/Chicago)
+Last verified: 2026-09-01 (America/Chicago)
+
+## Generated sound for video extensions - locally verified
+
+- **New sound** is now the default when extending a retained video. The model receives one explicit continuation-sound direction in its native prompt format. A combined result preserves the original soundtrack and then joins or crossfades the newly generated continuation soundtrack with the same timing as the video; a continuation-only result keeps its generated sound.
+- **Source audio only** and **Silent** remain available for previously approved workflows and historical drafts. Those policies now turn off new dialogue without deleting the typed line, while selecting Simple line, Exact script, or applying a Full Script turns New sound back on. Invalid restored `continuation + source-only` drafts normalize to New sound instead of reaching the Worker as a mismatched job.
+- Local Runner source `1.20.0` validates that the continuation has an audible audio stream, rejects a missing or silent generated track instead of returning a falsely successful silent extension, aligns audio to each video stream rather than a longer container soundtrack, and preserves the old source-only and mute paths unchanged. Clean cuts and dissolves have real-media coverage with distinct 440 Hz source and 880 Hz continuation signals, silent-source alignment, mismatched audio/video durations, and exact output-duration tolerances.
+- The Worker stamps the immutable sound policy, requires the new-sound prompt directive, and will not let a Runner older than `1.20.0` claim a New sound job. Retry keeps the exact failed policy, so the failure UI directs the owner to open a new extension when changing the model or sound policy instead of implying that Retry is editable.
+- Rendered desktop and mobile checks verify the default, reversible dialogue/sound transitions, clip-only behavior, accessible Result/Join/Sound names, visible collapsed sound state, and the full-width mobile Sound control. The complete local gate passes 285 app/runner tests, 67 Workers-runtime tests, the Runner self-test, lint, all TypeScript targets, environment/free-tier/secret guards, production build, and 64 applicable Playwright cases with six intentional device-shape skips.
+- This feature is only in the local checkout. It has not been committed, pushed, deployed, or installed, no production job or queue state was changed, and the resident Scheduled Task remains on Local Runner `1.19.1`; therefore production New sound jobs are not enabled by this verification.
 
 ## Motion-first image-to-video prompts - production deployed
 

@@ -23,7 +23,7 @@ import {
 } from "./gpuCoordinator.mjs";
 import { collectVideoDoctor } from "./videoDoctor.mjs";
 
-export const RUNNER_VERSION = "1.19.1";
+export const RUNNER_VERSION = "1.20.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -2236,6 +2236,47 @@ async function probeVideoFile(filePath) {
   };
 }
 
+async function probeVideoStreamDuration(filePath, fps, fallbackDuration) {
+  if (!ffmpegPath) throw new Error("video_probe_ffmpeg_unavailable");
+  const stderr = await new Promise((resolve, reject) => {
+    const chunks = [];
+    const child = spawn(ffmpegPath, [
+      "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-nostats",
+      "-i", filePath, "-map", "0:v:0", "-an", "-f", "null", "-",
+    ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    child.stderr.on("data", (chunk) => chunks.push(chunk));
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0
+      ? resolve(Buffer.concat(chunks).toString("utf8"))
+      : reject(new Error("video_probe_duration_failed")));
+  });
+  const timestamps = [...stderr.matchAll(/out_time_us=(-?\d+)/g)]
+    .map((match) => Number(match[1]) / 1_000_000)
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const lastFrameTime = timestamps.length ? Math.max(...timestamps) : 0;
+  const duration = lastFrameTime > 0 ? lastFrameTime + (1 / Math.max(1, fps)) : fallbackDuration;
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error("video_probe_duration_unavailable");
+  return duration;
+}
+
+async function videoHasAudibleAudio(filePath) {
+  if (!ffmpegPath) throw new Error("video_probe_ffmpeg_unavailable");
+  const stderr = await new Promise((resolve, reject) => {
+    const chunks = [];
+    const child = spawn(ffmpegPath, [
+      "-hide_banner", "-i", filePath, "-map", "0:a:0", "-vn",
+      "-af", "volumedetect", "-f", "null", "-",
+    ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    child.stderr.on("data", (chunk) => chunks.push(chunk));
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0
+      ? resolve(Buffer.concat(chunks).toString("utf8"))
+      : reject(new Error("video_audio_probe_failed")));
+  });
+  const peak = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i)?.[1];
+  return peak !== undefined && Number(peak) > -60;
+}
+
 export async function createLastFrameInput(bytes, contentTypeValue) {
   const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-final-frame-"));
   const inputPath = join(directory, `source.${videoExtension(contentTypeValue)}`);
@@ -2262,7 +2303,13 @@ export async function combineVideoExtension(sourceBytes, sourceContentType, cont
   const outputPath = join(directory, "extended.mp4");
   try {
     await Promise.all([writeFile(sourcePath, sourceBytes), writeFile(continuationPath, continuationBytes)]);
-    const [source, continuation] = await Promise.all([probeVideoFile(sourcePath), probeVideoFile(continuationPath)]);
+    const [sourceMetadata, continuationMetadata] = await Promise.all([probeVideoFile(sourcePath), probeVideoFile(continuationPath)]);
+    const [sourceDuration, continuationDuration] = await Promise.all([
+      probeVideoStreamDuration(sourcePath, sourceMetadata.fps, sourceMetadata.duration),
+      probeVideoStreamDuration(continuationPath, continuationMetadata.fps, continuationMetadata.duration),
+    ]);
+    const source = { ...sourceMetadata, duration: sourceDuration };
+    const continuation = { ...continuationMetadata, duration: continuationDuration };
     const width = continuation.width % 2 === 0 ? continuation.width : continuation.width - 1;
     const height = continuation.height % 2 === 0 ? continuation.height : continuation.height - 1;
     const fps = continuation.fps.toFixed(3).replace(/\.0+$/, "");
@@ -2274,18 +2321,50 @@ export async function combineVideoExtension(sourceBytes, sourceContentType, cont
       : "[v0][v1]concat=n=2:v=1:a=0[v]";
     const totalDuration = Math.max(0.1, source.duration + continuation.duration - transition);
     const filters = [`[0:v:0]${normalize}[v0]`, `[1:v:0]${normalize}[v1]`, videoJoin];
+    const generatedSound = operation.audioMode === "new-sound";
+    if (generatedSound && (!continuation.hasAudio || !(await videoHasAudibleAudio(continuationPath)))) {
+      throw new Error("video_extension_generated_audio_missing");
+    }
     const keepAudio = operation.audioMode === "keep-source" && source.hasAudio;
-    if (keepAudio) filters.push("[0:a:0]aresample=async=1:first_pts=0,apad[a]");
+    if (generatedSound) {
+      const sourceDuration = source.duration.toFixed(3);
+      const continuationDuration = continuation.duration.toFixed(3);
+      const normalizedSourceAudio = `aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,apad,atrim=duration=${sourceDuration},asetpts=PTS-STARTPTS`;
+      const normalizedContinuationAudio = `aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,apad,atrim=duration=${continuationDuration},asetpts=PTS-STARTPTS`;
+      filters.push(source.hasAudio
+        ? `[0:a:0]${normalizedSourceAudio}[a0]`
+        : `anullsrc=r=48000:cl=stereo,atrim=duration=${sourceDuration},asetpts=PTS-STARTPTS[a0]`);
+      filters.push(`[1:a:0]${normalizedContinuationAudio}[a1]`);
+      filters.push(transition > 0
+        ? `[a0][a1]acrossfade=d=${transition.toFixed(3)}:c1=tri:c2=tri[a]`
+        : "[a0][a1]concat=n=2:v=0:a=1[a]");
+    } else if (keepAudio) {
+      filters.push("[0:a:0]aresample=async=1:first_pts=0,apad[a]");
+    }
     const args = [
       "-hide_banner", "-loglevel", "error", "-i", sourcePath, "-i", continuationPath,
       "-filter_complex", filters.join(";"), "-map", "[v]",
     ];
-    if (keepAudio) args.push("-map", "[a]", "-c:a", "aac", "-b:a", "192k");
+    if (generatedSound || keepAudio) args.push("-map", "[a]", "-c:a", "aac", "-b:a", "192k");
     args.push("-t", totalDuration.toFixed(3), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-y", outputPath);
     await runFfmpeg(args, "video_extension_join_failed");
     const bytes = await readFile(outputPath);
     if (!bytes.byteLength) throw new Error("video_extension_output_empty");
     return { bytes, contentType: "video/mp4" };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+export async function assertGeneratedVideoAudio(bytes, contentTypeValue) {
+  const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-audio-check-"));
+  const inputPath = join(directory, `source.${videoExtension(contentTypeValue)}`);
+  try {
+    await writeFile(inputPath, bytes);
+    const probe = await probeVideoFile(inputPath);
+    if (!probe.hasAudio || !(await videoHasAudibleAudio(inputPath))) {
+      throw new Error("video_extension_generated_audio_missing");
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -2616,8 +2695,12 @@ async function executeBundle(config, bundle, options = {}) {
           retained.bytes, retained.contentType, videoOperation,
         );
         outputFileName = `${bundle.job.id}-extended.mp4`;
-      } else if (videoOperation.audioMode === "mute") {
-        retained = await muteVideoOutput(retained.bytes, retained.contentType);
+      } else {
+        if (videoOperation.audioMode === "new-sound") {
+          await assertGeneratedVideoAudio(retained.bytes, retained.contentType);
+        } else if (videoOperation.audioMode === "mute") {
+          retained = await muteVideoOutput(retained.bytes, retained.contentType);
+        }
         outputFileName = `${bundle.job.id}-continuation.${videoExtension(retained.contentType)}`;
       }
     }
@@ -3658,25 +3741,50 @@ async function selfTest() {
   try {
     const sourcePath = join(videoDirectory, "source.mp4");
     const continuationPath = join(videoDirectory, "continuation.mp4");
+    const silentContinuationPath = join(videoDirectory, "silent-continuation.mp4");
     await runFfmpeg([
       "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=0.8:r=12",
       "-f", "lavfi", "-i", "sine=frequency=440:duration=0.8", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", sourcePath,
     ], "runner_self_test_source_video_failed");
     await runFfmpeg([
       "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=0.8:r=12",
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", continuationPath,
+      "-f", "lavfi", "-i", "sine=frequency=880:duration=0.8", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", continuationPath,
     ], "runner_self_test_continuation_video_failed");
-    const [sourceVideo, continuationVideo] = await Promise.all([readFile(sourcePath), readFile(continuationPath)]);
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=green:s=64x64:d=0.8:r=12",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", silentContinuationPath,
+    ], "runner_self_test_silent_continuation_video_failed");
+    const [sourceVideo, continuationVideo, silentContinuationVideo] = await Promise.all([
+      readFile(sourcePath), readFile(continuationPath), readFile(silentContinuationPath),
+    ]);
     const finalFrame = await createLastFrameInput(sourceVideo, "video/mp4");
     if (finalFrame.byteLength < 100) throw new Error("runner_self_test_final_frame_failed");
     const extended = await combineVideoExtension(sourceVideo, "video/mp4", continuationVideo, "video/mp4", {
       kind: "extend", sourceId: "artifact_self_test", source: "artifact", sourceFrame: "last",
-      outputMode: "combined", transitionSeconds: 0.25, audioMode: "keep-source",
+      outputMode: "combined", transitionSeconds: 0.25, audioMode: "new-sound",
     });
     const extendedPath = join(videoDirectory, "extended.mp4");
     await writeFile(extendedPath, extended.bytes);
     const extendedProbe = await probeVideoFile(extendedPath);
     if (extendedProbe.duration < 1 || !extendedProbe.hasAudio) throw new Error("runner_self_test_video_extension_failed");
+    await assertGeneratedVideoAudio(continuationVideo, "video/mp4");
+    let missingGeneratedSoundRejected = false;
+    try {
+      await combineVideoExtension(sourceVideo, "video/mp4", silentContinuationVideo, "video/mp4", {
+        kind: "extend", sourceId: "artifact_self_test", source: "artifact", sourceFrame: "last",
+        outputMode: "combined", transitionSeconds: 0, audioMode: "new-sound",
+      });
+    } catch (error) {
+      missingGeneratedSoundRejected = error instanceof Error && error.message === "video_extension_generated_audio_missing";
+    }
+    if (!missingGeneratedSoundRejected) throw new Error("runner_self_test_video_extension_audio_guard_failed");
+    const legacySourceAudio = await combineVideoExtension(sourceVideo, "video/mp4", silentContinuationVideo, "video/mp4", {
+      kind: "extend", sourceId: "artifact_self_test", source: "artifact", sourceFrame: "last",
+      outputMode: "combined", transitionSeconds: 0, audioMode: "keep-source",
+    });
+    const legacyPath = join(videoDirectory, "legacy-source-audio.mp4");
+    await writeFile(legacyPath, legacySourceAudio.bytes);
+    if (!(await probeVideoFile(legacyPath)).hasAudio) throw new Error("runner_self_test_video_extension_legacy_audio_failed");
     const muted = await muteVideoOutput(sourceVideo, "video/mp4");
     const mutedPath = join(videoDirectory, "muted.mp4");
     await writeFile(mutedPath, muted.bytes);

@@ -84,6 +84,11 @@ describe("real artifact media review", () => {
       action: "Retry creates a new durable video job from the same CreativeDNA; this failed job remains in history.",
       raw: "comfyui_media_output_not_scheduled",
     });
+    const missingSound = jobIssuePresentation("failed", "video_extension_generated_audio_missing", "video");
+    expect(missingSound?.summary).toContain("without audible new sound");
+    expect(missingSound?.action).toContain("Retry repeats the same sound settings");
+    expect(missingSound?.action).toContain("Open the source video in Create");
+    expect(jobIssuePresentation("failed", "video_audio_probe_failed", "video")?.summary).toContain("FFmpeg");
     expect(jobIssuePresentation("running", null, "music")).toBeNull();
   });
 });

@@ -12,6 +12,8 @@ import {
   musicWorkflowPromptProfile,
   normalizeVideoGenerationVariant,
   normalizeVideoSpeechStamp,
+  VIDEO_EXTENSION_SOUND_DIRECTIVE,
+  VIDEO_SOUND_DESIGN_DIRECTIVE,
   trustedVideoPresetById,
   trustedVideoPresetStamp,
   type AcceptanceDecision,
@@ -593,8 +595,8 @@ function requestedVideoOperation(value: SubmitJobRequest["videoOperation"], moda
   if (!sourceId || !["upload", "artifact"].includes(value.source) || value.sourceFrame !== "last"
     || !["combined", "continuation"].includes(value.outputMode)
     || ![0, 0.25, 0.5, 1].includes(transitionSeconds)
-    || !["keep-source", "mute"].includes(value.audioMode)
-    || (value.outputMode === "continuation" && (transitionSeconds !== 0 || value.audioMode !== "mute"))) {
+    || !["new-sound", "keep-source", "mute"].includes(value.audioMode)
+    || (value.outputMode === "continuation" && (transitionSeconds !== 0 || value.audioMode === "keep-source"))) {
     throw new Error("invalid_video_operation");
   }
   return { ...value, sourceId, transitionSeconds } as NonNullable<SubmitJobRequest["videoOperation"]>;
@@ -1468,6 +1470,13 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         }
         const prompt = workflowPrompt;
         if (videoSpeech && !prompt.includes(videoSpeech.directive)) throw new Error("video_speech_prompt_mismatch");
+        const extensionSuppressesNewSound = videoOperation?.audioMode === "keep-source" || videoOperation?.audioMode === "mute";
+        if (videoSpeech && !extensionSuppressesNewSound && !videoSpeech.directive.includes(VIDEO_SOUND_DESIGN_DIRECTIVE)) {
+          throw new Error("video_speech_prompt_mismatch");
+        }
+        if (videoOperation?.audioMode === "new-sound" && !prompt.includes(VIDEO_EXTENSION_SOUND_DIRECTIVE)) {
+          throw new Error("video_extension_sound_prompt_required");
+        }
         if (input.promptEnhancement && boundedPrompt(input.promptEnhancement.appliedPrompt) !== prompt) {
           throw new Error("prompt_enhancement_applied_prompt_mismatch");
         }

@@ -61,6 +61,14 @@ export function supportsStoryPlanning(version: string | null) {
   return major > 1 || (major === 1 && minor >= 17);
 }
 
+export function supportsVideoExtensionGeneratedSound(version: string | null) {
+  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 1 || (major === 1 && minor >= 20);
+}
+
 const RUNNER_COLUMNS = `id, owner_id as ownerId, name, version, comfy_url as comfyUrl,
   comfy_version as comfyVersion, comfy_ready as comfyReady, device, active_job_id as activeJobId, last_error as lastError,
   video_doctor_json as videoDoctorJson, video_doctor_checked_at as videoDoctorCheckedAt,
@@ -337,9 +345,11 @@ async function automationJobMayContinue(env: Env, runner: RunnerIdentity, jobId:
 export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   const now = new Date();
   const nowValue = now.toISOString();
+  const generatedExtensionSoundSupported = supportsVideoExtensionGeneratedSound(runner.version) ? 1 : 0;
   const candidate = await env.DB.prepare(`select id from creative_jobs
     where owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
       and (modality != 'music' or ? = 1)
+      and (coalesce(json_extract(settings_stamp_json, '$.videoOperation.audioMode'), '') != 'new-sound' or ? = 1)
       and (json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') is null
         or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
@@ -355,13 +365,15 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
       ))
     order by case when status = 'running' and runner_id = ? then 0 when status = 'running' then 1 else 2 end,
       case when modality = 'video' then 0 else 1 end, priority desc, created_at limit 1`)
-    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, runner.id, nowValue, runner.id, nowValue, nowValue, nowValue, runner.id).first<{ id: string }>();
+    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, generatedExtensionSoundSupported,
+      runner.id, nowValue, runner.id, nowValue, nowValue, nowValue, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();
   const claimed = await env.DB.prepare(`update creative_jobs set status = 'running', progress = max(progress, 5),
     runner_id = ?, runner_lease_until = ?, error = null, started_at = coalesce(started_at, ?),
     execution_stage = 'preparing-inputs', stage_updated_at = ?, updated_at = ?
     where id = ? and owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
+      and (coalesce(json_extract(settings_stamp_json, '$.videoOperation.audioMode'), '') != 'new-sound' or ? = 1)
       and (json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') is null
         or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
@@ -374,8 +386,8 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
         select 1 from creative_love_loops l where l.id = json_extract(creative_jobs.settings_stamp_json, '$.loveLoop.loopId')
           and l.owner_id = creative_jobs.owner_id and l.status = 'active'
       ))`)
-    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, runner.id, nowValue, runner.id,
-      nowValue, nowValue, nowValue).run();
+    .bind(runner.id, leaseUntil, nowValue, nowValue, nowValue, candidate.id, runner.ownerId, generatedExtensionSoundSupported,
+      runner.id, nowValue, runner.id, nowValue, nowValue, nowValue).run();
   if (!claimed.meta.changes) return null;
   await env.DB.prepare("update creative_runners set active_job_id = ?, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ?")
     .bind(candidate.id, nowValue, runner.id, runner.ownerId).run();

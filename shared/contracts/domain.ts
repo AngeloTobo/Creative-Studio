@@ -223,7 +223,7 @@ export type VideoGenerationOperation = {
   sourceFrame: "last";
   outputMode: "combined" | "continuation";
   transitionSeconds: 0 | 0.25 | 0.5 | 1;
-  audioMode: "keep-source" | "mute";
+  audioMode: "new-sound" | "keep-source" | "mute";
 };
 
 export type ArtifactStatus = "retaining" | "ready" | "accepted" | "rejected" | "archived";

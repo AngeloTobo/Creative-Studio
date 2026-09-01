@@ -37,8 +37,10 @@ export type VideoPromptProfile = {
   maximumWords: number;
 };
 
-const VIDEO_SOUND_DESIGN_DIRECTIVE = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
-const NO_SPEECH_DIRECTIVE = `No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
+export const VIDEO_SOUND_DESIGN_DIRECTIVE = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
+export const VIDEO_EXTENSION_SOUND_DIRECTIVE = "Generate a new synchronized soundtrack for this continuation with fresh ambience, effects, and music shaped by the new action; do not loop the source track or leave the new segment silent.";
+export const VIDEO_NO_DIALOGUE_DIRECTIVE = "No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns.";
+const NO_SPEECH_DIRECTIVE = `${VIDEO_NO_DIALOGUE_DIRECTIVE} ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
 export const VIDEO_SPEECH_TEXT_MAX_LENGTH = 1_200;
 const VIDEO_SPEECH_NATURAL_LINE_MAX_WORDS = 14;
 
@@ -74,30 +76,30 @@ function exactSpeechText(value: unknown) {
   return line;
 }
 
-function h3SpeechDirective(mode: Exclude<VideoSpeechMode, "no-speech">, spokenText: string) {
+function h3SpeechDirective(mode: Exclude<VideoSpeechMode, "no-speech">, spokenText: string, soundDesign = true) {
   const delivery = mode === "exact-script" ? "says exactly once without paraphrase" : "says once, clearly and naturally";
-  return `(S1) is the visible subject. At the intended beat, (S1) ${delivery}: <d>[English] ${spokenText}</d>. Do not add, repeat, or improvise any other words. No other dialogue or human vocalization. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
+  return `(S1) is the visible subject. At the intended beat, (S1) ${delivery}: <d>[English] ${spokenText}</d>. Do not add, repeat, or improvise any other words. No other dialogue or human vocalization.${soundDesign ? ` ${VIDEO_SOUND_DESIGN_DIRECTIVE}` : ""}`;
 }
 
-function naturalLanguageSpeechDirective(mode: Exclude<VideoSpeechMode, "no-speech">, spokenText: string) {
+function naturalLanguageSpeechDirective(mode: Exclude<VideoSpeechMode, "no-speech">, spokenText: string, soundDesign = true) {
   const delivery = mode === "exact-script" ? "says exactly once, verbatim" : "says once, clearly and naturally";
-  return `The visible subject ${delivery}: "${spokenText}" Do not add, repeat, paraphrase, or improvise any other words. No other dialogue or human vocalization. ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
+  return `The visible subject ${delivery}: "${spokenText}" Do not add, repeat, paraphrase, or improvise any other words. No other dialogue or human vocalization.${soundDesign ? ` ${VIDEO_SOUND_DESIGN_DIRECTIVE}` : ""}`;
 }
 
-function speechDirective(mode: VideoSpeechMode, spokenText: string | null, outputFormat: VideoPromptOutputFormat) {
-  if (mode === "no-speech") return NO_SPEECH_DIRECTIVE;
+function speechDirective(mode: VideoSpeechMode, spokenText: string | null, outputFormat: VideoPromptOutputFormat, soundDesign = true) {
+  if (mode === "no-speech") return soundDesign ? NO_SPEECH_DIRECTIVE : VIDEO_NO_DIALOGUE_DIRECTIVE;
   if (!spokenText) throw new Error("video_speech_text_invalid");
   return outputFormat === "minimax-h3-timeline"
-    ? h3SpeechDirective(mode, spokenText)
-    : naturalLanguageSpeechDirective(mode, spokenText);
+    ? h3SpeechDirective(mode, spokenText, soundDesign)
+    : naturalLanguageSpeechDirective(mode, spokenText, soundDesign);
 }
 
-function compileSpeechStamp(input: VideoSpeechInput | undefined, outputFormat: VideoPromptOutputFormat): VideoSpeechStamp {
+function compileSpeechStamp(input: VideoSpeechInput | undefined, outputFormat: VideoPromptOutputFormat, soundDesign = true): VideoSpeechStamp {
   const mode = input?.mode ?? "no-speech";
   if (mode !== "no-speech" && mode !== "short-natural-line" && mode !== "exact-script") throw new Error("video_speech_mode_invalid");
   if (mode === "no-speech") {
     if (speechText(input?.text)) throw new Error("video_speech_text_unexpected");
-    return { schemaVersion: "creative-studio-video-speech/1.0", mode, authoredText: null, spokenText: null, directive: NO_SPEECH_DIRECTIVE };
+    return { schemaVersion: "creative-studio-video-speech/1.0", mode, authoredText: null, spokenText: null, directive: speechDirective(mode, null, outputFormat, soundDesign) };
   }
   const authoredText = speechText(input?.text);
   if (!authoredText || authoredText.length > VIDEO_SPEECH_TEXT_MAX_LENGTH) throw new Error("video_speech_text_invalid");
@@ -107,7 +109,7 @@ function compileSpeechStamp(input: VideoSpeechInput | undefined, outputFormat: V
     mode,
     authoredText,
     spokenText,
-    directive: speechDirective(mode, spokenText, outputFormat),
+    directive: speechDirective(mode, spokenText, outputFormat, soundDesign),
   };
 }
 
@@ -125,7 +127,7 @@ export function normalizeVideoSpeechStamp(value: unknown): VideoSpeechStamp {
   const directive = String(input.directive ?? "");
   try {
     if (mode === "no-speech") {
-      if (authoredText !== null || spokenText !== null || directive !== NO_SPEECH_DIRECTIVE) throw new Error("invalid");
+      if (authoredText !== null || spokenText !== null || ![NO_SPEECH_DIRECTIVE, VIDEO_NO_DIALOGUE_DIRECTIVE].includes(directive)) throw new Error("invalid");
     } else {
       if (authoredText === null || spokenText === null) throw new Error("invalid");
       const expectedSpokenText = mode === "exact-script" ? exactSpeechText(authoredText) : simplifyNaturalSpeechLine(authoredText);
@@ -133,6 +135,8 @@ export function normalizeVideoSpeechStamp(value: unknown): VideoSpeechStamp {
       const validDirectives = [
         speechDirective(mode, spokenText, "minimax-h3-timeline"),
         speechDirective(mode, spokenText, "natural-language"),
+        speechDirective(mode, spokenText, "minimax-h3-timeline", false),
+        speechDirective(mode, spokenText, "natural-language", false),
       ];
       if (!validDirectives.includes(directive)) throw new Error("invalid");
     }
@@ -152,10 +156,19 @@ export function compileVideoPromptWithSpeech(
   value: unknown,
   input: VideoSpeechInput | undefined,
   profile: Pick<VideoPromptProfile, "outputFormat">,
+  options: { continuationSound?: boolean; soundDesign?: boolean } = {},
 ) {
-  const basePrompt = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  let basePrompt = String(value ?? "").replace(/\r\n?/g, "\n").trim();
   if (basePrompt.length < 4) throw new Error("directive_required");
-  const speech = compileSpeechStamp(input, profile.outputFormat);
+  const soundDesign = options.continuationSound || options.soundDesign !== false;
+  if (options.continuationSound && !basePrompt.includes(VIDEO_EXTENSION_SOUND_DIRECTIVE)) {
+    if (profile.outputFormat === "minimax-h3-timeline" && /(Audio\s*:\s*[^\n]*)/i.test(basePrompt)) {
+      basePrompt = basePrompt.replace(/(Audio\s*:\s*[^\n]*)/i, `$1 ${VIDEO_EXTENSION_SOUND_DIRECTIVE}`);
+    } else {
+      basePrompt = `${basePrompt}${profile.outputFormat === "minimax-h3-timeline" ? "\nAudio:" : ""} ${VIDEO_EXTENSION_SOUND_DIRECTIVE}`;
+    }
+  }
+  const speech = compileSpeechStamp(input, profile.outputFormat, soundDesign);
   let prompt: string;
   if (profile.outputFormat === "minimax-h3-timeline") {
     const audioPattern = /(Audio\s*:\s*[^\n]*)/i;

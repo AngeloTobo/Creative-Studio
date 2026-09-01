@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveCompletedVideoScriptEditor,
   restoredVideoScriptEditorIsDirty,
+  videoOperationAfterApplyingFullScript,
 } from "../../src/features/generation/videoScriptEditorState";
 
 describe("full video script editor restoration", () => {
@@ -26,5 +27,41 @@ describe("full video script editor restoration", () => {
     expect(restoredVideoScriptEditorIsDirty(undefined, "videoscript_1", "My recovered scene.")).toBe(true);
     expect(restoredVideoScriptEditorIsDirty(undefined, "videoscript_1", "")).toBe(false);
     expect(restoredVideoScriptEditorIsDirty(false, "videoscript_1", "My recovered scene.")).toBe(false);
+  });
+
+  it("turns New sound on for every applied Full Script without changing its result or join", () => {
+    const silentOperation = {
+      kind: "extend" as const,
+      sourceId: "artifact_video_1",
+      source: "artifact" as const,
+      sourceFrame: "last" as const,
+      outputMode: "combined" as const,
+      audioMode: "mute" as const,
+      transitionSeconds: 0.5 as const,
+    };
+    expect(videoOperationAfterApplyingFullScript(silentOperation)).toEqual({
+      kind: "extend",
+      sourceId: "artifact_video_1",
+      source: "artifact",
+      sourceFrame: "last",
+      outputMode: "combined",
+      audioMode: "new-sound",
+      transitionSeconds: 0.5,
+    });
+
+    const sourceOnlyOperation = {
+      kind: "extend" as const,
+      sourceId: "artifact_video_1",
+      source: "artifact" as const,
+      sourceFrame: "last" as const,
+      outputMode: "combined" as const,
+      audioMode: "keep-source" as const,
+      transitionSeconds: 0 as const,
+    };
+    expect(videoOperationAfterApplyingFullScript(sourceOnlyOperation)?.audioMode).toBe("new-sound");
+
+    const generatedSoundOperation = { ...silentOperation, audioMode: "new-sound" as const };
+    expect(videoOperationAfterApplyingFullScript(generatedSoundOperation)).toBe(generatedSoundOperation);
+    expect(videoOperationAfterApplyingFullScript(null)).toBeNull();
   });
 });
