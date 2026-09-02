@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ProductionCockpitAction, ProductionCockpitRun } from "../../../shared/contracts";
 import { useStudio } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
@@ -11,7 +11,7 @@ import "./work.css";
 
 export type WorkSegment = "needs-action" | "running" | "results";
 
-export type WorkViewProps = Pick<ArtifactsViewProps, "onQueued" | "onContinueLoop" | "onExtendVideo" | "onEvolve" | "onAnimate" | "onAnimateFourWay"> & {
+export type WorkViewProps = Pick<ArtifactsViewProps, "onReuse" | "onContinueLoop" | "onExtendVideo" | "onEvolve" | "onAnimate" | "onAnimateFourWay"> & {
   onOpen: (action: ProductionCockpitAction) => void;
   focusRunId?: string;
   focusArtifactId?: string;
@@ -32,7 +32,7 @@ function initialWorkSegment({ initialSegment, focusRunId, focusArtifactId }: Pic
 
 export function WorkView({
   onOpen,
-  onQueued,
+  onReuse,
   onContinueLoop,
   onExtendVideo,
   onEvolve,
@@ -78,13 +78,23 @@ export function WorkView({
   const completedCount = projectRuns.filter((run) => run.status === "completed").length;
   const failedCount = projectRuns.filter((run) => run.status === "failed" || run.status === "cancelled").length;
   const retainedBytes = projectRuns.reduce((total, run) => total + (run.retainedBytes ?? 0), 0);
-  const [segment, setSegment] = useState<WorkSegment>(() => {
+  const [segmentSelection, setSegmentSelection] = useState<{ initialSegment?: WorkSegment; selected: WorkSegment }>(() => {
     const requested = initialWorkSegment({ initialSegment, focusRunId, focusArtifactId });
-    if (initialSegment || focusRunId || focusArtifactId) return requested;
-    if (activeOvernightSessions.length) return "running";
-    if (projectActions.length) return "needs-action";
-    return runningCount ? "running" : "results";
+    const selected = initialSegment || focusRunId || focusArtifactId
+      ? requested
+      : activeOvernightSessions.length
+        ? "running"
+        : projectActions.length
+          ? "needs-action"
+          : runningCount ? "running" : "results";
+    return { initialSegment, selected };
   });
+  const segment = segmentSelection.initialSegment === initialSegment
+    ? segmentSelection.selected
+    : initialSegment ?? segmentSelection.selected;
+  const setSegment = useCallback((selected: WorkSegment) => {
+    setSegmentSelection({ initialSegment, selected });
+  }, [initialSegment]);
   const liveRunners = (snapshot?.runners ?? []).filter((runner) => runner.state === "online" || runner.state === "busy");
   const diagnosticRunner = [...liveRunners].sort((left, right) => {
     const priority = { blocked: 0, attention: 1, working: 2, unknown: 3, ready: 4 } as const;
@@ -107,17 +117,12 @@ export function WorkView({
       setSegment(focusedRun && !isRunning(focusedRun) ? "needs-action" : "running");
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [focusArtifactId, focusRunId, projectRuns]);
+  }, [focusArtifactId, focusRunId, projectRuns, setSegment]);
 
   const openAction = (action: ProductionCockpitAction) => {
     if (action.kind === "review-artifact") setSegment("results");
     if (action.kind === "retry-generation") setSegment("running");
     onOpen(action);
-  };
-
-  const queued = () => {
-    setSegment("running");
-    onQueued();
   };
 
   const tabs: Array<{ id: WorkSegment; label: string; count: number; icon: "bell" | "queue" | "gallery" }> = [
@@ -139,7 +144,6 @@ export function WorkView({
             <i /> {videoDoctorBlocked ? "Video blocked" : runnerBusy ? "Runner busy" : runnerAvailable ? "Runner ready" : "Runner offline"}
           </span>
           <button type="button" className="icon-button" aria-label="Refresh work" disabled={busy} onClick={() => void refresh()}><Icon name="rerun" size={17} /></button>
-          <button type="button" className="btn btn-primary work-create" onClick={onContinueLoop}><Icon name="star" size={15} /><span>Create</span></button>
         </div>
       </header>
 
@@ -158,7 +162,7 @@ export function WorkView({
               ? "The saved lane needs corrected settings before it can run. Completed versions remain retained."
               : "Automatic retries were exhausted. Completed versions remain retained; submit again when the runner is healthy."}</small>
           </div>
-          <button type="button" className="btn btn-primary" onClick={onContinueLoop}>Open Create</button>
+          <button type="button" className="btn btn-primary" onClick={onContinueLoop}>Edit setup</button>
         </article>)}
       </section> : null}
 
@@ -195,7 +199,7 @@ export function WorkView({
             <div className="work-history-stats"><span><small>All runs</small><strong>{projectRuns.length}</strong></span><span><small>Completed</small><strong>{completedCount}</strong></span><span><small>Failed / cancelled</small><strong>{failedCount}</strong></span><span><small>Retained</small><strong>{retainedBytes >= 1024 * 1024 ? `${(retainedBytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(retainedBytes / 1024)} KB`}</strong></span></div>
             <CockpitView embedded mode="history" projectId={activeProjectId} onOpen={openAction} />
           </details>
-          <ArtifactsView embedded compact focusArtifactId={focusArtifactId} onQueued={queued} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} />
+          <ArtifactsView embedded compact focusArtifactId={focusArtifactId} onReuse={onReuse} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} />
         </> : null}
       </div>
     </section>

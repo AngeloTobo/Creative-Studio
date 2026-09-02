@@ -138,12 +138,12 @@ export function MediaView({ onGenerate, onUseAsset, onEvolve, onAnimate, onAnima
             <p>{asset.originalFileName}</p>
             <div className="media-card-meta"><span>{formatBytes(asset.size)}</span><span>{new Date(asset.createdAt).toLocaleDateString()}</span><span>{asset.trainingEligible ? "training allowed" : "training excluded"}</span></div>
             <div className="media-card-actions media-smart-actions">
-              {asset.kind === "image" ? <button className="btn btn-primary media-animate" onClick={() => onAnimate(asset.id)} title="Queue two speed-safe 5-second versions"><Icon name="video" size={15} /> Animate</button> : <button className="btn btn-primary" onClick={() => openAssetInCreate(asset)}><Icon name="wand" size={15} /> Use</button>}
+              <button className="btn btn-primary" onClick={() => openAssetInCreate(asset)}><Icon name="wand" size={15} /> Use in Create</button>
               <details className="media-action-menu">
                 <summary className="btn btn-ghost" aria-label={`More actions for ${asset.name}`}><Icon name="more" size={17} /></summary>
                 <div role="menu">
                   <button role="menuitem" onClick={() => setInspected(asset)}><Icon name="external" size={14} /> Inspect</button>
-                  {asset.kind === "image" ? <><button role="menuitem" onClick={() => openAssetInCreate(asset)}><Icon name="wand" size={14} /> Use in Create</button><button role="menuitem" onClick={() => onAnimateFourWay(asset.id)}><Icon name="star" size={14} /> Animate 4 ways</button></> : null}
+                  {asset.kind === "image" ? <><button role="menuitem" onClick={() => onAnimate(asset.id)} title="Prepare two speed-safe 5-second versions"><Icon name="video" size={14} /> Animate</button><button role="menuitem" onClick={() => onAnimateFourWay(asset.id)}><Icon name="star" size={14} /> Animate 4 ways</button></> : null}
                   <button role="menuitem" onClick={() => onEvolve(asset.id)}><Icon name="star" size={14} /> Evolve</button>
                   {onAnalyze ? <button role="menuitem" disabled={!asset.trainingEligible} title={asset.trainingEligible ? undefined : "This upload was excluded from training"} onClick={() => onAnalyze(asset.id)}><Icon name="dna" size={14} /> Analyze media</button> : null}
                   {asset.kind === "audio" && onTrain ? <button role="menuitem" disabled={!asset.trainingEligible} title={asset.trainingEligible ? undefined : "This upload was excluded from training"} onClick={() => onTrain(asset.id, asset.kind)}><Icon name="runtime" size={14} /> Train music LoRA</button> : null}

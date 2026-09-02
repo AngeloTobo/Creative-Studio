@@ -139,7 +139,6 @@ export function ProjectsView({ onOpen, embedded = false }: ProjectsViewProps) {
       {showCreateForm ? <ProjectForm firstProject={!availableProjects.length} busy={busy} onSave={create} onCancel={availableProjects.length ? () => setCreating(false) : undefined} /> : null}
       {editingProject ? <ProjectForm key={editingProject.updatedAt} project={editingProject} busy={busy} onSave={(input) => update(editingProject.id, input)} onCancel={() => setEditingId(null)} /> : null}
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
-      {activeProject ? <WorldBoard project={activeProject} /> : null}
       <div className="projects-grid">
         {availableProjects.map((project) => {
           const jobs = snapshot?.jobs.filter((job) => job.projectId === project.id).length ?? 0;
@@ -193,6 +192,7 @@ export function ProjectsView({ onOpen, embedded = false }: ProjectsViewProps) {
           </article>;
         })}
       </div>
+      {activeProject ? <WorldBoard project={activeProject} /> : null}
       {archivedProjects.length ? <details className="archived-projects"><summary>Archived · {archivedProjects.length}</summary><div>{archivedProjects.map((project) => <article className="project-archived-row glass" key={project.id}><ProjectAvatar project={project} size={38} /><span><strong>{project.name}</strong><small>{project.type} · archived</small></span></article>)}</div></details> : null}
     </section>
   );

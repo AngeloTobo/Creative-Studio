@@ -42,7 +42,10 @@ export function RuntimeView({ embedded = false }: { embedded?: boolean } = {}) {
         <span><b>{snapshot?.runners.filter((runner) => runner.state === "online" || runner.state === "busy").length ?? 0}</b><small>runners online</small></span>
       </div>
       {diagnosticRunner?.videoDoctor ? <VideoDoctorCard report={diagnosticRunner.videoDoctor} /> : <div className="video-doctor-awaiting glass"><Icon name="runtime" size={17} /><span><strong>Video Doctor is waiting for its first runner report.</strong><small>Local Runner 1.19 adds read-only Comfy diagnosis without loading an AI model.</small></span></div>}
-      {issues.length ? <section className="runtime-issues"><header><span className="eyebrow">Needs attention</span><strong>{issues.length} capabilities</strong></header><div className="capability-grid">{issues.map((capability) => <CapabilityCard capability={capability} key={capability.key} />)}</div></section> : diagnosticNeedsAttention ? null : <div className="runtime-all-clear"><Icon name="check" size={17} /><strong>Local capabilities report no failures.</strong>{offByDesign.length ? <span>{offByDesign.length} optional remote {offByDesign.length === 1 ? "route is" : "routes are"} off by design.</span> : null}</div>}
+      {issues.length ? <details className="runtime-issues runtime-attention glass">
+        <summary><span><Icon name="shield" size={16} /><strong>Needs attention</strong></span><b>{issues.length}</b><Icon name="chevronDown" size={15} /></summary>
+        <div className="capability-grid">{issues.map((capability) => <CapabilityCard capability={capability} key={capability.key} />)}</div>
+      </details> : diagnosticNeedsAttention ? null : <div className="runtime-all-clear"><Icon name="check" size={17} /><strong>Local capabilities report no failures.</strong>{offByDesign.length ? <span>{offByDesign.length} optional remote {offByDesign.length === 1 ? "route is" : "routes are"} off by design.</span> : null}</div>}
       {offByDesign.length ? <details className="runtime-optional glass">
         <summary><span><Icon name="shield" size={16} /><strong>Remote routes off by design</strong></span><b>{offByDesign.length}</b><Icon name="chevronDown" size={15} /></summary>
         <div className="capability-grid">{offByDesign.map((capability) => <CapabilityCard capability={capability} key={capability.key} />)}</div>

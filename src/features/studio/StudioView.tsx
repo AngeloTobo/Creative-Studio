@@ -84,7 +84,6 @@ export function StudioView({
         <ProjectAvatar project={activeProject} size={46} />
         <span className="studio-hub-project"><small>Active project</small><strong>{activeProject.name}</strong><em>{activeProject.note || activeProject.type || "Creative project"}</em></span>
         <span className="studio-hub-facts"><b>{projectMedia}<small>media</small></b><b>{projectDna}<small>DNA</small></b><b>{projectEvidence}<small>evidence</small></b></span>
-        <button className="btn btn-primary studio-hub-create" onClick={onCreate}><Icon name="wand" size={15} /> Create</button>
       </> : <><span className="studio-hub-empty-icon"><Icon name={activeSection === "system" ? "runtime" : activeSection === "models" ? "flows" : "projects"} size={22} /></span><span className="studio-hub-project"><small>{activeSection === "project" ? "Studio setup" : "Available before a project"}</small><strong>{activeSection === "system" ? "Local system" : activeSection === "models" ? "Model library" : "Create your first project"}</strong><em>{activeSection === "project" ? "A name is enough to begin." : activeSection === "models" ? "Browse now; select a project to import." : "No project required."}</em></span></>}
     </header>
 

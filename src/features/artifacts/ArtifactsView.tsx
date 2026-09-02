@@ -258,8 +258,8 @@ function DecisionHistory({ decisions }: { decisions: Acceptance[] }) {
   );
 }
 
-function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, onMakeCanon, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, focused, compact = false }: { artifact: Artifact; onQueued: () => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onMakeCanon: (intent: CanonIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; onAnimateFourWay: (artifactId: string) => void; focused: boolean; compact?: boolean }) {
-  const { snapshot, reuseJob, createGenerationRecipe, recordGenerationRecipeEvidence, busy } = useStudio();
+function ArtifactCard({ artifact, onReuse, onInspect, onPlayVideo, onReview, onMakeCanon, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, focused, compact = false }: { artifact: Artifact; onReuse: (artifact: Artifact) => void; onInspect: (artifact: Artifact) => void; onPlayVideo: (artifact: Artifact) => void; onReview: (intent: ReviewIntent) => void; onMakeCanon: (intent: CanonIntent) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; onAnimateFourWay: (artifactId: string) => void; focused: boolean; compact?: boolean }) {
+  const { snapshot, createGenerationRecipe, recordGenerationRecipeEvidence, busy } = useStudio();
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [recipePromotion, setRecipePromotion] = useState<RecipePromotionState>({ status: "idle", message: "", acceptance: null });
   const decisions = snapshot?.acceptances.filter((item) => item.artifactId === artifact.id) ?? [];
@@ -307,15 +307,11 @@ function ArtifactCard({ artifact, onQueued, onInspect, onPlayVideo, onReview, on
     ? videoGenerationVariantLabel(artifact.settingsStamp.videoVariant.role)
     : null;
   const videoSpeech = artifact.settingsStamp.videoSpeech ?? null;
-  const reuse = async () => {
-    await reuseJob(artifact.jobId);
-    onQueued();
-  };
   const disabled = busy || artifact.status === "retaining";
-  const animateAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)} title="Queue two speed-safe 5-second versions"><Icon name="video" size={16} /> Animate</button> : null;
-  const animateFourWayAction = artifact.kind === "image" ? <button className="btn btn-ghost artifact-animate-four" disabled={disabled} onClick={() => onAnimateFourWay(artifact.id)} title="Queue Exact, Enhanced, Left Field, and Awe versions"><Icon name="star" size={16} /> Animate ×4</button> : null;
+  const animateAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)} title="Prepare two speed-safe 5-second versions in Create"><Icon name="video" size={16} /> Animate</button> : null;
+  const animateFourWayAction = artifact.kind === "image" ? <button className="btn btn-ghost artifact-animate-four" disabled={disabled} onClick={() => onAnimateFourWay(artifact.id)} title="Prepare Exact, Enhanced, Left Field, and Awe in Create"><Icon name="star" size={16} /> Animate ×4</button> : null;
   const evolveAction = <button className="btn artifact-evolve" disabled={disabled} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>;
-  const reuseAction = <button className="btn btn-ghost artifact-reuse" disabled={disabled} onClick={() => void reuse()}><Icon name="rerun" size={16} /> Reuse settings</button>;
+  const reuseAction = <button className="btn btn-ghost artifact-reuse" disabled={disabled} title="Review these retained settings in Create before generating" onClick={() => onReuse(artifact)}><Icon name="rerun" size={16} /> Reuse setup</button>;
   const acceptAction = <button className="btn artifact-accept" disabled={disabled} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>;
   const rejectAction = <button className="btn artifact-reject" disabled={disabled} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>;
   const archiveAction = <button className="btn btn-ghost" disabled={disabled} onClick={() => onReview({ artifact, decision: "archived" })}><Icon name="archive" size={16} /> Archive</button>;
@@ -460,9 +456,9 @@ function LearnedNotice({ signals, onClose }: { signals: CreativeTasteSignal[]; o
   return <div className="creative-learned" role="status"><Icon name="dna" size={18} /><span><strong>Creative Studio learned from that decision</strong>{signals.map((signal) => <small key={signal.id}><b>{signal.kind}</b> · {signal.text}</small>)}</span><button className="icon-button" aria-label="Close learned feedback" onClick={onClose}><Icon name="close" size={15} /></button></div>;
 }
 
-export type ArtifactsViewProps = { onQueued: () => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; onAnimateFourWay: (artifactId: string) => void; focusArtifactId?: string; embedded?: boolean; compact?: boolean };
+export type ArtifactsViewProps = { onReuse: (artifact: Artifact) => void; onContinueLoop: () => void; onExtendVideo: (artifactId: string) => void; onEvolve: (artifactId: string) => void; onAnimate: (artifactId: string) => void; onAnimateFourWay: (artifactId: string) => void; focusArtifactId?: string; embedded?: boolean; compact?: boolean };
 
-export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, focusArtifactId, embedded = false, compact = embedded }: ArtifactsViewProps) {
+export function ArtifactsView({ onReuse, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, focusArtifactId, embedded = false, compact = embedded }: ArtifactsViewProps) {
   const { snapshot, activeProjectId, error, busy, reviewArtifact, loadArtifactHistory, promoteArtifactToCanon } = useStudio();
   const [inspected, setInspected] = useState<Artifact | null>(null);
   const [playingVideo, setPlayingVideo] = useState<Artifact | null>(null);
@@ -666,8 +662,8 @@ export function ArtifactsView({ onQueued, onContinueLoop, onExtendVideo, onEvolv
   };
 
   const renderHistoryEntry = (entry: ArtifactHistoryEntry) => entry.kind === "study"
-    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onQueued, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onMakeCanon: setCanonIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, compact }} />
-    : <ArtifactCard key={entry.key} artifact={entry.artifact} onQueued={onQueued} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onMakeCanon={setCanonIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} focused={focusArtifactId === entry.artifact.id} compact={compact} />;
+    ? <EvolutionStudyGroup key={entry.key} study={entry.study} artifacts={artifacts} focusArtifactId={focusArtifactId} cardProps={{ onReuse, onInspect: setInspected, onPlayVideo: setPlayingVideo, onReview: setReviewIntent, onMakeCanon: setCanonIntent, onContinueLoop, onExtendVideo, onEvolve, onAnimate, onAnimateFourWay, compact }} />
+    : <ArtifactCard key={entry.key} artifact={entry.artifact} onReuse={onReuse} onInspect={setInspected} onPlayVideo={setPlayingVideo} onReview={setReviewIntent} onMakeCanon={setCanonIntent} onContinueLoop={onContinueLoop} onExtendVideo={onExtendVideo} onEvolve={onEvolve} onAnimate={onAnimate} onAnimateFourWay={onAnimateFourWay} focused={focusArtifactId === entry.artifact.id} compact={compact} />;
   return (
     <section className={`artifacts-view fade-up${embedded ? " artifacts-embedded" : ""}`} aria-label={embedded ? "Completed results" : undefined}>
       {!embedded ? <div className="artifacts-toolbar glass">

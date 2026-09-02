@@ -4,7 +4,7 @@ import { type StudioView } from "./views";
 import { DesktopShell, MobileShell } from "../components/Shell";
 import { Icon } from "../components/Icon";
 import { PlaceholderView } from "../features/placeholder/PlaceholderView";
-import type { ProductionCockpitAction } from "../../shared/contracts";
+import type { Artifact, ProductionCockpitAction } from "../../shared/contracts";
 import type { VideoCreateEntryMode } from "../features/generation/createEntry";
 import type { CreateIntent } from "../features/generation/quickCreate";
 import type { StoryRecommendationHandoff } from "../features/stories/StoryBankRail";
@@ -61,7 +61,7 @@ export function App() {
   const [evolutionSourceId, setEvolutionSourceId] = useState("");
   const [createSourceId, setCreateSourceId] = useState("");
   const [createIntent, setCreateIntent] = useState<CreateIntent | undefined>();
-  const [createAutoStart, setCreateAutoStart] = useState(false);
+  const [reuseArtifact, setReuseArtifact] = useState<Artifact | null>(null);
   const [videoCreateEntryMode, setVideoCreateEntryMode] = useState<VideoCreateEntryMode>("standard");
   const [storyRecommendation, setStoryRecommendation] = useState<StoryRecommendationHandoff | null>(null);
   const [trainingSourceIds, setTrainingSourceIds] = useState<string[]>([]);
@@ -69,6 +69,22 @@ export function App() {
   const [overnightOpen, setOvernightOpen] = useState(false);
   const [overnightReviewSessionId, setOvernightReviewSessionId] = useState("");
   const mobile = useResponsive();
+  const scopedReuseArtifact = reuseArtifact?.projectId === activeProjectId ? reuseArtifact : null;
+  if (reuseArtifact && !scopedReuseArtifact) setReuseArtifact(null);
+
+  const clearCreateHandoff = () => {
+    setCockpitTarget(null);
+    setVideoExtensionArtifactId("");
+    setEvolutionSourceId("");
+    setCreateSourceId("");
+    setCreateIntent(undefined);
+    setReuseArtifact(null);
+    setVideoCreateEntryMode("standard");
+    setStoryRecommendation(null);
+    setTrainingSourceIds([]);
+    setTrainingPath("analyze");
+  };
+
   useEffect(() => {
     const update = () => {
       setCockpitTarget(null);
@@ -76,7 +92,7 @@ export function App() {
       setEvolutionSourceId("");
       setCreateSourceId("");
       setCreateIntent(undefined);
-      setCreateAutoStart(false);
+      setReuseArtifact(null);
       setVideoCreateEntryMode("standard");
       setStoryRecommendation(null);
       setTrainingSourceIds([]);
@@ -87,107 +103,82 @@ export function App() {
     return () => window.removeEventListener("hashchange", update);
   }, []);
   useEffect(() => {
-    document.querySelector(mobile ? ".mbody" : ".view-scroll")?.scrollTo({ top: 0 });
+    const workspace = document.querySelector<HTMLElement>(mobile ? ".mbody" : ".view-scroll");
+    workspace?.scrollTo({ top: 0 });
+    const frame = window.requestAnimationFrame(() => {
+      const target = view === "dna"
+        ? document.getElementById("creative-studio-direction") ?? workspace?.querySelector<HTMLElement>("h1, h2")
+        : workspace?.querySelector<HTMLElement>("h1, h2, [role='tab'][aria-selected='true']");
+      if (!target) return;
+      if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement) && !(target instanceof HTMLButtonElement)) {
+        target.setAttribute("tabindex", "-1");
+      }
+      target.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [activeProjectId, mobile, view]);
 
   const navigate = (next: StudioView) => {
-    setCockpitTarget(null);
-    setVideoExtensionArtifactId("");
-    setEvolutionSourceId("");
-    setCreateSourceId("");
-    setCreateIntent(undefined);
-    setCreateAutoStart(false);
-    setVideoCreateEntryMode("standard");
-    setStoryRecommendation(null);
-    setTrainingSourceIds([]);
-    setTrainingPath("analyze");
+    if (next === view) {
+      if (next === "dna") clearCreateHandoff();
+      return;
+    }
+    clearCreateHandoff();
     setView(next);
     window.history.pushState(null, "", `#/${next}`);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const openVideoExtension = (artifactId: string) => {
-    setCockpitTarget(null);
+    clearCreateHandoff();
     setVideoExtensionArtifactId(artifactId);
-    setEvolutionSourceId("");
-    setCreateSourceId("");
-    setCreateIntent(undefined);
-    setCreateAutoStart(false);
-    setVideoCreateEntryMode("standard");
-    setStoryRecommendation(null);
-    setTrainingSourceIds([]);
-    setTrainingPath("analyze");
     setView("dna");
     window.history.pushState(null, "", "#/dna");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const openEvolution = (sourceId: string) => {
-    setCockpitTarget(null);
-    setVideoExtensionArtifactId("");
+    clearCreateHandoff();
     setEvolutionSourceId(sourceId);
-    setCreateSourceId("");
-    setCreateIntent(undefined);
-    setCreateAutoStart(false);
-    setVideoCreateEntryMode("standard");
-    setStoryRecommendation(null);
-    setTrainingSourceIds([]);
-    setTrainingPath("analyze");
     setView("dna");
     window.history.pushState(null, "", "#/dna");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const openHomeCreate = (intent: Exclude<CreateIntent, "train">, sourceId?: string, autoStart = false, videoEntryMode: VideoCreateEntryMode = "standard", recommendation: StoryRecommendationHandoff | null = null) => {
-    setCockpitTarget(null);
-    setVideoExtensionArtifactId("");
-    setEvolutionSourceId("");
+  const openHomeCreate = (intent: Exclude<CreateIntent, "train">, sourceId?: string, videoEntryMode: VideoCreateEntryMode = "standard", recommendation: StoryRecommendationHandoff | null = null) => {
+    clearCreateHandoff();
     setCreateSourceId(sourceId ?? "");
     setCreateIntent(intent);
-    setCreateAutoStart(autoStart);
+    // Every entry point prepares this one composer. Only its Generate button
+    // may submit work; navigation and source actions never claim the GPU.
     setVideoCreateEntryMode(intent === "video" ? videoEntryMode : "standard");
     setStoryRecommendation(recommendation);
-    setTrainingSourceIds([]);
-    setTrainingPath("analyze");
     setView("dna");
     window.history.pushState(null, "", "#/dna");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const openHomeTraining = (sourceId: string, path: "analyze" | "model" = "analyze") => {
-    setCockpitTarget(null);
-    setVideoExtensionArtifactId("");
-    setEvolutionSourceId("");
-    setCreateSourceId("");
-    setCreateIntent(undefined);
-    setCreateAutoStart(false);
-    setVideoCreateEntryMode("standard");
-    setStoryRecommendation(null);
+    clearCreateHandoff();
     setTrainingSourceIds([sourceId]);
     setTrainingPath(path);
     setView("dna");
     window.history.pushState(null, "", "#/dna");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openReuseSetup = (artifact: Artifact) => {
+    clearCreateHandoff();
+    if (artifact.projectId !== activeProjectId) setActiveProjectId(artifact.projectId);
+    setReuseArtifact(artifact);
+    setView("dna");
+    window.history.pushState(null, "", "#/dna");
   };
 
   const openCockpitAction = (action: ProductionCockpitAction) => {
     if (action.projectId) setActiveProjectId(action.projectId);
-    setVideoExtensionArtifactId("");
-    setEvolutionSourceId("");
-    setCreateSourceId("");
-    setCreateIntent(undefined);
-    setCreateAutoStart(false);
-    setVideoCreateEntryMode("standard");
-    setStoryRecommendation(null);
-    setTrainingSourceIds([]);
-    setTrainingPath("analyze");
+    clearCreateHandoff();
     setCockpitTarget(action);
     setView(action.surface);
     window.history.pushState(null, "", `#/${action.surface}`);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const openFourWayAnimation = (sourceId: string) => openHomeCreate("video", sourceId, true, "four-way");
+  const openFourWayAnimation = (sourceId: string) => openHomeCreate("video", sourceId, "four-way");
 
   const content = (() => {
     const studioSection = view === "media" ? "media" : view === "library" ? "memory" : view === "flows" ? "models" : view === "runtime" || view === "settings" || view === "system" ? "system" : "project";
@@ -197,7 +188,7 @@ export function App() {
       onCreate={() => navigate("dna")}
       onUseAsset={(sourceId, kind) => openHomeCreate(kind === "audio" ? "music" : kind, sourceId)}
       onEvolve={openEvolution}
-      onAnimate={(sourceId) => openHomeCreate("video", sourceId, true)}
+      onAnimate={(sourceId) => openHomeCreate("video", sourceId)}
       onAnimateFourWay={openFourWayAnimation}
       onAnalyze={(sourceId) => openHomeTraining(sourceId, "analyze")}
       onTrain={(sourceId, kind) => openHomeTraining(sourceId, kind === "audio" ? "model" : "analyze")}
@@ -205,22 +196,21 @@ export function App() {
     />;
     if (!activeProjectId && view !== "work" && view !== "cockpit" && view !== "queue") return studio;
     switch (view) {
-      case "portal": return <PortalView navigate={navigate} onCreate={openHomeCreate} onUseStoryRecommendation={(handoff) => openHomeCreate(handoff.recommendation.modality, handoff.recommendation.sourceId ?? undefined, false, "standard", handoff)} onTrain={openHomeTraining} onOvernight={() => setOvernightOpen(true)} onOvernightReview={setOvernightReviewSessionId} />;
-      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${createSourceId}:${createIntent ?? ""}:${createAutoStart}:${videoCreateEntryMode}:${storyRecommendation?.recommendation.id ?? ""}:${storyRecommendation?.recommendation.version ?? ""}:${trainingSourceIds.join(",")}:${trainingPath}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} initialSourceId={createSourceId || undefined} initialCreateIntent={createIntent} initialAutoStart={createAutoStart} initialVideoCreateMode={videoCreateEntryMode} initialStoryRecommendation={storyRecommendation ?? undefined} initialTrainingAssetIds={trainingSourceIds} initialTrainingPath={trainingPath} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
+      case "portal": return <PortalView navigate={navigate} onUseStoryRecommendation={(handoff) => openHomeCreate(handoff.recommendation.modality, handoff.recommendation.sourceId ?? undefined, "standard", handoff)} onOvernight={() => setOvernightOpen(true)} onOvernightReview={setOvernightReviewSessionId} />;
+      case "dna": return <CreativeDnaWorkbench key={`${activeProjectId}:${videoExtensionArtifactId}:${evolutionSourceId}:${createSourceId}:${createIntent ?? ""}:${scopedReuseArtifact?.jobId ?? ""}:${videoCreateEntryMode}:${storyRecommendation?.recommendation.id ?? ""}:${storyRecommendation?.recommendation.version ?? ""}:${trainingSourceIds.join(",")}:${trainingPath}:${cockpitTarget?.entityId ?? ""}`} onQueued={() => navigate("queue")} onMedia={() => navigate("media")} onArtifacts={() => navigate("gallery")} onWorkflows={() => navigate("flows")} initialReviewJobId={cockpitTarget?.kind === "review-training" ? cockpitTarget.entityId : undefined} initialVideoExtensionArtifactId={videoExtensionArtifactId || undefined} initialEvolutionSourceId={evolutionSourceId || undefined} initialSourceId={createSourceId || undefined} initialCreateIntent={createIntent} initialReuseArtifact={scopedReuseArtifact ?? undefined} initialVideoCreateMode={videoCreateEntryMode} initialStoryRecommendation={storyRecommendation ?? undefined} initialTrainingAssetIds={trainingSourceIds} initialTrainingPath={trainingPath} onCockpitTargetHandled={() => setCockpitTarget(null)} />;
       case "work":
       case "cockpit":
       case "queue":
       case "gallery": return <WorkView
-        key={view}
         initialSegment={view === "gallery" ? "results" : view === "cockpit" || view === "queue" ? "running" : undefined}
         focusRunId={cockpitTarget?.surface === "queue" ? cockpitTarget.entityId : undefined}
         focusArtifactId={cockpitTarget?.kind === "review-artifact" ? cockpitTarget.entityId : undefined}
         onOpen={openCockpitAction}
-        onQueued={() => navigate("work")}
+        onReuse={openReuseSetup}
         onContinueLoop={() => navigate("dna")}
         onExtendVideo={openVideoExtension}
         onEvolve={openEvolution}
-        onAnimate={(sourceId) => openHomeCreate("video", sourceId, true)}
+        onAnimate={(sourceId) => openHomeCreate("video", sourceId)}
         onAnimateFourWay={openFourWayAnimation}
         onReviewOvernight={setOvernightReviewSessionId}
         onManageLoveLoop={() => navigate("portal")}

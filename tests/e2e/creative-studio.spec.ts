@@ -14,7 +14,7 @@ async function openCreatePlan(page: Page) {
   if (await plan.getAttribute("open") === null) await plan.locator(":scope > summary").click();
 }
 
-test("a Create draft survives navigation and resumes from Home", async ({ page }) => {
+test("a Create draft survives navigation and resumes through canonical Create", async ({ page }) => {
   const createdAt = "2026-08-27T05:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
@@ -24,16 +24,24 @@ test("a Create draft survives navigation and resumes from Home", async ({ page }
   }, { createdAt });
 
   await page.goto("/#/dna");
+  const primaryIntents = page.getByRole("group", { name: "What do you want to make?" });
+  await expect(primaryIntents.getByRole("button")).toHaveText(["Image", "Video"]);
+  await expect(page.locator(".quick-secondary-modes")).toBeHidden();
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
   const direction = page.getByRole("textbox", { name: "Describe the image" });
-  await direction.fill("A suspended glass seed holding a tiny electric storm.");
+  const authoredPrompt = "A suspended glass seed holding a tiny electric storm.";
+  await direction.fill(authoredPrompt);
   await expect(page.locator(".quick-autosave-state")).toHaveText("Saves as you type.");
+  await primaryIntents.getByRole("button", { name: "Video", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Describe the video" })).toHaveValue(authoredPrompt);
+  await primaryIntents.getByRole("button", { name: "Image", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Describe the image" })).toHaveValue(authoredPrompt);
   await page.waitForTimeout(750);
 
   await page.goto("/#/portal");
-  const draft = page.locator(".home-draft-chip");
-  await expect(draft).toContainText("A suspended glass seed holding a tiny electric storm.");
-  await expect(draft).toContainText("explore draft");
-  await draft.click();
+  await expect(page.getByRole("heading", { name: "Find the next direction" })).toBeVisible();
+  await expect(page.locator(".home-draft-chip")).toHaveCount(0);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.getByRole("textbox", { name: "Describe the image" })).toHaveValue("A suspended glass seed holding a tiny electric storm.");
   await expect(page.getByText(/Resumed your explore image draft/)).toBeVisible();
@@ -59,7 +67,7 @@ test("a restored draft requires an explicit replacement when its model disappear
   await page.goto("/#/dna");
   await expect(page.getByText(/model is no longer available/i)).toBeVisible();
   await expect(page.locator(".quick-compose-model > summary")).toContainText("No image model ready");
-  await expect(page.locator(".quick-primary")).toHaveText(/Create/);
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
   await expect(page.locator(".quick-primary")).toBeDisabled();
   await openCreativeControls(page);
   await page.locator(".quick-compose-model > summary").click();
@@ -67,52 +75,75 @@ test("a restored draft requires an explicit replacement when its model disappear
   await expect(page.locator(".quick-compose-model > summary")).toContainText("Available image model");
 });
 
-test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-tap animation brief", async ({ page }) => {
+test("Ideas keeps CreativeDNA as optional context and hands source work to the canonical Create composer", async ({ page }) => {
   const createdAt = "2026-08-23T23:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
     const dimensions = { energy: 76, tension: 64, contrast: 88, warmth: 32, spaciousness: 71, rhythmicity: 58, organicity: 42, polish: 81 };
+    const olderDimensions = { energy: 24, tension: 42, contrast: 55, warmth: 68, spaciousness: 62, rhythmicity: 31, organicity: 84, polish: 47 };
     const analysis = {
       schemaVersion: "creative-dna-training-analysis/1.1", createdAt: time, summary: "Measured the retained source.",
       sources: [{
         sourceId: "media_home", mediaId: "media_home", sourceType: "upload", kind: "image", label: "Rebecca embryo", observations: [], metrics: {}, dimensions, confidence: .93,
         detailedDescription: { schemaVersion: "creative-dna-media-description/1.1", longSummary: "A long source-grounded description of Rebecca's embryo artwork.", shortSummary: "A luminous embryo-like form floats in a dark violet field, with branching vessels and a cool internal glow.", provider: "local-comfyui", workflowId: "gemma4-multimodal-description", workflowVersion: 1, model: "gemma4_e4b_it_fp8_scaled.safetensors", prompt: "Describe the image.", comfyPromptId: "prompt_home_dna", settings: {} },
+      }, {
+        sourceId: "media_home_older", mediaId: "media_home_older", sourceType: "upload", kind: "image", label: "Rebecca garden study", observations: [], metrics: {}, dimensions: olderDimensions, confidence: .89,
+        detailedDescription: { schemaVersion: "creative-dna-media-description/1.1", longSummary: "A source-grounded description of Rebecca in a natural setting.", shortSummary: "Rebecca stands in a soft green garden with pale lavender skin and sculptural proportions.", provider: "local-comfyui", workflowId: "gemma4-multimodal-description", workflowVersion: 1, model: "gemma4_e4b_it_fp8_scaled.safetensors", prompt: "Describe the image.", comfyPromptId: "prompt_home_older_dna", settings: {} },
       }],
       dimensions: Object.fromEntries(Object.entries(dimensions).map(([key, value]) => [key, { value, confidence: .93, sourceIds: ["media_home"] }])),
     };
-    const dna = { schemaVersion: "creative-dna/1.0", artifactId: "dna_home", projectId: "project_home", version: 1, rootArtifactId: "dna_home", name: "Embryo light", createdAt: time, targetModality: "image", capability: "IMAGE_GENERATE", source: { kind: "owner_uploads", directive: "Luminous embryonic forms in deep violet space.", referenceLabel: null, referenceAssetIds: ["media_home"] }, shared: dimensions, native: {}, influence: { angeloCore: 75, currentProject: 15, reference: 50 }, evidence: [], rights: { policy: "original-input", referenceStoredAsProvenanceOnly: false, allowedDownstream: [], blockedDownstream: [] }, translations: [], generationPrompts: { image: "Luminous embryonic forms in deep violet space.", music: "Translate the luminous tension into sound." }, lineage: { rootArtifactId: "dna_home", parentArtifactId: null }, training: { jobId: "training_home", runnerId: "runner_home", assetIds: ["media_home"], trainingExampleIds: [], analysis } };
+    const dna = { schemaVersion: "creative-dna/1.0", artifactId: "dna_home", projectId: "project_home", version: 1, rootArtifactId: "dna_home", name: "Embryo light", createdAt: time, targetModality: "image", capability: "IMAGE_GENERATE", source: { kind: "owner_uploads", directive: "Luminous embryonic forms in deep violet space.", referenceLabel: null, referenceAssetIds: ["media_home"] }, shared: dimensions, native: {}, influence: { angeloCore: 75, currentProject: 15, reference: 50 }, evidence: [], rights: { policy: "original-input", referenceStoredAsProvenanceOnly: false, allowedDownstream: [], blockedDownstream: [] }, translations: [], generationPrompts: { image: "Luminous embryonic forms in deep violet space.", music: "Translate the luminous tension into sound." }, lineage: { rootArtifactId: "dna_home", parentArtifactId: null }, training: { jobId: "training_home", runnerId: "runner_home", assetIds: ["media_home", "media_home_older"], trainingExampleIds: [], analysis } };
     localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
       projects: [{ id: "project_home", activeDnaArtifactId: "dna_home", name: "Rebecca", type: "Visual study", status: "active", description: "", note: "", hue: "#d946ef", initials: "RE", createdAt: time, updatedAt: time }],
       dnaArtifacts: [dna],
-      mediaAssets: [{ id: "media_home", projectId: "project_home", kind: "image", name: "Rebecca embryo", originalFileName: "rebecca-embryo.png", mimeType: "image/png", size: 68, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: time, parentAssetIds: [] }, createdAt: time, updatedAt: time }],
+      mediaAssets: [
+        { id: "media_home", projectId: "project_home", kind: "image", name: "Rebecca embryo", originalFileName: "rebecca-embryo.png", mimeType: "image/png", size: 68, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: time, parentAssetIds: [] }, createdAt: time, updatedAt: time },
+        { id: "media_home_older", projectId: "project_home", kind: "image", name: "Rebecca garden study", originalFileName: "rebecca-garden.png", mimeType: "image/png", size: 68, source: "upload", status: "retained", contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", trainingEligible: true, provenance: { uploadedByOwner: true, uploadedAt: time, parentAssetIds: [] }, createdAt: time, updatedAt: time },
+      ],
       jobs: [], artifacts: [], workflows: [], acceptances: [], trainingExamples: [], trainingJobs: [], idempotencyKeys: {},
       trainingReviews: [{ id: "review_home", projectId: "project_home", trainingJobId: "training_home", dnaArtifactId: "dna_home", decision: "approved", note: "Approved.", actor: "development-user", activeDnaArtifactId: "dna_home", createdAt: time }],
     }));
   }, { createdAt });
 
   await page.goto("/#/portal");
-  await expect(page.getByRole("region", { name: "CreativeDNA canvas" })).toBeVisible();
-  await expect(page.getByRole("img", { name: /Measured upload DNA: Energy 76, Tension 64, Contrast 88/ })).toBeVisible();
-  await expect(page.getByText("93% confidence")).toBeVisible();
-  await expect(page.getByText(/A luminous embryo-like form floats in a dark violet field/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Find the next direction" })).toBeVisible();
+  await expect(page.getByText("Story Bank", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Home Autopilot" })).toBeVisible();
+  await expect(page.locator(".home-canvas, .home-action-grid, .home-continue-rail")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "New image", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Animate", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Make song", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open Create", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open Work", exact: true })).toHaveCount(0);
   await expect(page.locator(".orb-stage")).toHaveCount(0);
 
-  await page.getByRole("button", { name: /^Animate 2 fast versions/ }).click();
+  const context = page.locator("details.ideas-context");
+  await expect(context).not.toHaveAttribute("open", "");
+  await context.locator(":scope > summary").click();
+  await expect(context).toHaveAttribute("open", "");
+  await expect(context.getByRole("img", { name: /Measured source CreativeDNA: Energy 76, Tension 64, Contrast 88/ })).toBeVisible();
+  await expect(context.getByRole("img", { name: "Rebecca embryo", exact: true })).toBeVisible();
+  await expect(context.getByText(/A luminous embryo-like form floats in a dark violet field/)).toBeVisible();
+  await context.getByLabel("Creative context source").selectOption("media_home_older");
+  await expect(context.getByRole("img", { name: "Rebecca garden study", exact: true })).toBeVisible();
+  await expect(context.getByRole("img", { name: /Measured source CreativeDNA: Energy 24, Tension 42, Contrast 55/ })).toBeVisible();
+  await expect(context.getByText(/Rebecca stands in a soft green garden/)).toBeVisible();
+  await context.getByLabel("Creative context source").selectOption("media_home");
+
+  await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page).toHaveURL(/#\/dna$/);
-  await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
+  await page.getByRole("button", { name: "Video", exact: true }).click();
   await openRetainedWork(page);
-  await expect(page.getByRole("button", { name: "Use Rebecca embryo upload" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByLabel("Describe the video")).not.toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
+  await page.getByRole("button", { name: "Use Rebecca embryo upload" }).click();
+  await expect(page.locator(".quick-compose-source > summary")).toContainText("Rebecca embryo");
+  await expect(page.getByLabel("Describe the video")).toHaveValue(/A luminous embryo-like form floats in a dark violet field/);
   await expect(page.getByLabel("Describe the video")).not.toHaveValue(/Opening-frame evidence|Beat 1:/);
-  await expect(page.getByLabel("Describe the video")).toHaveValue(/Use this image as the exact first frame/);
-  await expect(page.getByLabel("Describe the video")).toHaveValue(/fine light pulse crosses the central form/);
   await openCreatePlan(page);
   const outputCount = page.getByRole("group", { name: "Number of video outputs" });
   await expect(outputCount.getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(outputCount.getByRole("button", { name: "2", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "1", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "4", exact: true })).toBeDisabled();
-  await expect(page.getByRole("alert")).toContainText("development adapter cannot submit simulated video");
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await openCreativeControls(page);
   await page.locator(".quick-ai-prompt-assist > summary").click();
   await expect(page.getByRole("button", { name: "Local Gemma offline" })).toBeDisabled();
@@ -149,12 +180,6 @@ test("Home turns an analyzed upload into a visual CreativeDNA launchpad and one-
   await expect(scriptBuilder).toBeHidden();
   await expect(helpButton).toBeFocused();
   await expect(exactScriptInput).toHaveValue(originalScript);
-
-  await page.goto("/#/portal");
-  await page.getByRole("button", { name: /Train DNA/ }).click();
-  await expect(page.getByRole("heading", { name: "Train", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /Analyze media/ })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "Analyze media" })).toBeVisible();
 });
 
 test("creation keeps image speed safe and never reuses an imported video prompt", async ({ page }) => {
@@ -219,11 +244,16 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(speed.getByRole("button", { name: /^Fast/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("alert")).toContainText("cannot use Oldest retained source");
   await page.getByRole("button", { name: "Continue without source" }).click();
-  await expect(page.locator(".quick-primary")).toHaveText(/Create/);
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
+  await openCreatePlan(page);
+  const imageSetup = page.getByRole("region", { name: "Image setup" });
+  const canvasShape = imageSetup.getByRole("group", { name: "Image canvas shape", exact: true });
+  await expect(page.getByRole("group", { name: "Number of image outputs" })).toHaveCount(1);
   await page.locator(".quick-render-panel > summary").click();
-  const renderSetup = page.getByRole("region", { name: "Canvas and render settings" });
-  const canvasShape = renderSetup.getByRole("group", { name: "Canvas shape", exact: true });
+  await expect(page.getByRole("group", { name: "Canvas shape", exact: true })).toHaveCount(0);
+  const renderSetup = page.getByRole("region", { name: "Render settings" });
   const renderDetail = page.getByRole("group", { name: "Render detail" });
+  await expect(imageSetup).toBeVisible();
   await expect(renderSetup).toBeVisible();
   await expect(canvasShape.getByRole("button", { name: "9:16 Portrait" })).toBeVisible();
   await canvasShape.getByRole("button", { name: "9:16 Portrait" }).click();
@@ -239,9 +269,11 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.getByRole("spinbutton", { name: "Height" })).toHaveCount(0);
   await expect(page.getByRole("spinbutton", { name: "Steps" })).toHaveCount(0);
   await expect(page.getByRole("spinbutton", { name: "Seed" })).toHaveCount(0);
-  await expect(page.locator(".quick-primary")).toHaveText(/Create/);
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
   await page.getByRole("button", { name: "Video", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Creation goal" })).toContainText("Two fast retained directions");
+  const creationGoal = page.getByRole("region", { name: "Creation goal" });
+  await expect(creationGoal).not.toHaveAttribute("open", "");
+  await expect(creationGoal).toContainText("Two fast retained directions");
   await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Newest retained source upload" }).click();
   await page.locator(".quick-compose-model > summary").click();
@@ -302,7 +334,7 @@ test("creation keeps image speed safe and never reuses an imported video prompt"
   await expect(page.locator(".quick-video-essentials > header")).toContainText("LTX 2.5 Image to Video");
   await openCreativeControls(page);
   await page.locator(".quick-render-panel > summary").click();
-  await page.getByRole("region", { name: "Canvas and render settings" }).getByText("Fine tune", { exact: true }).click();
+  await page.getByRole("region", { name: "Render settings" }).getByText("Fine tune", { exact: true }).click();
   await expect(page.getByRole("group", { name: "Frames per second" }).getByRole("button", { name: /24/ })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".workflow-run-parameters").getByRole("textbox", { name: "LTX Positive Prompt" })).toHaveCount(0);
 });
@@ -344,6 +376,7 @@ test("song creation recommends MiniMax Music captions from analyzed art and DNA 
   }, { createdAt });
 
   await page.goto("/#/dna");
+  await openCreativeControls(page);
   await page.getByRole("button", { name: "Song", exact: true }).click();
   await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Embryo artwork upload" }).click();
@@ -443,6 +476,91 @@ test("artifact history keeps active work compact and archived work available on 
   await expect(page.getByRole("feed", { name: "Archived artifact history, newest first" }).getByRole("heading", { name: "Archived frame" })).toBeVisible();
   await page.locator(testInfo.project.name === "mobile" ? ".mtabbar" : ".sidebar").getByRole("button", { name: "Create", exact: true }).click();
   await expect(page).toHaveURL(/#\/dna$/);
+});
+
+test("Reuse setup opens Create and waits for the single Generate action", async ({ page }) => {
+  const createdAt = "2026-08-24T03:30:00.000Z";
+  const prompt = "A translucent lavender figure inside a mirrored electric garden.";
+  const continuityDirective = "World continuity: the mirrored garden remains nocturnal and physically coherent.";
+  const providerPrompt = `${prompt} ${continuityDirective}`;
+  await page.addInitScript(({ createdAt: time, prompt: retainedPrompt, continuityDirective: retainedContinuity, providerPrompt: retainedProviderPrompt }) => {
+    const project = { id: "project_reuse", activeDnaArtifactId: "dna_reuse_alternate", name: "Reuse proof", type: "Image", status: "active", description: "", note: "", hue: "#d946ef", initials: "RP", createdAt: time, updatedAt: time };
+    const otherProject = { ...project, id: "project_reuse_other", activeDnaArtifactId: null, name: "Other project", initials: "OP" };
+    const dimensions = { energy: 64, tension: 58, contrast: 75, warmth: 34, spaciousness: 69, rhythmicity: 52, organicity: 47, polish: 82 };
+    const dna = { schemaVersion: "creative-dna/1.0", artifactId: "dna_reuse", projectId: project.id, version: 1, rootArtifactId: "dna_reuse", name: "Lavender garden DNA", createdAt: time, targetModality: "image", capability: "IMAGE_GENERATE", source: { kind: "original", directive: retainedPrompt, referenceLabel: null, referenceAssetIds: [] }, shared: dimensions, native: {}, influence: { angeloCore: 75, currentProject: 15, reference: 50 }, evidence: [], rights: { policy: "original-input", referenceStoredAsProvenanceOnly: false, allowedDownstream: [], blockedDownstream: [] }, translations: [], generationPrompts: { image: retainedPrompt, music: "Translate the mirrored garden into sound." }, lineage: { rootArtifactId: "dna_reuse", parentArtifactId: null }, training: null };
+    const alternateDna = { ...dna, artifactId: "dna_reuse_alternate", version: 2, name: "Lavender garden alternate", shared: { ...dimensions, tension: 83, organicity: 71 }, lineage: { rootArtifactId: "dna_reuse", parentArtifactId: "dna_reuse" } };
+    const workflow = { id: "workflow_reuse_image", projectId: project.id, name: "Reuse image model", description: "", sourceFileName: "reuse-image.json", modality: "image", executionState: "ready", createdAt: time, updatedAt: time, currentRevision: { id: "workflowrev_reuse_image", workflowId: "workflow_reuse_image", version: 1, parentRevisionId: null, format: "comfyui-api", contentHash: "reuseimagehash", nodeCount: 2, models: ["reuse-image.safetensors"], createdAt: time, parameters: [{ id: "2::text", label: "Prompt", kind: "text", value: retainedProviderPrompt, mediaKind: null, binding: { format: "comfyui-api", nodeId: "2", inputName: "text" } }] } };
+    const continuity = { schemaVersion: "creative-studio-generation-continuity-stamp/1.0", createdAt: time, selection: { schemaVersion: "creative-studio-generation-continuity-selection/1.0", modality: "image", world: { id: "world_reuse", version: 1 }, entities: [], rules: [], references: [] }, directive: { schemaVersion: "creative-studio-continuity-directive/1.0", text: retainedContinuity, worldId: "world_reuse", entityIds: [], ruleIds: [], referenceIds: [], modality: "image", estimatedTokens: 14, truncated: false }, records: { world: { id: "world_reuse", projectId: project.id, name: "Mirrored Garden", premise: "A nocturnal mirrored garden.", status: "active", version: 1, createdAt: time, updatedAt: time }, entities: [], rules: [], references: [], redactionReferences: [] } };
+    const settingsStamp = { schemaVersion: 1, source: "comfyui-workflow", createdAt: time, reusedFromJobId: null, prompt: retainedProviderPrompt, provider: "development-adapter", modality: "image", workflow: { workflowId: workflow.id, revisionId: workflow.currentRevision.id, version: 1, name: workflow.name, format: "comfyui-api", contentHash: workflow.currentRevision.contentHash }, parameters: { "2::text": retainedProviderPrompt }, models: workflow.currentRevision.models, inputAssetIds: [], continuity };
+    const job = { id: "job_reuse_original", projectId: project.id, dnaArtifactId: "dna_reuse", capability: "IMAGE_GENERATE", modality: "image", status: "completed", progress: 100, prompt: retainedProviderPrompt, provider: "development-adapter", upstreamId: "development_job_reuse_original", artifactId: "artifact_reuse", retryOfJobId: null, error: null, createdAt: time, updatedAt: time, startedAt: time, executionStage: "completed", stageUpdatedAt: time, completedAt: time, settingsStamp };
+    const artifact = { id: "artifact_reuse", projectId: project.id, jobId: job.id, dnaArtifactId: job.dnaArtifactId, kind: "image", name: "Lavender garden", status: "ready", provider: job.provider, prompt: retainedProviderPrompt, preview: { kind: "development-gradient", url: null, colors: ["#8b5cf6", "#ec4899"] }, lineage: { sourceArtifactIds: [], parentArtifactId: null }, retention: { state: "development-only", size: null }, settingsStamp, createdAt: time, updatedAt: time };
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({ projects: [project, otherProject], dnaArtifacts: [dna, alternateDna], jobs: [job], artifacts: [artifact], mediaAssets: [], workflows: [workflow], trainingExamples: [], trainingJobs: [], trainingReviews: [], acceptances: [], idempotencyKeys: {} }));
+  }, { createdAt, prompt, continuityDirective, providerPrompt });
+
+  await page.goto("/#/gallery");
+  const card = page.locator(".artifact-card").filter({ hasText: "Lavender garden" });
+  await card.getByText("More actions").click();
+  await card.getByRole("button", { name: "Reuse setup" }).click();
+
+  await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.getByLabel("Describe the image")).toHaveValue(prompt);
+  await expect(page.getByText("Retained World continuity", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Mirrored Garden.*Exact Generate preserves these saved versions/)).toBeVisible();
+  await expect(page.locator(".create-notice").getByText(/ready with its exact retained setup/i)).toBeVisible();
+  await expect(page.locator(".quick-primary")).toBeEnabled();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("creative-studio:development-adapter:v3") ?? "{}").jobs?.length ?? 0)).toBe(1);
+
+  const direction = page.getByLabel("Describe the image");
+  await direction.fill(`${prompt} Reframed from below.`);
+  await expect(page.locator(".quick-generate-dock").getByText("Exact retained setup", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".create-notice").getByText(/has been edited/i)).toBeVisible();
+  await direction.fill(prompt);
+  await expect(page.locator(".create-notice").getByText(/ready with its exact retained setup/i)).toBeVisible();
+  const advanced = page.locator("details.quick-create-advanced");
+  await advanced.locator(":scope > summary").click();
+  const dnaDirection = page.getByLabel("CreativeDNA direction");
+  await expect(dnaDirection).toHaveValue("dna_reuse");
+  await dnaDirection.selectOption("dna_reuse_alternate");
+  await expect(page.locator(".create-notice").getByText(/has been edited/i)).toBeVisible();
+  await dnaDirection.selectOption("dna_reuse");
+  await expect(page.locator(".create-notice").getByText(/ready with its exact retained setup/i)).toBeVisible();
+
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("creative-studio:development-adapter:v3") ?? "{}").jobs?.length ?? 0)).toBe(2);
+  const reusedState = await page.evaluate(() => JSON.parse(localStorage.getItem("creative-studio:development-adapter:v3") ?? "{}"));
+  const originalJob = reusedState.jobs.find((job: { id: string }) => job.id === "job_reuse_original");
+  const duplicatedJob = reusedState.jobs.find((job: { id: string }) => job.id !== "job_reuse_original");
+  expect(originalJob).toMatchObject({ status: "completed", prompt: providerPrompt, settingsStamp: { prompt: providerPrompt, reusedFromJobId: null } });
+  expect(duplicatedJob).toMatchObject({ status: "queued", prompt: providerPrompt, retryOfJobId: null, settingsStamp: { prompt: providerPrompt, reusedFromJobId: "job_reuse_original" } });
+  await expect(page).toHaveURL(/#\/dna$/);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByText(/exact retained setup/i)).toHaveCount(0);
+
+  await page.goto("/#/gallery");
+  const retainedCard = page.locator(".artifact-card").filter({ hasText: "Lavender garden" });
+  await retainedCard.getByText("More actions").click();
+  await retainedCard.getByRole("button", { name: "Reuse setup" }).click();
+  const editedPrompt = `${prompt} Reframed from below.`;
+  await page.getByLabel("Describe the image").fill(editedPrompt);
+  await expect(page.locator(".create-notice").getByText(/has been edited/i)).toBeVisible();
+  await expect(page.locator(".quick-primary")).toBeDisabled();
+  await expect(page.getByText(/Worker offline\. For UI testing, choose Simulated preview in More\./i)).toBeVisible();
+  await page.waitForTimeout(500);
+  const editedState = await page.evaluate(() => JSON.parse(localStorage.getItem("creative-studio:development-adapter:v3") ?? "{}"));
+  expect(editedState.jobs).toHaveLength(2);
+  expect(editedState.jobs.find((job: { id: string }) => job.id === "job_reuse_original")).toMatchObject({ status: "completed", prompt: providerPrompt });
+
+  await page.goto("/#/gallery");
+  const projectScopedCard = page.locator(".artifact-card").filter({ hasText: "Lavender garden" });
+  await projectScopedCard.getByText("More actions").click();
+  await projectScopedCard.getByRole("button", { name: "Reuse setup" }).click();
+  await expect(page.locator(".create-notice").getByText(/ready with its exact retained setup/i)).toBeVisible();
+  await page.getByLabel("Active project").selectOption("project_reuse_other");
+  await expect(page.locator(".create-notice").getByText(/exact retained setup/i)).toHaveCount(0);
+  await expect(page.locator(".quick-generate-dock").getByText("Exact retained setup", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("creative-studio:development-adapter:v3") ?? "{}").jobs?.length ?? 0)).toBe(2);
+  await page.getByLabel("Active project").selectOption("project_reuse");
+  await expect(page.locator(".create-notice").getByText(/exact retained setup/i)).toHaveCount(0);
 });
 
 test("video artifact gallery stays thumbnail-only until one video is opened", async ({ page }) => {
@@ -629,6 +747,7 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(page.getByText("Saved · v2")).toBeVisible();
 
   await page.getByRole("button", { name: "Back to Create" }).click();
+  await openCreativeControls(page);
   await page.getByRole("button", { name: "Train", exact: true }).click();
   await page.getByRole("button", { name: /Analyze media/ }).click();
   await expect(page.getByRole("heading", { name: "Analyze media" })).toBeVisible();
@@ -636,7 +755,9 @@ test("CreativeDNA survives the full review loop", async ({ page }) => {
   await expect(page.getByText(/Gemma describes each file, measures its signals, and creates a reviewable DNA version/)).toHaveCount(1);
   await page.getByRole("button", { name: "Back to Create" }).click();
   await expect(page.getByRole("region", { name: "Create with Creative Studio" })).toBeVisible();
-  await page.getByRole("button", { name: "Create explicitly simulated development preview" }).click();
+  await openCreativeControls(page);
+  await page.getByRole("button", { name: "Use simulated preview" }).click();
+  await page.locator(".quick-primary").click();
   await page.getByRole("button", { name: "View queue", exact: true }).click();
   await expect(page).toHaveURL(/#\/queue$/);
   await expect(page.getByRole("region", { name: "Work", exact: true })).toBeVisible();
@@ -687,7 +808,11 @@ test("cancelled generation explains the retained history and offers a durable re
   await page.getByRole("textbox", { name: "Project name" }).fill("Retry E2E");
   await page.getByRole("button", { name: "Create project" }).click();
   await page.getByRole("textbox", { name: "Describe the image" }).fill("An original image with a clean silhouette and high contrast rim light.");
-  await page.getByRole("button", { name: "Create explicitly simulated development preview" }).click();
+  await expect(page.getByRole("button", { name: "Use simulated preview" })).toBeHidden();
+  await openCreativeControls(page);
+  await expect(page.getByRole("button", { name: "Use simulated preview" })).toBeVisible();
+  await page.getByRole("button", { name: "Use simulated preview" }).click();
+  await page.locator(".quick-primary").click();
   await page.getByRole("button", { name: "View queue", exact: true }).click();
   const firstRun = page.locator(".cockpit-run").first();
   await firstRun.getByText("Details", { exact: true }).click();

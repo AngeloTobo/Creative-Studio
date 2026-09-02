@@ -48,17 +48,22 @@ test("mobile primary pages render one route heading and four tabs", async ({ pag
   await expect(page.locator(".mtabbar .mtab")).toHaveCount(4);
 });
 
-test("reduced-motion preference suppresses Home action motion", async ({ page }) => {
+test("reduced-motion preference suppresses Ideas disclosure motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/#/portal");
   await page.getByRole("textbox", { name: "Project name" }).fill("Motion Test");
   await page.getByRole("button", { name: "Create project" }).click();
 
-  const motion = await page.locator(".home-action.image").evaluate((element) => {
+  await expect(page.getByRole("heading", { name: "Find the next direction", level: 1 })).toHaveCount(1);
+
+  const context = page.locator("details.ideas-context");
+  const motion = await context.locator(":scope > summary > svg").last().evaluate((element) => {
     const style = getComputedStyle(element);
     return { animationName: style.animationName, animationDuration: style.animationDuration, transitionDuration: style.transitionDuration };
   });
   expect(motion.animationName).toBe("none");
   expect(Number.parseFloat(motion.animationDuration)).toBeLessThanOrEqual(0.001);
   expect(Number.parseFloat(motion.transitionDuration)).toBeLessThanOrEqual(0.001);
+  await context.locator(":scope > summary").click();
+  await expect(context).toHaveAttribute("open", "");
 });

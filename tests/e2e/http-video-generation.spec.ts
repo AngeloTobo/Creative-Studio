@@ -238,6 +238,13 @@ function baseSnapshot(
       provider: "Local ComfyUI + Gemma 4",
       detail: "Gemma Script Builder is available for this local test fixture.",
       checkedAt: NOW,
+    }, {
+      key: "afdfw-image-generation",
+      label: "AFDFW image generation",
+      state: "available",
+      provider: "AFDFW Z-Image adapter",
+      detail: "The optional remote image route is available for this local test fixture.",
+      checkedAt: NOW,
     }],
     acceptances: [],
     worlds: [],
@@ -267,6 +274,7 @@ type MockVideoBackend = {
   workflow: () => WorkflowDefinition;
   workflowByRevision: (revisionId: string) => WorkflowDefinition | null;
   releaseRevision: () => void;
+  releaseEnhancement: () => void;
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -276,7 +284,7 @@ function json(route: Route, body: unknown, status = 200) {
 async function installVideoBackend(
   page: Page,
   withEnhancement: boolean,
-  options: { delayFirstRevision?: boolean } = {},
+  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean } = {},
 ): Promise<MockVideoBackend> {
   let workflow = initialWorkflow();
   let revision = 1;
@@ -293,8 +301,12 @@ async function installVideoBackend(
   let videoScriptDraft: VideoScriptDraft | null = null;
   let createdDna: CreativeDnaArtifact | null = null;
   let releaseRevision = () => undefined;
+  let releaseEnhancement = () => undefined;
   const revisionGate = options.delayFirstRevision
     ? new Promise<void>((resolveRevision) => { releaseRevision = resolveRevision; })
+    : null;
+  const enhancementGate = options.delayEnhancementCompletion
+    ? new Promise<void>((resolveEnhancement) => { releaseEnhancement = resolveEnhancement; })
     : null;
 
   const materializeJob = (input: SubmitJobRequest): Job => {
@@ -569,6 +581,7 @@ async function installVideoBackend(
     }
 
     if (request.method() === "GET" && pathname === "/api/creative-studio/prompt-enhancements/promptenh_e2e_four_way" && promptEnhancement) {
+      if (enhancementGate) await enhancementGate;
       promptEnhancement = {
         ...promptEnhancement,
         status: "completed",
@@ -598,6 +611,7 @@ async function installVideoBackend(
     workflow: () => workflow,
     workflowByRevision: (revisionId) => workflowRevisions.get(revisionId) ?? null,
     releaseRevision,
+    releaseEnhancement,
   };
 }
 
@@ -607,7 +621,40 @@ async function openRetainedMedia(page: Page) {
   await expect(page.getByText("Retained city frame", { exact: true })).toBeVisible();
 }
 
-test("Standard animate ignores a stored heavy draft and queues the speed-safe workload", async ({ page }) => {
+test("an AFDFW draft stays remote after leaving and resuming Create", async ({ page }) => {
+  await installVideoBackend(page, false);
+  await page.addInitScript(({ now }) => {
+    localStorage.setItem("creative-studio:create-sessions", JSON.stringify({
+      schemaVersion: 2,
+      sessions: [{
+        schemaVersion: 2,
+        id: "session_afdfw_image",
+        projectId: "project_video_e2e",
+        sourceAssetIds: [],
+        retainedArtifactId: null,
+        direction: "A luminous figure crosses a mirrored garden at night.",
+        mediaKind: "image",
+        workflowId: null,
+        graphicalSettings: { generationRoute: "afdfw", workflowSelectionMode: "automatic" },
+        intentTier: "explore",
+        updatedAt: now,
+      }],
+    }));
+  }, { now: NOW });
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+  await expect(page.getByRole("heading", { name: "What do you want to make?" })).toBeVisible();
+  await expect(page.getByLabel("Describe the image")).toHaveValue("A luminous figure crosses a mirrored garden at night.");
+  await expect(page.locator(".quick-generate-dock")).toContainText("AFDFW remote route");
+  await expect(page.getByRole("button", { name: /creative controls/i })).toHaveAttribute("aria-expanded", "true");
+
+  await page.getByRole("button", { name: "Ideas", exact: true }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.locator(".quick-generate-dock")).toContainText("AFDFW remote route");
+  await expect(page.getByLabel("Describe the image")).toHaveValue("A luminous figure crosses a mirrored garden at night.");
+});
+
+test("Standard animate prefills the speed-safe workload and waits for Generate", async ({ page }) => {
   const backend = await installVideoBackend(page, false);
   await page.addInitScript(({ now, sourceId, workflowId, revisionId, megapixelsParameterId }) => {
     localStorage.setItem("creative-studio:create-sessions", JSON.stringify({
@@ -641,10 +688,17 @@ test("Standard animate ignores a stored heavy draft and queues the speed-safe wo
   });
   await openRetainedMedia(page);
 
-  await page.locator(".media-animate").click();
+  await page.locator(".media-action-menu > summary").click();
+  await page.getByRole("menuitem", { name: "Animate", exact: true }).click();
 
-  await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
   await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".quick-compose-source > summary")).toContainText("Retained city frame");
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
+  await page.waitForTimeout(500);
+  expect(backend.jobs).toHaveLength(0);
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
 
   expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["aligned", "discovery"]);
   expect(backend.batchRequests).toHaveLength(1);
@@ -668,7 +722,7 @@ test("Standard animate ignores a stored heavy draft and queues the speed-safe wo
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
 });
 
-test("Animate x4 waits for completed Gemma enhancement and queues four valid board lanes", async ({ page }) => {
+test("Animate x4 waits for Generate, then completes Gemma enhancement and queues four valid board lanes", async ({ page }) => {
   test.setTimeout(30_000);
   const backend = await installVideoBackend(page, true);
   await openRetainedMedia(page);
@@ -676,9 +730,14 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   await page.locator(".media-action-menu > summary").click();
   await page.getByRole("menuitem", { name: "Animate 4 ways" }).click();
 
+  await expect(page).toHaveURL(/#\/dna$/);
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
+  await page.waitForTimeout(500);
+  expect(backend.enhancementRequests).toHaveLength(0);
+  expect(backend.jobs).toHaveLength(0);
+  await page.locator(".quick-primary").click();
   await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(1);
   await expect.poll(() => backend.jobs.length, { timeout: 20_000 }).toBe(4);
-  await expect(page).toHaveURL(/#\/dna$/);
 
   expect(backend.enhancementRequests[0]).toMatchObject({
     projectId: "project_video_e2e",
@@ -710,6 +769,24 @@ test("Animate x4 waits for completed Gemma enhancement and queues four valid boa
   expect(backend.revisionRequests.every((request) => request.scope === "execution-only")).toBe(true);
   await expect(page.getByText(/Invalid video variant/i)).toHaveCount(0);
   await expect(page.getByText(/could not prepare this video batch/i)).toHaveCount(0);
+});
+
+test("changing the creation type while x4 preparation is pending cancels the submitted setup", async ({ page }) => {
+  const backend = await installVideoBackend(page, true, { delayEnhancementCompletion: true });
+  await openRetainedMedia(page);
+
+  await page.locator(".media-action-menu > summary").click();
+  await page.getByRole("menuitem", { name: "Animate 4 ways" }).click();
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(1);
+
+  await page.getByRole("button", { name: "Image", exact: true }).click();
+  backend.releaseEnhancement();
+
+  await expect(page.getByRole("button", { name: "Image", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(1_000);
+  expect(backend.jobs).toHaveLength(0);
+  expect(backend.batchRequests).toHaveLength(0);
 });
 
 test("Full Script prepares changed run settings without project-locking the reusable model", async ({ page }) => {
@@ -787,12 +864,14 @@ test("Project switching is locked during preparation and an unmounted Create can
   expect(backend.workflow().currentRevision.id).toBe("workflowrev_ltx_i2v_e2e_1");
 });
 
-test("Mobile video creation keeps prompt and Create ahead of optional controls", async ({ page }) => {
+test("Mobile video creation keeps prompt and Generate ahead of optional controls", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installVideoBackend(page, false);
   await page.goto(`${HTTP_STUDIO}/#/dna`);
 
+  const preservedPrompt = await page.getByLabel("Describe the image").inputValue();
   await page.getByRole("button", { name: "Video", exact: true }).click();
+  await expect(page.getByLabel("Describe the video")).toHaveValue(preservedPrompt);
   await openRetainedWork(page);
   await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
   const composerOrder = await page.locator(".quick-create-card").evaluate((card) => {
@@ -810,16 +889,22 @@ test("Mobile video creation keeps prompt and Create ahead of optional controls",
   await expect(page.locator("details.quick-create-plan")).toBeVisible();
   await expect(page.getByRole("group", { name: "Video duration" })).toBeHidden();
   await expect(page.getByRole("region", { name: "Source and creation type" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Change source: Retained city frame" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Retained city frame source" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Change", exact: true })).toHaveCount(1);
   await expect(page.locator(".quick-video-speech")).toBeHidden();
   await expect(page.locator(".quick-compose-model")).toBeHidden();
   await expect(page.getByRole("button", { name: /More creative controls/ })).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator(".quick-generate-dock")).toHaveCSS("position", "relative");
-  await expect(page.locator(".quick-generation-blocker")).toContainText("Describe the video");
+  await expect(page.locator(".quick-generation-blocker")).toHaveCount(0);
+  await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
+  await expect(page.locator(".quick-primary")).toBeEnabled();
   await page.getByRole("button", { name: /More creative controls/ }).click();
   await expect(page.locator("#creative-studio-power-tools")).toBeVisible();
   await expect(page.getByRole("button", { name: /Hide creative controls/ })).toHaveAttribute("aria-controls", "creative-studio-power-tools");
-  await expect(page.locator(".quick-generation-goal-options button:not(:disabled)").first()).toBeFocused();
+  const secondaryModes = page.getByRole("group", { name: "Secondary creation modes" });
+  await expect(secondaryModes.getByRole("button")).toHaveText(["Song", "Train"]);
+  await expect(secondaryModes.getByRole("button", { name: "Song", exact: true })).toBeFocused();
+  await expect(page.getByRole("region", { name: "Creation goal" })).not.toHaveAttribute("open", "");
   await page.getByRole("button", { name: /Hide creative controls/ }).click();
   await page.getByLabel("Describe the video").focus();
   await page.keyboard.press("Tab");
