@@ -18,12 +18,14 @@ import {
   prepareAceStepWorkspace,
 } from "./aceStepTraining.mjs";
 import {
+  acquireRunnerInstanceLock,
   acquireRunnerGpuLock,
   ensureLmStudioUnloaded,
+  isForeignRunnerGpuLockContention,
 } from "./gpuCoordinator.mjs";
 import { collectVideoDoctor } from "./videoDoctor.mjs";
 
-export const RUNNER_VERSION = "1.21.0";
+export const RUNNER_VERSION = "1.22.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -3159,6 +3161,62 @@ export async function runOnce(config, options = {}) {
   return false;
 }
 
+export function createRunnerGpuCoordinationState() {
+  return { contentionObserved: false, retainedGpuLock: null };
+}
+
+export async function runCoordinatedRunnerCycle(config, coordinationState, options = {}) {
+  const state = coordinationState || createRunnerGpuCoordinationState();
+  const acquireGpuLock = options.acquireGpuLock || acquireRunnerGpuLock;
+  const execute = options.execute || runOnce;
+  const heartbeat = options.heartbeat || machineHeartbeat;
+  const observeQueue = options.observeQueue || observeComfyQueueState;
+  const modelResidencyState = options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY;
+  let gpuLock = state.retainedGpuLock;
+  if (!gpuLock) {
+    try {
+      gpuLock = await acquireGpuLock();
+    } catch (caught) {
+      if (!isForeignRunnerGpuLockContention(caught)) throw caught;
+      state.contentionObserved = true;
+      // A foreign owner is an ordinary scheduling boundary. Keep the runner online,
+      // but never inspect or claim durable work until this process owns the GPU lease.
+      await heartbeat(config, null).catch(() => undefined);
+      return { didWork: false, contended: true, leaseRetained: false };
+    }
+  }
+
+  if (state.contentionObserved) {
+    // Another owner may have changed ComfyUI's loaded model set while this runner
+    // waited. Re-establish residency instead of trusting the old warm signature.
+    invalidateComfyModelResidency(modelResidencyState);
+    state.contentionObserved = false;
+  }
+
+  let didWork = false;
+  let failure = null;
+  try {
+    didWork = await execute(config, { ...options.executeOptions, modelResidencyState });
+  } catch (caught) {
+    failure = caught;
+  }
+  let queue = { state: "unreachable" };
+  try {
+    queue = await observeQueue(config, options.queueOptions || {});
+  } catch {
+    // An unobservable queue is not evidence that an already-submitted prompt ended.
+  }
+  const leaseRetained = queue?.state !== "idle";
+  if (leaseRetained) {
+    state.retainedGpuLock = gpuLock;
+  } else {
+    await gpuLock.release();
+    state.retainedGpuLock = null;
+  }
+  if (failure) throw failure;
+  return { didWork, contended: false, leaseRetained };
+}
+
 export function resolveRunnerFollowUpInterval(apiBase) {
   return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase)
     ? LOCAL_ACTIVE_POLL_INTERVAL_MS
@@ -3801,14 +3859,15 @@ async function main() {
   if (process.argv.includes("--self-test")) return selfTest();
   const config = loadConfig();
   const once = process.argv.includes("--once");
-  const gpuLock = await acquireRunnerGpuLock();
+  const runnerInstanceLock = await acquireRunnerInstanceLock();
+  const gpuCoordinationState = createRunnerGpuCoordinationState();
   process.stdout.write(`[Creative Studio Runner] v${RUNNER_VERSION} · ${config.apiBase} · ${config.comfyUrl}\n`);
   try {
     do {
       let nextDelay = config.pollIntervalMs;
       try {
-        const didWork = await runOnce(config);
-        if (didWork) nextDelay = resolveRunnerFollowUpInterval(config.apiBase);
+        const cycle = await runCoordinatedRunnerCycle(config, gpuCoordinationState);
+        if (cycle.didWork) nextDelay = resolveRunnerFollowUpInterval(config.apiBase);
       } catch (caught) {
         const error = caught instanceof Error ? caught.message : "runner_loop_failed";
         process.stderr.write(`[Creative Studio Runner] ${error}\n`);
@@ -3819,7 +3878,7 @@ async function main() {
       if (!once) await sleep(nextDelay);
     } while (!once);
   } finally {
-    await gpuLock.release();
+    await runnerInstanceLock.release();
   }
 }
 

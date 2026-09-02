@@ -2,6 +2,13 @@
 
 Last verified: 2026-09-01 (America/Chicago)
 
+## Cooperative local GPU ownership - source complete, installation pending
+
+- Local Runner source `1.22.0` separates process singleton ownership from GPU work ownership. `runner-instance.lock` remains held for the runner lifetime; the shared `gpu-owner.lock` is acquired before one `runOnce` queue-observation/claim/execution cycle and released only after a post-cycle Comfy queue observation proves idle.
+- A live foreign `gpu-owner.lock` is treated as ordinary idle contention. The runner sends its existing machine heartbeat without inspecting or claiming durable work, retries on the existing cadence, and invalidates its process-local Comfy model-residency signature after it reacquires the lease. A failed or unobservable post-cycle queue check retains the owned lease so another local product cannot overlap an uncertain prompt.
+- This is a runner-only scheduling change. It adds no Worker route, migration, browser poller, Cloudflare request source, workflow, model, or queue producer. Focused verification passes 57 runner unit tests, the deterministic Local Runner self-test, every TypeScript target, targeted ESLint, and `git diff --check`.
+- The installed Scheduled Task was intentionally not restarted during this source change, so these cooperative lease semantics must not be reported as live until a separate idle, queue-safe runner installation is completed and verified.
+
 ## Unified Create and cross-page simplification - production deployed
 
 - Create now has one default loop: optionally upload, drop, or choose a source; choose **Image** or **Video**; describe the result; press **Generate**. The prompt survives switching between Image and Video. Song, training, experimental AI prompt assistance, creation goals, World and project context, recipes, model selection, remote routing, sound, and exact settings remain available under intentional disclosures instead of competing with the main action.

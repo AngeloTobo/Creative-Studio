@@ -51,7 +51,7 @@ describe("Local Runner Comfy image input normalization", () => {
       .resolves.toEqual({ media: audio, fileName: "song.mp3", mimeType: "audio/mpeg" });
   });
 
-  it("reports the orientation-safe runner source version", () => {
-    expect(RUNNER_VERSION).toBe("1.21.0");
+  it("reports the current cooperative runner source version", () => {
+    expect(RUNNER_VERSION).toBe("1.22.0");
   });
 });

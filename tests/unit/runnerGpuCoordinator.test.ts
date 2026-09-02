@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // @ts-expect-error The Windows runner intentionally ships as plain ESM.
-import { acquireRunnerGpuLock, ensureLmStudioUnloaded, observeLmStudioResidency } from "../../runner/gpuCoordinator.mjs";
+import { acquireRunnerGpuLock, acquireRunnerInstanceLock, defaultRunnerGpuLockPath, defaultRunnerInstanceLockPath, ensureLmStudioUnloaded, isForeignRunnerGpuLockContention, observeLmStudioResidency } from "../../runner/gpuCoordinator.mjs";
 
 const temporaryDirectories: string[] = [];
 
@@ -68,6 +68,30 @@ describe("Local GPU coordinator", () => {
     await stale.release();
     await expect(acquireRunnerGpuLock({ path, pid: 1204, processAlive: () => false }))
       .resolves.toMatchObject({ pid: 1204, path });
+  });
+
+  it("keeps process singleton ownership separate from the shared GPU lease", async () => {
+    expect(defaultRunnerInstanceLockPath()).not.toBe(defaultRunnerGpuLockPath());
+    const directory = await mkdtemp(join(tmpdir(), "creative-studio-runner-locks-"));
+    temporaryDirectories.push(directory);
+    const instancePath = join(directory, "runner-instance.lock");
+    const gpuPath = join(directory, "gpu-owner.lock");
+    const instance = await acquireRunnerInstanceLock({ path: instancePath, pid: 1301, processAlive: () => true });
+    const gpu = await acquireRunnerGpuLock({ path: gpuPath, pid: 1301, processAlive: () => true });
+
+    await expect(acquireRunnerInstanceLock({ path: instancePath, pid: 1302, processAlive: () => true }))
+      .rejects.toThrow("runner_instance_lock_held:1301");
+    await gpu.release();
+    const nextGpu = await acquireRunnerGpuLock({ path: gpuPath, pid: 1302, processAlive: () => true });
+    await nextGpu.release();
+    await instance.release();
+  });
+
+  it("distinguishes foreign GPU contention from self-held and unrelated errors", () => {
+    expect(isForeignRunnerGpuLockContention(new Error("runner_gpu_lock_held:1401"), 1402)).toBe(true);
+    expect(isForeignRunnerGpuLockContention(new Error("runner_gpu_lock_held:initializing"), 1402)).toBe(true);
+    expect(isForeignRunnerGpuLockContention(new Error("runner_gpu_lock_held:1402"), 1402)).toBe(false);
+    expect(isForeignRunnerGpuLockContention(new Error("permission_denied"), 1402)).toBe(false);
   });
 
   it("never removes a freshly created lock before its owner record is visible", async () => {

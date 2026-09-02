@@ -17,6 +17,10 @@ export function defaultRunnerGpuLockPath() {
   return join(localRunnerDirectory(), "gpu-owner.lock");
 }
 
+export function defaultRunnerInstanceLockPath() {
+  return join(localRunnerDirectory(), "runner-instance.lock");
+}
+
 export function resolveLmStudioCli() {
   const configured = String(process.env.CS_LM_STUDIO_CLI || "").trim();
   if (configured) return configured;
@@ -140,15 +144,19 @@ async function lockAgeMs(path) {
   }
 }
 
-export async function acquireRunnerGpuLock(options = {}) {
-  const path = options.path || defaultRunnerGpuLockPath();
+async function acquireRunnerProcessLock(options, defaults) {
+  const path = options.path || defaults.path();
   const pid = Number(options.pid) || process.pid;
   const processAlive = options.processAlive || defaultProcessAlive;
   await mkdir(dirname(path), { recursive: true });
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const handle = await open(path, "wx", 0o600);
-      await handle.writeFile(JSON.stringify({ pid, acquiredAt: new Date().toISOString() }), "utf8");
+      await handle.writeFile(JSON.stringify({
+        pid,
+        acquiredAt: new Date().toISOString(),
+        owner: defaults.owner,
+      }), "utf8");
       await handle.close();
       let released = false;
       return {
@@ -170,12 +178,49 @@ export async function acquireRunnerGpuLock(options = {}) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         owner = await existingLockOwner(path);
       }
-      if (owner && processAlive(owner)) throw new Error(`runner_gpu_lock_held:${owner}`, { cause: error });
+      if (owner && processAlive(owner)) {
+        const held = new Error(`${defaults.errorPrefix}_held:${owner}`, { cause: error });
+        held.code = defaults.heldCode;
+        held.ownerPid = owner;
+        held.foreign = owner !== pid;
+        throw held;
+      }
       if (!owner && await lockAgeMs(path) < 30_000) {
-        throw new Error("runner_gpu_lock_held:initializing", { cause: error });
+        const held = new Error(`${defaults.errorPrefix}_held:initializing`, { cause: error });
+        held.code = defaults.heldCode;
+        held.ownerPid = null;
+        held.foreign = true;
+        throw held;
       }
       await rm(path, { force: true });
     }
   }
-  throw new Error("runner_gpu_lock_unavailable");
+  throw new Error(`${defaults.errorPrefix}_unavailable`);
+}
+
+export async function acquireRunnerGpuLock(options = {}) {
+  return acquireRunnerProcessLock(options, {
+    path: defaultRunnerGpuLockPath,
+    owner: "creative-studio-runner",
+    errorPrefix: "runner_gpu_lock",
+    heldCode: "RUNNER_GPU_LOCK_HELD",
+  });
+}
+
+export async function acquireRunnerInstanceLock(options = {}) {
+  return acquireRunnerProcessLock(options, {
+    path: defaultRunnerInstanceLockPath,
+    owner: "creative-studio-runner-instance",
+    errorPrefix: "runner_instance_lock",
+    heldCode: "RUNNER_INSTANCE_LOCK_HELD",
+  });
+}
+
+export function isForeignRunnerGpuLockContention(error, pid = process.pid) {
+  if (error?.code === "RUNNER_GPU_LOCK_HELD") {
+    return error.ownerPid === null || error.ownerPid !== pid;
+  }
+  const match = /^runner_gpu_lock_held:(initializing|\d+)$/.exec(String(error?.message || ""));
+  if (!match) return false;
+  return match[1] === "initializing" || Number(match[1]) !== pid;
 }
