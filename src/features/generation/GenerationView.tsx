@@ -2739,9 +2739,10 @@ export function GenerationView({
 
   useEffect(() => {
     if (!pendingFourWaySubmission.current) return;
-    const stopPendingSubmission = (message: string) => {
+    const stopPendingSubmission = (message: string, detachPromptEnhancement = false) => {
       pendingFourWaySubmission.current = "";
       void Promise.resolve().then(() => {
+        if (detachPromptEnhancement) setPromptEnhancementId("");
         setNotice("");
         setLocalError(message);
       });
@@ -2783,15 +2784,13 @@ export function GenerationView({
       if (activePromptEnhancement?.status === "failed"
         && promptEnhancementMatchesWorkflow
         && samePrompt(direction, activePromptEnhancement.sourcePrompt)) {
-        stopPendingSubmission(`${videoPromptEnhancementErrorMessage(activePromptEnhancement.error)} Your image and exact prompt are unchanged. Use the standard pair now, or try the four-way board again.`);
-        setPromptEnhancementId("");
+        stopPendingSubmission(`${videoPromptEnhancementErrorMessage(activePromptEnhancement.error)} Your image and exact prompt are unchanged. Use the standard pair now, or try the four-way board again.`, true);
         return;
       }
       if (activePromptEnhancement?.status === "completed"
         && promptEnhancementMatchesWorkflow
         && samePrompt(direction, activePromptEnhancement.sourcePrompt)) {
-        stopPendingSubmission("Local Gemma did not return a distinct Enhanced direction. Your image and exact prompt are unchanged. Use the standard pair now, or try the four-way board again.");
-        setPromptEnhancementId("");
+        stopPendingSubmission("Local Gemma did not return a distinct Enhanced direction. Your image and exact prompt are unchanged. Use the standard pair now, or try the four-way board again.", true);
         return;
       }
       if (!promptEnhancementPending && !autoEnhancementAttempted.current) {
