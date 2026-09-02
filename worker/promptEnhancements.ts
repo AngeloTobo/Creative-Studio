@@ -247,13 +247,19 @@ export async function completeVideoPromptEnhancement(
   const current = await rowById(env, runner.ownerId, boundedText(enhancementId, 100));
   if (!current) throw new Error("prompt_enhancement_not_found");
   if (current.status !== "running" || current.runnerId !== runner.id) throw new Error("prompt_enhancement_not_completable");
+  const comfyPromptId = boundedText(input.comfyPromptId, 120);
+  if (!comfyPromptId) throw new Error("invalid_prompt_enhancement_result");
+  const evidenceAt = new Date().toISOString();
+  const recorded = await env.DB.prepare(`update creative_prompt_enhancements
+    set comfy_prompt_id = ?, updated_at = ?
+    where id = ? and owner_id = ? and runner_id = ? and status = 'running'`)
+    .bind(comfyPromptId, evidenceAt, current.id, runner.ownerId, runner.id).run();
+  if (!recorded.meta.changes) throw new Error("prompt_enhancement_not_completable");
   const profile = videoPromptProfileForStored(current);
   const enhancedPrompt = normalizeEnhancedVideoPrompt(input.enhancedPrompt, profile, {
     videoDurationSeconds: current.videoDurationSeconds,
     inputMode: current.inputMode,
   });
-  const comfyPromptId = boundedText(input.comfyPromptId, 120);
-  if (!comfyPromptId) throw new Error("invalid_prompt_enhancement_result");
   const now = new Date().toISOString();
   const [updated] = await env.DB.batch([
     env.DB.prepare(`update creative_prompt_enhancements set status = 'completed', progress = 100,
@@ -308,6 +314,9 @@ export async function videoPromptEnhancementStampForJob(env: Env, ownerId: strin
   workflowRevisionId: string;
   promptProfileId: VideoPromptEnhancement["promptProfileId"];
   promptOutputFormat: VideoPromptEnhancement["outputFormat"];
+  videoDurationSeconds: VideoPromptEnhancement["videoDurationSeconds"];
+  inputMode: VideoPromptEnhancement["inputMode"];
+  sourceId: string | null;
 }): Promise<VideoPromptEnhancementStamp> {
   const row = await rowById(env, ownerId, boundedText(input.requestId, 100));
   if (!row) throw new Error("prompt_enhancement_not_found");
@@ -315,7 +324,8 @@ export async function videoPromptEnhancementStampForJob(env: Env, ownerId: strin
     throw new Error("prompt_enhancement_not_ready");
   }
   if (row.projectId !== input.projectId || row.workflowId !== input.workflowId || row.promptProfileId !== input.promptProfileId
-    || row.outputFormat !== input.promptOutputFormat) {
+    || row.outputFormat !== input.promptOutputFormat || row.videoDurationSeconds !== input.videoDurationSeconds
+    || row.inputMode !== input.inputMode || (row.sourceId ?? null) !== (input.sourceId ?? null)) {
     throw new Error("prompt_enhancement_context_mismatch");
   }
   const basePrompt = boundedPrompt(input.basePrompt, VIDEO_PROMPT_ENHANCED_MAX_LENGTH);

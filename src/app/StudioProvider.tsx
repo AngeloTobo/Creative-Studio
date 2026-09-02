@@ -77,6 +77,7 @@ import type {
   UpdateStoryThreadRequest,
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
+import { isVideoPromptEnhancementError, videoPromptEnhancementErrorMessage } from "./videoPromptEnhancementErrorMessage";
 
 type WithoutOwnerRequest<T> = T extends unknown ? Omit<T, "projectId" | "idempotencyKey"> : never;
 type CreateVideoScriptDraftInput = WithoutOwnerRequest<CreateVideoScriptDraftRequest>;
@@ -292,6 +293,7 @@ function message(error: unknown) {
   if (error.message === "love_loop_fast_video_required") return "Love Loop needs a fast five-second text-to-video workflow at or below 0.20 MP.";
   if (error.message === "love_loop_recipe_mismatch" || error.message === "love_loop_recipe_changed" || error.message === "love_loop_workflow_changed") return "A Love Loop workflow or recipe changed. Use Repair & resume to bind the current fast model.";
   if (error.message === "love_loop_failure_limit_reached") return "Three recent Love Loop renders failed. Inspect their errors, then use Repair & resume.";
+  if (isVideoPromptEnhancementError(error)) return videoPromptEnhancementErrorMessage(error);
   return error.message.replaceAll("_", " ");
 }
 

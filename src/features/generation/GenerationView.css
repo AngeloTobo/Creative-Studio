@@ -110,8 +110,8 @@
 }
 
 .quick-video-essentials .quick-video-duration > div[role="group"] { grid-template-columns: repeat(5,minmax(0,1fr)); }
-.quick-video-essentials .quick-video-shape > div[role="group"],
-.quick-video-essentials .quick-video-outputs > div[role="group"] { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.quick-video-essentials .quick-video-shape > div[role="group"] { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.quick-video-essentials .quick-video-outputs > div[role="group"] { grid-template-columns: repeat(2,minmax(0,1fr)); }
 
 .quick-video-essentials .quick-video-essential button {
   display: flex;
@@ -1923,6 +1923,30 @@
 .quick-ai-prompt-assist > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 11px 11px; }
 .quick-ai-prompt-assist p { max-width: 720px; margin: 0; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 .quick-ai-prompt-assist .quick-enhance-action { flex: none; }
+.quick-ai-prompt-assist-copy { display: grid; min-width: 0; flex: 1; gap: 8px; }
+.quick-four-way-choice { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; }
+.quick-four-way-choice button {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: color-mix(in oklab,var(--surface-inset) 76%,transparent);
+  color: var(--text-muted);
+  text-align: left;
+}
+.quick-four-way-choice button strong { color: inherit; font-size: 9px; }
+.quick-four-way-choice button small { max-width: 100%; color: var(--text-faint); font-size: 7px; white-space: normal; }
+.quick-four-way-choice button:hover:not(:disabled),
+.quick-four-way-choice button.on { border-color: color-mix(in oklab,var(--pink) 42%,var(--border-soft)); background: linear-gradient(135deg,color-mix(in oklab,var(--pink) 13%,var(--surface-strong)),color-mix(in oklab,var(--cyan) 8%,var(--surface-strong))); color: var(--text-main); }
+.quick-four-way-choice button:disabled { cursor: not-allowed; opacity: .42; }
+.quick-four-way-availability { color: color-mix(in oklab,var(--cyan) 72%,var(--text-muted)); font-size: 8px; line-height: 1.4; }
+.quick-four-way-availability.unavailable { color: #fbbf24; }
 .quick-create-results > div { padding: 0 8px 8px; }
 
 .quick-video-essential button.on,

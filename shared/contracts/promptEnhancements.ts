@@ -5,6 +5,7 @@ import type { WorkflowDefinition, WorkflowParameter } from "./workflows";
 export const GEMMA_VIDEO_PROMPT_MODEL = "gemma4_e4b_it_fp8_scaled.safetensors" as const;
 export const VIDEO_PROMPT_SOURCE_MAX_LENGTH = 4_000;
 export const VIDEO_PROMPT_ENHANCED_MAX_LENGTH = 4_000;
+export const MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.";
 
 export type VideoPromptProfileId =
   | "minimax-h3-i2v-motion/1.0"
@@ -266,6 +267,27 @@ function boundedWords(value: string, maximum: number) {
   return tokens.length <= maximum ? value : tokens.slice(0, maximum).join(" ").replace(/[,:;-]+$/, "").trim();
 }
 
+function minimaxShotRanges(timeline: string, duration: VideoDurationSeconds) {
+  const markers = [...timeline.matchAll(/\bSHOT\s+(\d+)\b/gi)];
+  if (!markers.length || markers.some((marker, index) => Number(marker[1]) !== index + 1)) return [];
+  const timings = markers.map((marker, index) => {
+    const markerEnd = (marker.index ?? 0) + marker[0].length;
+    const nextMarker = markers[index + 1];
+    const audioIndex = timeline.slice(markerEnd).search(/\bAudio\s*:/i);
+    const sectionEnd = nextMarker?.index ?? (audioIndex >= 0 ? markerEnd + audioIndex : timeline.length);
+    const headingAndBody = timeline.slice(markerEnd, sectionEnd);
+    const range = headingAndBody.match(/(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:onds?)?)?\s*)?(?:[-\u2013\u2014]|to\b|through\b)\s*(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:onds?)?)?)?/i);
+    if (range) return { start: Number(range[1]), explicitEnd: Number(range[2]) };
+    const point = headingAndBody.match(/\d+(?:\.\d+)?/);
+    return point ? { start: Number(point[0]), explicitEnd: null } : null;
+  });
+  if (timings.some((timing) => timing === null)) return [];
+  return timings.map((timing, index) => ({
+    start: timing!.start,
+    end: timing!.explicitEnd ?? timings[index + 1]?.start ?? duration,
+  }));
+}
+
 export function normalizeEnhancedVideoPrompt(
   value: unknown,
   profile: VideoPromptProfile,
@@ -273,25 +295,36 @@ export function normalizeEnhancedVideoPrompt(
 ) {
   let prompt = cleanModelOutput(value);
   if (profile.outputFormat === "minimax-h3-timeline") {
-    const pictureInstruction = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.";
     const hasFrame = options.inputMode === "image-to-video" || options.inputMode === "video-extension";
-    if (hasFrame) {
-      if (!prompt.startsWith(pictureInstruction)) throw new Error("video_prompt_enhancement_minimax_picture_alignment_missing");
-    } else if (prompt.includes("<Picture 1>")) {
+    const shotOneIndex = prompt.search(/\bSHOT\s+1\b(?=\s*(?:\(|:|\[|[-\u2013\u2014]))/i);
+    if (shotOneIndex < 0) throw new Error("video_prompt_enhancement_invalid_minimax_timeline");
+    const timeline = prompt.slice(shotOneIndex).trim();
+    if (/<?Picture\s+1>?/i.test(timeline)) {
+      if (hasFrame) throw new Error("video_prompt_enhancement_minimax_picture_alignment_duplicate");
       throw new Error("video_prompt_enhancement_minimax_picture_alignment_unexpected");
     }
-    if (!/\bSHOT\s+1\b/i.test(prompt) || !/\bAudio\s*:/i.test(prompt)) {
+    if (!/\bAudio\s*:/i.test(timeline)) {
       throw new Error("video_prompt_enhancement_invalid_minimax_timeline");
     }
     const duration = options.videoDurationSeconds;
     if (duration !== undefined) {
-      const timestamps = [...prompt.matchAll(/(?:^|[\s[(\u2013\u2014-])(\d+(?:\.\d+)?)\s*(?=(?:s(?:ec(?:onds?)?)?\b|[\u2013\u2014-]|to\b|through\b))/gim)]
-        .map((match) => Number(match[1]));
-      if (timestamps.length < 2 || timestamps.some((timestamp) => timestamp < 0 || timestamp > duration)) {
+      const shotRanges = minimaxShotRanges(timeline, duration);
+      const invalidRange = shotRanges.some((range, index) => !Number.isFinite(range.start)
+        || !Number.isFinite(range.end)
+        || range.start < 0
+        || range.end <= range.start
+        || range.end > duration
+        || (index > 0 && range.start < shotRanges[index - 1].end));
+      const reachesSelectedDuration = shotRanges.length > 0
+        && Math.abs(shotRanges[shotRanges.length - 1].end - duration) <= 0.01;
+      if (!shotRanges.length || shotRanges[0].start !== 0 || invalidRange || !reachesSelectedDuration) {
         throw new Error("video_prompt_enhancement_minimax_timing_invalid");
       }
     }
-    prompt = prompt.replace(/[\t ]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    const normalizedTimeline = timeline.replace(/[\t ]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    prompt = hasFrame
+      ? `${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${normalizedTimeline}`
+      : normalizedTimeline;
   } else {
     prompt = prompt
       .replace(/^\s*(?:#{1,6}\s*)?(?:description|action|camera|lighting|sound|ending)\s*:\s*/gim, "")

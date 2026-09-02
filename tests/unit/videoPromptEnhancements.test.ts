@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compileVideoPromptWithSpeech,
   matchCreativeStudioRoute,
+  MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION,
   normalizeEnhancedVideoPrompt,
   normalizeVideoSpeechStamp,
   VIDEO_EXTENSION_SOUND_DIRECTIVE,
@@ -34,15 +35,64 @@ describe("video prompt enhancement contracts", () => {
       videoDurationSeconds: 10,
       inputMode: "image-to-video",
     })).toThrow("video_prompt_enhancement_minimax_timing_invalid");
-    expect(() => normalizeEnhancedVideoPrompt(h3Timeline.replace(/^.*\n/, ""), profile, {
+    const headerlessTimeline = h3Timeline.replace(/^.*\n/, "");
+    expect(normalizeEnhancedVideoPrompt(headerlessTimeline, profile, {
       videoDurationSeconds: 10,
       inputMode: "image-to-video",
-    })).toThrow("video_prompt_enhancement_minimax_picture_alignment_missing");
+    })).toBe(h3Timeline);
+    expect(normalizeEnhancedVideoPrompt(`Here is the enhanced direction.\n${headerlessTimeline}`, profile, {
+      videoDurationSeconds: 10,
+      inputMode: "image-to-video",
+    })).toBe(h3Timeline);
+    expect(normalizeEnhancedVideoPrompt(`For the target video, at 0.00 seconds, the pink abstract shape from Shot 1 is fully referenced. ${headerlessTimeline}`, profile, {
+      videoDurationSeconds: 10,
+      inputMode: "image-to-video",
+    })).toBe(h3Timeline);
+    const colonTimeline = headerlessTimeline
+      .replace("SHOT 1 (0.00-3.00 seconds):", "SHOT 1: 0.00 - 3.00")
+      .replace("SHOT 2 (3.00-7.00 seconds):", "SHOT 2: 3.00 - 7.00")
+      .replace("SHOT 3 (7.00-10.00 seconds):", "SHOT 3: 7.00 - 10.00");
+    expect(normalizeEnhancedVideoPrompt(`For the target video, at 0.00 seconds, the detailed frame is fully referenced.\n${colonTimeline}`, profile, {
+      videoDurationSeconds: 10,
+      inputMode: "image-to-video",
+    })).toBe(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${colonTimeline}`);
+    const labeledTimeline = headerlessTimeline
+      .replace("SHOT 1 (0.00-3.00 seconds):", "SHOT 1 — OPENING ANCHOR AND PRIMARY MOTION (0.00–3.00 seconds):")
+      .replace("SHOT 2 (3.00-7.00 seconds):", "SHOT 2 — DEVELOPMENT ACROSS THE FRAME (3.00–7.00 seconds):")
+      .replace("SHOT 3 (7.00-10.00 seconds):", "SHOT 3 — FINAL REACTION AND RESOLVED VISUAL BEAT (7.00–10.00 seconds):");
+    expect(normalizeEnhancedVideoPrompt(labeledTimeline, profile, { videoDurationSeconds: 10, inputMode: "image-to-video" }))
+      .toBe(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${labeledTimeline}`);
+    const pointTimeline = headerlessTimeline
+      .replace("SHOT 1 (0.00-3.00 seconds):", "SHOT 1 — 0.00 seconds:")
+      .replace("SHOT 2 (3.00-7.00 seconds):", "SHOT 2 — 3.00 seconds:")
+      .replace("SHOT 3 (7.00-10.00 seconds):", "SHOT 3 — 7.00 seconds:");
+    expect(normalizeEnhancedVideoPrompt(pointTimeline, profile, { videoDurationSeconds: 10, inputMode: "image-to-video" }))
+      .toBe(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${pointTimeline}`);
+    expect(() => normalizeEnhancedVideoPrompt(headerlessTimeline.replace("The glass figure", "<Picture 1> shows the glass figure"), profile, {
+      videoDurationSeconds: 10,
+      inputMode: "image-to-video",
+    })).toThrow("video_prompt_enhancement_minimax_picture_alignment_duplicate");
     const enDashTimeline = h3Timeline.replaceAll("0.00-3.00 seconds", "0.00–3.00s")
       .replaceAll("3.00-7.00 seconds", "3.00–7.00s")
       .replaceAll("7.00-10.00 seconds", "7.00–10.00s");
     expect(normalizeEnhancedVideoPrompt(enDashTimeline, profile, { videoDurationSeconds: 10, inputMode: "image-to-video" }))
       .toBe(enDashTimeline);
+  });
+
+  it("rejects source references without a frame and timelines that do not reach the selected duration", () => {
+    const profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" });
+    const timeline = h3Timeline.replace(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n`, "");
+    expect(normalizeEnhancedVideoPrompt(timeline, profile, { videoDurationSeconds: 10, inputMode: "text-to-video" }))
+      .toBe(timeline);
+    expect(() => normalizeEnhancedVideoPrompt(timeline.replace("The glass figure", "Picture 1 shows the glass figure"), profile, {
+      videoDurationSeconds: 10,
+      inputMode: "text-to-video",
+    })).toThrow("video_prompt_enhancement_minimax_picture_alignment_unexpected");
+    expect(() => normalizeEnhancedVideoPrompt(
+      timeline.replaceAll("3.00", "0.05").replaceAll("7.00", "0.10").replaceAll("10.00", "0.15"),
+      profile,
+      { videoDurationSeconds: 15, inputMode: "image-to-video" },
+    )).toThrow("video_prompt_enhancement_minimax_timing_invalid");
   });
 
   it("keeps LTX concise, chronological, and free of model commentary", () => {

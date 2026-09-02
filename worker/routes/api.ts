@@ -1495,6 +1495,9 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           workflowRevisionId: plan.workflow.currentRevision.id,
           promptProfileId: promptEnhancementProfile.id,
           promptOutputFormat: promptEnhancementProfile.outputFormat,
+          videoDurationSeconds: videoDurationSeconds!,
+          inputMode: promptEnhancementInputMode,
+          sourceId: promptEnhancementSourceId,
         }) : undefined;
         const videoScript = input.videoScript
           ? input.videoScript.scriptFormat === "full-script-v2"

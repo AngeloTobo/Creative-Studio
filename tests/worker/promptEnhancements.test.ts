@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION } from "../../shared/contracts";
 import { routeCreativeStudioApi } from "../../worker/routes/api";
 import { videoPromptEnhancementById, videoPromptEnhancementStampForJob } from "../../worker/promptEnhancements";
 
@@ -135,6 +136,9 @@ describe("durable video prompt enhancement", () => {
       workflowRevisionId: "workflowrev_descendant_not_required_for_provenance",
       promptProfileId: "minimax-h3-i2v-motion/1.0",
       promptOutputFormat: "minimax-h3-timeline",
+      videoDurationSeconds: 10,
+      inputMode: "text-to-video",
+      sourceId: null,
     });
     expect(stamp).toMatchObject({
       requestId: created.promptEnhancement.id,
@@ -144,11 +148,73 @@ describe("durable video prompt enhancement", () => {
       appliedPrompt: discoveryPrompt,
       editedAfterEnhancement: false,
     });
+    const stampInput = {
+      requestId: created.promptEnhancement.id,
+      basePrompt: enhancedTimeline,
+      appliedPrompt: discoveryPrompt,
+      projectId: project.project.id,
+      workflowId: imported.workflow.id,
+      workflowRevisionId: "workflowrev_descendant_not_required_for_provenance",
+      promptProfileId: "minimax-h3-i2v-motion/1.0" as const,
+      promptOutputFormat: "minimax-h3-timeline" as const,
+      videoDurationSeconds: 10 as const,
+      inputMode: "text-to-video" as const,
+      sourceId: null,
+    };
+    await expect(videoPromptEnhancementStampForJob(env, "development-angelo", {
+      ...stampInput,
+      videoDurationSeconds: 15,
+    })).rejects.toThrow("prompt_enhancement_context_mismatch");
+    await expect(videoPromptEnhancementStampForJob(env, "development-angelo", {
+      ...stampInput,
+      inputMode: "image-to-video",
+      sourceId: "asset_from_another_context",
+    })).rejects.toThrow("prompt_enhancement_context_mismatch");
 
     const fetched = await result<{
       promptEnhancement: { id: string; status: string };
     }>(await routeCreativeStudioApi(request(`/api/creative-studio/prompt-enhancements/${created.promptEnhancement.id}`), env));
     expect(fetched.promptEnhancement).toEqual(expect.objectContaining({ id: created.promptEnhancement.id, status: "completed" }));
+
+    const rejected = await result<{ promptEnhancement: { id: string } }>(await routeCreativeStudioApi(request("/api/creative-studio/prompt-enhancements", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(enhancementInput(project.project.id, "prompt_enhance_rejected_output_001")),
+    }), env));
+    const claimedRejected = await result<{ kind: string; bundle: { promptEnhancement: { id: string } } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ version: "1.10.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
+    }), env));
+    expect(claimedRejected).toMatchObject({ kind: "prompt-enhancement", bundle: { promptEnhancement: { id: rejected.promptEnhancement.id } } });
+
+    const comfyPromptId = "comfy-video-prompt-rejected-001";
+    const invalidTimeline = enhancedTimeline.replace("SHOT 3 (7.00-10.00 seconds)", "SHOT 3 (7.00-12.00 seconds)");
+    const rejectedCompletion = await routeCreativeStudioApi(request(`/api/creative-studio/runner/prompt-enhancements/${rejected.promptEnhancement.id}/complete`, {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ enhancedPrompt: invalidTimeline, comfyPromptId }),
+    }), env);
+    expect(rejectedCompletion.status).toBe(400);
+    expect(await rejectedCompletion.json()).toMatchObject({ ok: false });
+
+    const runningAfterRejectedOutput = await result<{
+      promptEnhancement: { status: string; comfyPromptId: string | null };
+    }>(await routeCreativeStudioApi(request(`/api/creative-studio/prompt-enhancements/${rejected.promptEnhancement.id}`), env));
+    expect(runningAfterRejectedOutput.promptEnhancement).toMatchObject({ status: "running", comfyPromptId });
+
+    const failed = await result<{
+      promptEnhancement: { status: string; error: string; comfyPromptId: string | null };
+    }>(await routeCreativeStudioApi(request(`/api/creative-studio/runner/prompt-enhancements/${rejected.promptEnhancement.id}/fail`, {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ error: "video_prompt_enhancement_minimax_timing_invalid" }),
+    }), env));
+    expect(failed.promptEnhancement).toMatchObject({
+      status: "failed",
+      error: "video_prompt_enhancement_minimax_timing_invalid",
+      comfyPromptId,
+    });
     await expect(videoPromptEnhancementById(env, "different-owner", created.promptEnhancement.id)).rejects.toThrow("prompt_enhancement_not_found");
   });
 
@@ -214,7 +280,8 @@ describe("durable video prompt enhancement", () => {
       body: JSON.stringify(enhancementInput(activeSource.asset.id, "prompt_active_source_001")),
     }), env);
     expect(accepted.status).toBe(202);
-    expect(await accepted.json()).toMatchObject({
+    const acceptedPayload = await accepted.json() as { ok: true; promptEnhancement: { id: string } };
+    expect(acceptedPayload).toMatchObject({
       ok: true,
       promptEnhancement: {
         projectId: activeProject.project.id,
@@ -222,6 +289,28 @@ describe("durable video prompt enhancement", () => {
         sourceId: activeSource.asset.id,
       },
     });
+
+    const enrollment = await result<{ token: string }>(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "I2V prompt runner" }),
+    }), env));
+    const runnerHeaders = { authorization: `Bearer ${enrollment.token}`, "content-type": "application/json" };
+    const claimed = await result<{ kind: string; bundle: { promptEnhancement: { id: string } } }>(await routeCreativeStudioApi(request("/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({ version: "1.20.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, modelTrainingProviders: [] }),
+    }), env));
+    expect(claimed).toMatchObject({ kind: "prompt-enhancement", bundle: { promptEnhancement: { id: acceptedPayload.promptEnhancement.id } } });
+    const completed = await result<{ promptEnhancement: { enhancedPrompt: string } }>(await routeCreativeStudioApi(request(`/api/creative-studio/runner/prompt-enhancements/${acceptedPayload.promptEnhancement.id}/complete`, {
+      method: "POST",
+      headers: runnerHeaders,
+      body: JSON.stringify({
+        enhancedPrompt: `The supplied image is fully referenced.\n${enhancedTimeline}`,
+        comfyPromptId: "comfy-i2v-headerless-001",
+      }),
+    }), env));
+    expect(completed.promptEnhancement.enhancedPrompt).toBe(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${enhancedTimeline}`);
 
     const rejected = await routeCreativeStudioApi(request("/api/creative-studio/prompt-enhancements", {
       method: "POST",

@@ -284,7 +284,7 @@ function json(route: Route, body: unknown, status = 200) {
 async function installVideoBackend(
   page: Page,
   withEnhancement: boolean,
-  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean } = {},
+  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean; failEnhancementCompletionOnce?: boolean } = {},
 ): Promise<MockVideoBackend> {
   let workflow = initialWorkflow();
   let revision = 1;
@@ -582,6 +582,20 @@ async function installVideoBackend(
 
     if (request.method() === "GET" && pathname === "/api/creative-studio/prompt-enhancements/promptenh_e2e_four_way" && promptEnhancement) {
       if (enhancementGate) await enhancementGate;
+      if (options.failEnhancementCompletionOnce && enhancementRequests.length === 1) {
+        promptEnhancement = {
+          ...promptEnhancement,
+          status: "failed",
+          progress: 100,
+          error: "video_prompt_enhancement_minimax_picture_alignment_missing",
+          runnerId: "runner_e2e",
+          updatedAt: new Date(Date.parse(NOW) + 5_000).toISOString(),
+          startedAt: new Date(Date.parse(NOW) + 1_000).toISOString(),
+          completedAt: new Date(Date.parse(NOW) + 5_000).toISOString(),
+        };
+        await json(route, { promptEnhancement });
+        return;
+      }
       promptEnhancement = {
         ...promptEnhancement,
         status: "completed",
@@ -732,6 +746,7 @@ test("Animate x4 waits for Generate, then completes Gemma enhancement and queues
 
   await expect(page).toHaveURL(/#\/dna$/);
   await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
+  const authoredPrompt = await page.getByLabel("Describe the video").inputValue();
   await page.waitForTimeout(500);
   expect(backend.enhancementRequests).toHaveLength(0);
   expect(backend.jobs).toHaveLength(0);
@@ -761,7 +776,11 @@ test("Animate x4 waits for Generate, then completes Gemma enhancement and queues
   expect(backend.jobs.filter((job) => job.promptEnhancement?.requestId === "promptenh_e2e_four_way")).toHaveLength(1);
   expect(backend.jobs.find((job) => job.videoVariant?.role === "enhanced")?.promptEnhancement).toMatchObject({
     requestId: "promptenh_e2e_four_way",
+    basePrompt: expect.stringContaining("rain beads slide upward"),
   });
+  expect(backend.jobs.find((job) => job.videoVariant?.role === "exact")?.workflow?.expectedPrompt).toContain(authoredPrompt);
+  expect(backend.jobs.find((job) => job.videoVariant?.role === "enhanced")?.workflow?.expectedPrompt).toContain("rain beads slide upward");
+  await expect(page.getByLabel("Describe the video")).toHaveValue(authoredPrompt);
   expect(backend.jobs.every((job) => job.workflow?.inputBindings[IMAGE_PARAMETER_ID] === SOURCE_ID)).toBe(true);
   expect(backend.jobs.every((job) => job.videoDurationSeconds === 5)).toBe(true);
   expect(backend.jobs.every((job) => job.videoPerformanceMode === "fast-default")).toBe(true);
@@ -787,6 +806,43 @@ test("changing the creation type while x4 preparation is pending cancels the sub
   await page.waitForTimeout(1_000);
   expect(backend.jobs).toHaveLength(0);
   expect(backend.batchRequests).toHaveLength(0);
+});
+
+test("editing the authored prompt while x4 preparation is pending keeps the edit and queues no stale board", async ({ page }) => {
+  const backend = await installVideoBackend(page, true, { delayEnhancementCompletion: true });
+  await openRetainedMedia(page);
+
+  await page.locator(".media-action-menu > summary").click();
+  await page.getByRole("menuitem", { name: "Animate 4 ways" }).click();
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(1);
+
+  const editedPrompt = "The figure turns toward the rain, then holds perfectly still beneath the violet signal.";
+  await page.getByLabel("Describe the video").fill(editedPrompt);
+  backend.releaseEnhancement();
+
+  await expect(page.getByLabel("Describe the video")).toHaveValue(editedPrompt);
+  await page.waitForTimeout(1_000);
+  expect(backend.enhancementRequests).toHaveLength(1);
+  expect(backend.jobs).toHaveLength(0);
+  expect(backend.batchRequests).toHaveLength(0);
+});
+
+test("a failed four-way enhancement shows plain recovery copy and Generate retries with a new request", async ({ page }) => {
+  const backend = await installVideoBackend(page, true, { failEnhancementCompletionOnce: true });
+  await openRetainedMedia(page);
+
+  await page.locator(".media-action-menu > summary").click();
+  await page.getByRole("menuitem", { name: "Animate 4 ways" }).click();
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(1);
+  await expect(page.getByText(/could not safely align to your source/i)).toBeVisible();
+  await expect(page.getByText(/video_prompt_enhancement/i)).toHaveCount(0);
+
+  await page.locator(".quick-primary").click();
+  await expect.poll(() => backend.enhancementRequests.length, { timeout: 10_000 }).toBe(2);
+  await expect.poll(() => backend.jobs.length, { timeout: 20_000 }).toBe(4);
+  expect(backend.batchRequests).toHaveLength(1);
 });
 
 test("Full Script prepares changed run settings without project-locking the reusable model", async ({ page }) => {

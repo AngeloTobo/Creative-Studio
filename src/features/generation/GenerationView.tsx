@@ -116,7 +116,11 @@ import {
   videoOperationAfterApplyingFullScript,
 } from "./videoScriptEditorState";
 import { videoScriptErrorMessage } from "./videoScriptErrorMessage";
-import { directVideoEnhancementDecision, videoPairIdForOutputBatch } from "./directVideo";
+import {
+  isVideoPromptEnhancementError,
+  videoPromptEnhancementErrorMessage,
+} from "../../app/videoPromptEnhancementErrorMessage";
+import { videoPairIdForOutputBatch } from "./directVideo";
 import { RecommendedDirectionsRail, type StoryRecommendationHandoff } from "../stories/StoryBankRail";
 import "./GenerationView.css";
 
@@ -137,6 +141,7 @@ type QuickSource = {
 };
 
 const SOURCE_GALLERY_LIMIT = 6;
+const STANDARD_VIDEO_OUTPUT_COUNTS = [1, 2] as const satisfies readonly GenerationOutputCount[];
 
 type CreateIntentOption = { id: CreateIntent; label: string; icon: "image" | "video" | "music" | "dna" };
 
@@ -153,6 +158,10 @@ const SECONDARY_CREATE_INTENTS: ReadonlyArray<CreateIntentOption> = [
 function directionAfterIntentChange(current: CreateIntent, next: CreateIntent, direction: string) {
   const primarySwitch = (current === "image" || current === "video") && (next === "image" || next === "video");
   return primarySwitch ? direction : "";
+}
+
+function samePrompt(left: string, right: string) {
+  return left.trim().replace(/\s+/g, " ").toLocaleLowerCase() === right.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
 function retainedAuthoredDirection(prompt: string, continuityText?: string | null) {
@@ -261,6 +270,7 @@ function creativeSessionHasHiddenControls(session: CreativeSession | null) {
     || (typeof settings.lyrics === "string" && settings.lyrics.trim().length > 0)
     || settings.videoSpeechMode === "short-natural-line"
     || settings.videoSpeechMode === "exact-script"
+    || Number(settings.outputCount) === 4
     || Boolean(trustedVideoPresetById(settings.trustedVideoPresetId))
     || settings.videoOperationKind === "extend"
     || hasExactWorkflowState
@@ -841,9 +851,10 @@ export function GenerationView({
     authoredDirection: direction,
     excludedReferenceIdentities: excludedProjectReferenceIdentities,
   }) : null;
-  const authoredProjectDirection = generationIntent !== "music" && projectContextEnabled && !worldContinuityEnabled && projectContext?.text
-    ? `${direction.trim().replace(/[.\s]+$/, "")}. ${projectContext.text}`
-    : direction.trim();
+  const appendProjectContext = (prompt: string) => generationIntent !== "music" && projectContextEnabled && !worldContinuityEnabled && projectContext?.text
+    ? `${prompt.trim().replace(/[.\s]+$/, "")}. ${projectContext.text}`
+    : prompt.trim();
+  const authoredProjectDirection = appendProjectContext(direction);
   const selectedWorldRules = (snapshot?.continuityRules ?? []).filter((rule) => rule.worldId === selectedWorld?.id
     && rule.status === "active"
     && rule.modalities.includes(generationIntent)
@@ -883,11 +894,6 @@ export function GenerationView({
     return `${authored}. ${continuityDirective.text}`;
   };
   const providerDirection = appendContinuity(authoredProjectDirection);
-  const exactAuthoredVideoDirection = generationIntent === "video" && originalVideoDirection
-    ? projectContextEnabled && !worldContinuityEnabled && projectContext?.text
-      ? `${originalVideoDirection.trim().replace(/[.\s]+$/, "")}. ${projectContext.text}`
-      : originalVideoDirection
-    : authoredProjectDirection;
   const projectTasteMemory = snapshot?.tasteMemory?.projects[activeProjectId];
   const personalTaste = snapshot?.tasteMemory?.personal;
   const intentWorkflows = workflows.filter((item) => workflowCreateIntent(item.modality) === generationIntent);
@@ -1088,16 +1094,27 @@ export function GenerationView({
       && appliedVideoScriptDraft.inputMode === promptEnhancementInputMode
       && (appliedVideoScriptDraft.source?.id ?? null) === promptEnhancementSourceId)));
   const fourWayBoardRequested = generationIntent === "video" && !evolutionEnabled && outputCount === 4;
+  const fourWayBoardUnavailableMessage = evolutionEnabled
+    ? "Four-way board is unavailable during an Evolution study."
+    : !promptEnhancementAvailable
+    ? "Four-way board is unavailable while Local Gemma is offline."
+    : !workflowSeedParameter
+      ? "Four-way board needs a video model with a mapped sampler seed."
+      : null;
   const fourWayEnhancementReady = Boolean(fourWayBoardRequested
-    && appliedPromptEnhancementMatchesContext
-    && appliedPromptEnhancementId
-    && originalVideoDirection?.trim()
-    && direction.trim()
-    && originalVideoDirection.trim().replace(/\s+/g, " ").toLowerCase() !== direction.trim().replace(/\s+/g, " ").toLowerCase());
+    && activePromptEnhancement?.status === "completed"
+    && activePromptEnhancement.enhancedPrompt?.trim()
+    && promptEnhancementMatchesWorkflow
+    && samePrompt(direction, activePromptEnhancement.sourcePrompt)
+    && !samePrompt(activePromptEnhancement.sourcePrompt, activePromptEnhancement.enhancedPrompt));
   const promptEnhancementApplication = (appliedPrompt: string) => generationIntent === "video"
     && appliedPromptEnhancementMatchesContext
     && appliedPromptEnhancement
     ? { requestId: appliedPromptEnhancement.id, basePrompt: direction.trim(), appliedPrompt }
+    : undefined;
+  const fourWayPromptEnhancementApplication = (appliedPrompt: string) => fourWayEnhancementReady
+    && activePromptEnhancement?.status === "completed"
+    ? { requestId: activePromptEnhancement.id, basePrompt: activePromptEnhancement.enhancedPrompt!, appliedPrompt }
     : undefined;
   const trainingSource = quickSource?.source === "upload" && quickSource.trainingEligible ? quickSource : null;
 
@@ -1197,6 +1214,10 @@ export function GenerationView({
 
   useEffect(() => {
     if (!activePromptEnhancement || activePromptEnhancement.status !== "completed" || !activePromptEnhancement.enhancedPrompt) return;
+    if (fourWayBoardRequested || pendingFourWaySubmission.current) {
+      handledPromptEnhancementId.current = activePromptEnhancement.id;
+      return;
+    }
     if (handledPromptEnhancementId.current === activePromptEnhancement.id) return;
     handledPromptEnhancementId.current = activePromptEnhancement.id;
     if (!promptEnhancementMatchesWorkflow || direction.trim() !== activePromptEnhancement.sourcePrompt.trim()) return;
@@ -1207,7 +1228,7 @@ export function GenerationView({
       setNotice("Gemma 4 enhanced the motion direction locally. You can edit it, restore your original, or enhance it again.");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activePromptEnhancement, direction, promptEnhancementMatchesWorkflow]);
+  }, [activePromptEnhancement, direction, fourWayBoardRequested, promptEnhancementMatchesWorkflow]);
   const displayedScalarParameters = scalarParameters.map((parameter) => ({ ...parameter, value: parameterValue(parameter) }));
   const performanceParameters = canonicalGenerationPerformanceParameters(displayedScalarParameters);
   const imagePerformance = generationIntent === "image" && workflow ? assessImagePerformance(performanceParameters) : null;
@@ -1391,6 +1412,7 @@ export function GenerationView({
   const fourWaySubmissionSetupSignature = JSON.stringify({
     projectId: activeProjectId,
     intent,
+    direction: direction.trim(),
     workflowId: workflow?.id ?? null,
     workflowRevisionId: workflow?.currentRevision.id ?? null,
     sourceId: quickSource?.id ?? null,
@@ -1814,8 +1836,9 @@ export function GenerationView({
     } catch (requestError) {
       if (requestError instanceof Error && requestError.message === "workflow_setup_changed") {
         setLocalError("The model settings changed while Creative Studio was preparing them. Review the current setup, then try Enhance again.");
+      } else {
+        setLocalError(`${videoPromptEnhancementErrorMessage(requestError)} Your image and current prompt are unchanged.`);
       }
-      // StudioProvider keeps the normalized error visible; the authored prompt is untouched.
     }
   };
 
@@ -2254,6 +2277,14 @@ export function GenerationView({
   };
 
   const chooseVideoOutputCount = (count: GenerationOutputCount) => {
+    if (count !== 4 && fourWayBoardRequested) {
+      pendingFourWaySubmission.current = "";
+      autoEnhancementAttempted.current = false;
+      if (promptEnhancementPending) {
+        setPromptEnhancementId("");
+        setNotice("Standard video generation selected. The in-progress Enhanced lane will not replace your prompt.");
+      }
+    }
     if (selectedTrustedVideoPresetId) {
       leaveTrustedVideoPreset(count === 2
         ? {
@@ -2563,8 +2594,8 @@ export function GenerationView({
       if (generationIntent === "video" && workflowPromptParameter) {
         const videoOutputs = outputCount === 4
           ? createFourWayVideoGenerationVersions({
-            exactPrompt: exactAuthoredVideoDirection,
-            enhancedPrompt: authoredProjectDirection,
+            exactPrompt: appendProjectContext(activePromptEnhancement?.sourcePrompt ?? direction),
+            enhancedPrompt: appendProjectContext(activePromptEnhancement?.enhancedPrompt ?? direction),
             dimensions: dna.shared,
             pairId: videoPairIdForOutputBatch(attemptOutputBatchId, "board"),
             boardSeed: generationBatchSeed(attemptOutputBatchId, 0),
@@ -2621,8 +2652,8 @@ export function GenerationView({
               count: outputCount,
             },
             continuity: continuitySelection,
-            promptEnhancement: outputCount === 4 && output.variant.role !== "enhanced"
-              ? undefined
+            promptEnhancement: outputCount === 4
+              ? output.variant.role === "enhanced" ? fourWayPromptEnhancementApplication(prompt) : undefined
               : promptEnhancementApplication(prompt),
             storyRecommendation: selectedStoryRecommendation,
           });
@@ -2749,29 +2780,18 @@ export function GenerationView({
         stopPendingSubmission("The four-way board needs Local Gemma for its Enhanced version. Start the Local Runner and ComfyUI, then Generate again.");
         return;
       }
-      if (activePromptEnhancement?.status === "failed") {
-        stopPendingSubmission(`Gemma could not prepare the Enhanced version${activePromptEnhancement.error ? `: ${activePromptEnhancement.error}` : "."} Your image and exact prompt are unchanged.`);
+      if (activePromptEnhancement?.status === "failed"
+        && promptEnhancementMatchesWorkflow
+        && samePrompt(direction, activePromptEnhancement.sourcePrompt)) {
+        stopPendingSubmission(`${videoPromptEnhancementErrorMessage(activePromptEnhancement.error)} Your image and exact prompt are unchanged. Use the standard pair now, or try the four-way board again.`);
+        setPromptEnhancementId("");
         return;
       }
-      const completedEnhancementDecision = directVideoEnhancementDecision({
-        completed: activePromptEnhancement?.status === "completed",
-        contextMatches: promptEnhancementMatchesWorkflow,
-        sourcePrompt: activePromptEnhancement?.sourcePrompt ?? "",
-        enhancedPrompt: activePromptEnhancement?.enhancedPrompt,
-        currentPrompt: direction,
-      });
-      if (completedEnhancementDecision === "apply" && activePromptEnhancement?.enhancedPrompt) {
-        const completedEnhancement = activePromptEnhancement;
-        void Promise.resolve().then(() => {
-          setOriginalVideoDirection((current) => current ?? completedEnhancement.sourcePrompt);
-          setDirection(completedEnhancement.enhancedPrompt!);
-          setAppliedPromptEnhancementId(completedEnhancement.id);
-          setNotice("Gemma 4 enhancement applied. Preparing the four-way video board now.");
-        });
-        return;
-      }
-      if (completedEnhancementDecision === "stop-edited") {
-        stopPendingSubmission("Gemma finished the four-way enhancement, but your prompt changed while it was running. Your edit was kept. Use the enhanced prompt, or enhance your edited prompt again.");
+      if (activePromptEnhancement?.status === "completed"
+        && promptEnhancementMatchesWorkflow
+        && samePrompt(direction, activePromptEnhancement.sourcePrompt)) {
+        stopPendingSubmission("Local Gemma did not return a distinct Enhanced direction. Your image and exact prompt are unchanged. Use the standard pair now, or try the four-way board again.");
+        setPromptEnhancementId("");
         return;
       }
       if (!promptEnhancementPending && !autoEnhancementAttempted.current) {
@@ -2805,22 +2825,6 @@ export function GenerationView({
     }
     pendingFourWaySubmission.current = fourWaySubmissionSetupSignature;
     autoEnhancementAttempted.current = false;
-    const completedEnhancementDecision = directVideoEnhancementDecision({
-      completed: activePromptEnhancement?.status === "completed",
-      contextMatches: promptEnhancementMatchesWorkflow,
-      sourcePrompt: activePromptEnhancement?.sourcePrompt ?? "",
-      enhancedPrompt: activePromptEnhancement?.enhancedPrompt,
-      currentPrompt: direction,
-    });
-    if (completedEnhancementDecision === "apply") {
-      applyCompletedVideoPromptEnhancement();
-      return;
-    }
-    if (completedEnhancementDecision === "stop-edited") {
-      pendingFourWaySubmission.current = "";
-      setLocalError("Gemma finished the four-way enhancement, but your prompt changed while it was running. Your edit was kept. Use the enhanced prompt, or enhance your edited prompt again.");
-      return;
-    }
     if (!promptEnhancementPending) {
       autoEnhancementAttempted.current = true;
       await requestVideoPromptEnhancement();
@@ -2931,8 +2935,12 @@ export function GenerationView({
                   ? { message: videoSpeechText.trim() ? `Shorten the spoken line to ${videoSpeechWordBudget.maximum} words for this clip.` : "Add the spoken words, or choose No dialogue while keeping sound on.", action: "controls", actionLabel: "Review sound" }
                   : fastImageBlocked
                     ? { message: "These restored image settings exceed Fast mode. Choose Custom only if you accept the longer render.", action: "controls", actionLabel: "Review speed" }
+                    : fourWayBoardRequested && !promptEnhancementAvailable
+                      ? { message: "Four-way board needs Local Gemma for its Enhanced version. Use the standard pair while Local Gemma is offline.", action: "outputs", actionLabel: "Use standard pair" }
                     : outputCountSeedBlocked
-                      ? { message: "This model needs a mapped sampler seed for distinct versions. Choose one version or update the model.", action: "outputs", actionLabel: "Use one" }
+                      ? { message: generationIntent === "video"
+                        ? "Four-way board needs a mapped sampler seed. Use the standard pair or update the model."
+                        : "This model needs a mapped sampler seed for distinct versions. Choose one version or update the model.", action: "outputs", actionLabel: generationIntent === "video" ? "Use standard pair" : "Use one" }
                       : continuityTooLarge
                         ? { message: "The selected World continuity is too large for one prompt. Select fewer characters, places, or rules.", action: "controls", actionLabel: "Narrow World" }
                         : generationIntent === "video" && !workflowPromptParameter
@@ -2956,7 +2964,7 @@ export function GenerationView({
       return;
     }
     if (generationBlocker.action === "outputs") {
-      setOutputCount(1);
+      setOutputCount(generationIntent === "video" ? 2 : 1);
       setLocalError("");
       return;
     }
@@ -3002,6 +3010,9 @@ export function GenerationView({
   const consentedAudioCount = projectMedia.filter((asset) => asset.kind === "audio" && asset.trainingEligible).length;
   const promptEnhancementApplied = Boolean(appliedPromptEnhancement && appliedPromptEnhancementId === appliedPromptEnhancement.id);
   const promptEnhancementContextChanged = promptEnhancementApplied && !appliedPromptEnhancementMatchesContext;
+  const visibleGenerationError = localError || (isVideoPromptEnhancementError(error)
+    ? `${videoPromptEnhancementErrorMessage(error)} Your image and current prompt are unchanged.`
+    : error);
   const promptEnhancementButtonLabel = !promptEnhancementAvailable
     ? "Local Gemma offline"
     : promptEnhancementPending
@@ -3135,13 +3146,17 @@ export function GenerationView({
                 : activePromptEnhancement?.status === "failed"
                   ? "Gemma couldn’t enhance this prompt. Your current prompt is unchanged."
                   : activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id
-                    ? promptEnhancementMatchesWorkflow ? "Enhancement ready. Use it, or keep your current prompt." : "Length, source, or model changed. Enhance again for this setup."
+                    ? promptEnhancementMatchesWorkflow
+                      ? fourWayBoardRequested
+                        ? fourWayEnhancementReady ? "Enhanced lane ready. Your authored prompt stays unchanged." : "Your prompt changed after this enhancement. Generate again to prepare a matching four-way board."
+                        : "Enhancement ready. Use it, or keep your current prompt."
+                      : "Length, source, or model changed. Enhance again for this setup."
                     : promptEnhancementContextChanged
                       ? "Length, source, or model changed. Enhance again for this setup."
                       : direction.trim() === appliedPromptEnhancement?.enhancedPrompt?.trim() ? "Enhanced locally · Gemma 4" : "Edited after enhancement · Gemma 4"}</small></span>
               <span className="quick-prompt-enhancement-actions">
                 {promptEnhancementPending ? <button type="button" onClick={keepCurrentVideoPrompt}>Keep current</button> : null}
-                {activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={applyCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
+                {!fourWayBoardRequested && activePromptEnhancement?.status === "completed" && appliedPromptEnhancementId !== activePromptEnhancement.id && promptEnhancementMatchesWorkflow ? <button type="button" onClick={applyCompletedVideoPromptEnhancement}>Use enhanced</button> : null}
                 {originalVideoDirection !== null && direction.trim() !== originalVideoDirection.trim() ? <button type="button" onClick={restoreOriginalVideoPrompt}>Restore original</button> : null}
               </span>
             </div> : null}
@@ -3178,12 +3193,9 @@ export function GenerationView({
               </div>
             </div> : null}
             {!evolutionEnabled ? <div className="quick-video-essential quick-video-outputs">
-              <span><strong>Versions</strong><small>Every result retained</small></span>
+              <span><strong>Versions</strong><small>{fourWayBoardRequested ? "Four-way selected in AI assist" : "Every result retained"}</small></span>
               <div role="group" aria-label="Number of video outputs">
-                {GENERATION_OUTPUT_COUNTS.map((count) => {
-                  const unavailable = count === 4 && !workflowSeedParameter;
-                  return <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy || unavailable} title={unavailable ? "Map this model's sampler seed to guarantee four distinct outputs." : `${count} retained video ${count === 1 ? "output" : "outputs"}`} onClick={() => chooseVideoOutputCount(count)}>{count}</button>;
-                })}
+                {STANDARD_VIDEO_OUTPUT_COUNTS.map((count) => <button type="button" key={count} className={outputCount === count ? "on" : ""} aria-pressed={outputCount === count} disabled={busy} title={`${count} retained video ${count === 1 ? "output" : "outputs"}`} onClick={() => chooseVideoOutputCount(count)}>{count}</button>)}
               </div>
             </div> : null}
             <footer>
@@ -3216,9 +3228,9 @@ export function GenerationView({
             <p><strong>{heavyRenderTimeSummary}</strong><small>{estimatedOutputCount === 1 ? "One local render will use the 3090 until this clip finishes." : `The Local Runner renders these ${estimatedOutputCount} versions one after another, so later versions wait for earlier ones to finish.`}</small></p>
             <footer><button type="button" className="btn btn-ghost" onClick={() => { armedVideoRenderSignature.current = ""; setHeavyRenderConfirmationOpen(false); }}>Keep editing</button><button type="button" className="btn btn-primary" onClick={() => { armedVideoRenderSignature.current = videoRenderSignature; setHeavyRenderConfirmationOpen(false); void startWorkflowGeneration(); }}><Icon name="send" size={15} /> Confirm &amp; queue</button></footer>
           </section> : null}
-          <div className={`quick-generate-dock${localError || error ? " has-error" : ""}`}>
-            {localError || error ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{localError || error}</small></span></div> : null}
-            {!localError && !error && generationBlocker ? <div className="quick-generation-blocker" role="status"><Icon name="shield" size={15} /><span>{generationBlocker.message}</span>{generationBlocker.action ? <button type="button" onClick={resolveGenerationBlocker}>{generationBlocker.actionLabel ?? "Review"}</button> : null}</div> : null}
+          <div className={`quick-generate-dock${visibleGenerationError ? " has-error" : ""}`}>
+            {visibleGenerationError ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{visibleGenerationError}</small></span></div> : null}
+            {!visibleGenerationError && generationBlocker ? <div className="quick-generation-blocker" role="status"><Icon name="shield" size={15} /><span>{generationBlocker.message}</span>{generationBlocker.action ? <button type="button" onClick={resolveGenerationBlocker}>{generationBlocker.actionLabel ?? "Review"}</button> : null}</div> : null}
             <span><Icon name="analytics" size={13} /><span><strong>{reuseSetupUnchanged ? "Exact retained setup" : usingDevelopmentPreview ? "Simulated preview" : usingAfdfwRoute ? "AFDFW remote route" : compactEstimate}</strong><small>{reuseSetupUnchanged ? "One duplicate queues only when you press Generate" : usingDevelopmentPreview ? "Development-only media · clearly labeled" : usingAfdfwRoute ? "Selected in More controls" : continuityTooLarge ? "Narrow World continuity first" : fourWayBoardRequested ? "Exact / Enhanced / Left Field / Awe" : `${estimatedOutputCount} ${estimatedOutputCount === 1 ? "output" : "outputs"} / exact settings retained`}</small></span></span><button className="btn btn-primary quick-primary" disabled={busy || (!reuseSetupUnchanged && !usingAfdfwRoute && !usingDevelopmentPreview && promptEnhancementPending) || Boolean(generationBlocker)} onClick={() => void startPrimaryGeneration()}><Icon name="send" size={17} /> {primaryLabel}</button>
           </div>
           <button type="button" className="quick-more-toggle" aria-expanded={creativeToolsOpen} aria-controls="creative-studio-power-tools" onClick={() => {
@@ -3243,7 +3255,17 @@ export function GenerationView({
         </section> : null}
         {generationIntent === "video" ? <details className="quick-ai-prompt-assist">
           <summary><span><Icon name="wand" size={15} /><span><strong>Experimental AI prompt assist</strong><small>Off by default · no proven quality lift yet</small></span></span><Icon name="chevronDown" size={13} /></summary>
-          <div><p>This local Gemma pass can add motion and camera detail, but it also swaps the warm video model out of GPU memory. Use it only when you want to compare the result; a detailed prompt can go straight to Generate.</p><button type="button" className="btn btn-ghost quick-enhance-action" disabled={busy || promptEnhancementPending || !promptEnhancementAvailable || !workflow || !workflowPromptParameter || !directionReady} title={promptEnhancementButtonTitle} onClick={() => void requestVideoPromptEnhancement()}><Icon name="wand" size={14} />{promptEnhancementButtonLabel}</button></div>
+          <div>
+            <div className="quick-ai-prompt-assist-copy">
+              <p>Local Gemma powers the optional four-way comparison and can preview extra motion or camera detail. Standard one- and two-version generation never needs it.</p>
+              <div className="quick-four-way-choice" role="group" aria-label="AI-assisted video comparison">
+                <button type="button" className={outputCount === 2 ? "on" : ""} aria-pressed={outputCount === 2} disabled={busy} onClick={() => chooseVideoOutputCount(2)}><strong>Use standard pair</strong><small>Aligned + Discovery · no AI rewrite</small></button>
+                <button type="button" className={fourWayBoardRequested ? "on" : ""} aria-pressed={fourWayBoardRequested} disabled={busy || Boolean(fourWayBoardUnavailableMessage)} title={fourWayBoardUnavailableMessage ?? "Compare Exact, Enhanced, Left Field, and Awe."} onClick={() => chooseVideoOutputCount(4)}><strong>Use four-way board</strong><small>Four retained directions · uses Local Gemma</small></button>
+              </div>
+              <small className={`quick-four-way-availability${fourWayBoardUnavailableMessage ? " unavailable" : ""}`}>{fourWayBoardUnavailableMessage ?? (fourWayBoardRequested ? "Selected. Generate will prepare the Enhanced lane without replacing your prompt." : "Available when you explicitly want four different creative directions.")}</small>
+            </div>
+            <button type="button" className="btn btn-ghost quick-enhance-action" disabled={busy || promptEnhancementPending || !promptEnhancementAvailable || !workflow || !workflowPromptParameter || !directionReady} title={promptEnhancementButtonTitle} onClick={() => void requestVideoPromptEnhancement()}><Icon name="wand" size={14} />{promptEnhancementButtonLabel}</button>
+          </div>
         </details> : null}
         {!(evolutionEnabled && initialEvolutionSource) ? <details className="quick-generation-goals" role="region" aria-label="Creation goal">
           <summary><span><Icon name="star" size={14} /><strong>Creation goal</strong></span><em>{GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.shortLabel ?? generationGoal}</em><small>{generationGoal === "explore" ? "Recommended" : generationGoal === "scout" ? "Three fast directions" : "Exact settings"}</small><Icon name="chevronDown" size={13} /></summary>

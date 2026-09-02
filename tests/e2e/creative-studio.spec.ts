@@ -142,10 +142,11 @@ test("Ideas keeps CreativeDNA as optional context and hands source work to the c
   await expect(outputCount.getByRole("button", { name: "2", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(outputCount.getByRole("button", { name: "2", exact: true })).toBeEnabled();
   await expect(outputCount.getByRole("button", { name: "1", exact: true })).toBeEnabled();
-  await expect(outputCount.getByRole("button", { name: "4", exact: true })).toBeDisabled();
+  await expect(outputCount.getByRole("button", { name: "4", exact: true })).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await openCreativeControls(page);
   await page.locator(".quick-ai-prompt-assist > summary").click();
+  await expect(page.getByRole("button", { name: /Use four-way board/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Local Gemma offline" })).toBeDisabled();
   await expect(page.getByText(/no proven quality lift yet/i)).toBeVisible();
   await expect(page.getByRole("button", { name: "No dialogue", exact: true })).toHaveAttribute("aria-pressed", "true");
