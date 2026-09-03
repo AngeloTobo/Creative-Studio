@@ -81,16 +81,6 @@ create table creative_archive_sync_batches (
   foreign key (catalog_id, owner_id) references creative_archive_catalogs(id, owner_id)
 );
 
-create trigger trg_cs_archive_sync_batch_staging
-before insert on creative_archive_sync_batches
-when not exists (
-  select 1 from creative_archive_catalogs c
-  where c.id = new.catalog_id and c.owner_id = new.owner_id and c.status = 'staging'
-)
-begin
-  select raise(abort, 'archive_sync_not_writable');
-end;
-
 create table creative_archive_entries (
   id text primary key,
   owner_id text not null,
@@ -118,16 +108,6 @@ create table creative_archive_entries (
   unique (id, catalog_id, owner_id),
   foreign key (catalog_id, owner_id) references creative_archive_catalogs(id, owner_id)
 );
-
-create trigger trg_cs_archive_entry_staging
-before insert on creative_archive_entries
-when not exists (
-  select 1 from creative_archive_catalogs c
-  where c.id = new.catalog_id and c.owner_id = new.owner_id and c.status = 'staging'
-)
-begin
-  select raise(abort, 'archive_sync_not_writable');
-end;
 
 create index idx_cs_archive_entries_page
   on creative_archive_entries(owner_id, catalog_id, sort_name, id);

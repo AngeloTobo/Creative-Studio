@@ -466,7 +466,11 @@ export async function putArchiveCatalogEntries(env: Env, runner: RunnerIdentity,
   const statements = [
     env.DB.prepare(`insert into creative_archive_sync_batches (
       catalog_id, owner_id, batch_key, payload_fingerprint, entry_count, created_at
-    ) values (?, ?, ?, ?, ?, ?)`).bind(catalogId, runner.ownerId, input.batchKey, payloadFingerprint, input.entries.length, now),
+    ) select ?, ?, ?, ?, ?, ? where exists (
+      select 1 from creative_archive_catalogs c
+      where c.id = ? and c.owner_id = ? and c.runner_id = ? and c.status = 'staging'
+    )`).bind(catalogId, runner.ownerId, input.batchKey, payloadFingerprint, input.entries.length, now,
+      catalogId, runner.ownerId, runner.id),
     env.DB.prepare(`insert into creative_archive_entries (
       id, owner_id, catalog_id, source_record_type, source_record_id, inventory_record_id, display_name, sort_name,
       extension, media_kind, mime_type, technical_category, work_bucket, archive_disposition, observed_year, size,
@@ -478,8 +482,11 @@ export async function putArchiveCatalogEntries(env: Env, runner: RunnerIdentity,
       json_extract(value, '$.workBucket'), json_extract(value, '$.archiveDisposition'), json_extract(value, '$.observedYear'),
       json_extract(value, '$.size'), json_extract(value, '$.sourceStatus'), json_extract(value, '$.verificationStatus'),
       json_extract(value, '$.materializable'), json_extract(value, '$.materializationBlockReason'),
-      json_extract(value, '$.recordFingerprint'), ? from json_each(?)`)
-      .bind(runner.ownerId, catalogId, now, JSON.stringify(entryRows)),
+      json_extract(value, '$.recordFingerprint'), ? from json_each(?) where exists (
+        select 1 from creative_archive_catalogs c
+        where c.id = ? and c.owner_id = ? and c.runner_id = ? and c.status = 'staging'
+      )`)
+      .bind(runner.ownerId, catalogId, now, JSON.stringify(entryRows), catalogId, runner.ownerId, runner.id),
     env.DB.prepare(`update creative_archive_catalogs set received_entry_count = received_entry_count + ?,
       materializable_entry_count = materializable_entry_count + ?
       where id = ? and owner_id = ? and runner_id = ? and status = 'staging'`)
@@ -501,6 +508,14 @@ export async function putArchiveCatalogEntries(env: Env, runner: RunnerIdentity,
       where id = ? and owner_id = ? and runner_id = ? and status = 'staging'`)
       .bind(catalogId, runner.ownerId, runner.id).run();
     throw new Error(raced ? "archive_sync_batch_conflict" : "archive_sync_entry_conflict");
+  }
+  const persisted = await env.DB.prepare(`select payload_fingerprint as payloadFingerprint, entry_count as entryCount
+    from creative_archive_sync_batches where catalog_id = ? and owner_id = ? and batch_key = ?`)
+    .bind(catalogId, runner.ownerId, input.batchKey).first<{ payloadFingerprint: string; entryCount: number }>();
+  if (!persisted || persisted.payloadFingerprint !== payloadFingerprint || Number(persisted.entryCount) !== input.entries.length) {
+    const current = await catalogById(env, runner.ownerId, catalogId);
+    if (!current || current.runnerId !== runner.id || current.status !== "staging") throw new Error("archive_sync_not_writable");
+    throw new Error(persisted ? "archive_sync_batch_conflict" : "archive_sync_entry_conflict");
   }
   return (await catalogById(env, runner.ownerId, catalogId))!;
 }
