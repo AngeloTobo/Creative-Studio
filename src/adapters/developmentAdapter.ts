@@ -784,15 +784,6 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
         total: artifacts.length,
       };
     },
-    async listArchiveEntries() {
-      return { catalog: null, entries: [], nextCursor: null, hasMore: false, total: 0 };
-    },
-    async createArchiveMaterialization() {
-      throw new Error("archive_index_requires_creative_studio_worker");
-    },
-    async getArchiveMaterialization() {
-      throw new Error("archive_index_requires_creative_studio_worker");
-    },
     async uploadMedia() {
       throw new Error("media_upload_requires_creative_studio_worker");
     },

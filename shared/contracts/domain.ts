@@ -316,28 +316,13 @@ export type MediaAsset = {
   originalFileName: string;
   mimeType: string;
   size: number;
-  source: "upload" | "archive-index";
+  source: "upload";
   status: "retained";
   contentUrl: string;
   trainingEligible: boolean;
   provenance: {
     uploadedByOwner: true;
     uploadedAt: IsoDateString;
-    parentAssetIds: string[];
-  } | {
-    materializedFromArchive: true;
-    provider: "angelo-art-index";
-    catalogId: string;
-    archiveEntryId: string;
-    materializationId: string;
-    sourceVersion: string;
-    sourceFingerprint: string;
-    sourceRecordType: string;
-    sourceRecordId: string;
-    inventoryRecordId: string | null;
-    requestedByOwner: true;
-    materializedAt: IsoDateString;
-    verification: "size-match";
     parentAssetIds: string[];
   };
   createdAt: IsoDateString;

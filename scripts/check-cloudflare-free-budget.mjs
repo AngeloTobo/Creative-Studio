@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
 
 const root = new URL("../", import.meta.url);
 const config = JSON.parse(readFileSync(new URL("wrangler.jsonc", root), "utf8"));
@@ -10,6 +11,59 @@ const runtime = readFileSync(new URL("src/config/runtime.ts", root), "utf8");
 const jobs = readFileSync(new URL("worker/jobs.ts", root), "utf8");
 const workerEntry = readFileSync(new URL("worker/index.ts", root), "utf8");
 const issues = [];
+
+function filesUnder(directory, extensions) {
+  return readdirSync(new URL(`${directory}/`, root), { withFileTypes: true }).flatMap((entry) => {
+    const relative = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) return filesUnder(relative, extensions);
+    return extensions.some((extension) => entry.name.endsWith(extension)) ? [relative] : [];
+  });
+}
+
+// The remote archive is intentionally not a row-per-file D1 catalog. One
+// 17,353-item sync consumed 192,000 billed writes once table indexes and
+// retries were counted. Future archive browsing must keep its bulk manifest
+// local or in R2 and reserve D1 for O(1) catalog/materialization metadata.
+const frozenArchiveMigration = "migrations/0025_archive_index.sql";
+const frozenArchiveMigrationHash = "f26930ab32d30d0c4a470005bedbb6e8e1798da5fcb03eff79db4eb60d2c6ea6";
+const frozenArchiveMigrationSource = readFileSync(new URL(frozenArchiveMigration, root), "utf8").replace(/\r\n/g, "\n");
+const actualFrozenArchiveMigrationHash = createHash("sha256").update(frozenArchiveMigrationSource).digest("hex");
+if (actualFrozenArchiveMigrationHash !== frozenArchiveMigrationHash) {
+  issues.push(`${frozenArchiveMigration} is applied production history and must remain content-immutable.`);
+}
+
+const perItemCatalogTable = /(?:archive|catalog|index|manifest).*?(?:entry|item|record|asset|file)|(?:entry|item|record|asset|file).*?(?:archive|catalog|index|manifest)/i;
+for (const relative of filesUnder("migrations", [".sql"]).filter((file) => file !== frozenArchiveMigration)) {
+  const source = readFileSync(new URL(relative, root), "utf8");
+  for (const match of source.matchAll(/\bcreate\s+table(?:\s+if\s+not\s+exists)?\s+([a-z0-9_]+)/gi)) {
+    if (perItemCatalogTable.test(match[1])) {
+      issues.push(`${relative} creates per-item catalog table ${match[1]} in D1; keep bulk manifests local or in R2.`);
+    }
+  }
+}
+
+const retiredArchiveTables = new Set([
+  "creative_archive_catalogs",
+  "creative_archive_sync_batches",
+  "creative_archive_entries",
+  "creative_archive_materializations",
+]);
+for (const relative of filesUnder("worker", [".ts"])) {
+  const source = readFileSync(new URL(relative, root), "utf8");
+  for (const match of source.matchAll(/\b(?:insert(?:\s+or\s+\w+)?\s+into|replace\s+into|update|delete\s+from)\s+([a-z0-9_]+)/gi)) {
+    if (retiredArchiveTables.has(match[1].toLowerCase())) {
+      issues.push(`${relative} mutates retired row-based archive table ${match[1]}; the applied schema must remain inert.`);
+    }
+  }
+}
+
+const retiredArchiveSyncMarkers = ["archiveCatalogBatches", "/archive-index/syncs", 'kind === "archive-sync"'];
+for (const relative of filesUnder("runner", [".js", ".mjs", ".ts"])) {
+  const source = readFileSync(new URL(relative, root), "utf8");
+  for (const marker of retiredArchiveSyncMarkers) {
+    if (source.includes(marker)) issues.push(`${relative} restores retired autonomous archive sync marker ${marker}.`);
+  }
+}
 
 const consumer = production.queues?.consumers?.find((item) => item.queue === "creative-studio-jobs");
 const crons = production.triggers?.crons ?? [];

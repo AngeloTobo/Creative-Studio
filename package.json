@@ -8,7 +8,7 @@
     "dev:worker": "wrangler dev --local --port 8787",
     "local": "node scripts/start-local-studio.mjs",
     "db:local": "wrangler d1 migrations apply creative-studio --local",
-    "db:production": "wrangler d1 migrations apply creative-studio --remote --env production",
+    "db:production": "npm run check:cloudflare-free && wrangler d1 migrations apply creative-studio --remote --env production",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.worker-test.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
     "test": "vitest run",

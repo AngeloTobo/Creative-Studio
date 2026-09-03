@@ -3,7 +3,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import type {
   CreateCreativeDnaRequest,
-  CreateArchiveMaterializationRequest,
   CreateVideoPromptEnhancementRequest,
   CreateVideoScriptDraftRequest,
   CreativeDnaArtifact,
@@ -272,8 +271,6 @@ type MockVideoBackend = {
     scope?: "library-current" | "execution-only";
   }>;
   uploads: Array<{ fileName: string; contentType: string; size: number }>;
-  archiveQueries: Array<Record<string, string>>;
-  archiveMaterializations: Array<{ entryId: string; input: CreateArchiveMaterializationRequest }>;
   workflow: () => WorkflowDefinition;
   workflowByRevision: (revisionId: string) => WorkflowDefinition | null;
   releaseRevision: () => void;
@@ -287,7 +284,7 @@ function json(route: Route, body: unknown, status = 200) {
 async function installVideoBackend(
   page: Page,
   withEnhancement: boolean,
-  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean; failEnhancementCompletionOnce?: boolean; failArchiveMaterializationOnce?: boolean } = {},
+  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean; failEnhancementCompletionOnce?: boolean } = {},
 ): Promise<MockVideoBackend> {
   let workflow = initialWorkflow();
   let revision = 1;
@@ -299,8 +296,6 @@ async function installVideoBackend(
   const videoScriptRequests: CreateVideoScriptDraftRequest[] = [];
   const revisionRequests: MockVideoBackend["revisionRequests"] = [];
   const uploads: MockVideoBackend["uploads"] = [];
-  const archiveQueries: MockVideoBackend["archiveQueries"] = [];
-  const archiveMaterializations: MockVideoBackend["archiveMaterializations"] = [];
   const uploadedAssets: MediaAsset[] = [];
   let promptEnhancement: VideoPromptEnhancement | null = null;
   let videoScriptDraft: VideoScriptDraft | null = null;
@@ -395,133 +390,6 @@ async function installVideoBackend(
       const snapshot = baseSnapshot(workflow, jobs, promptEnhancement, withEnhancement, createdDna);
       snapshot.mediaAssets.push(...uploadedAssets);
       await json(route, { snapshot });
-      return;
-    }
-
-    if (request.method() === "GET" && pathname === "/api/creative-studio/archive-index/entries") {
-      const url = new URL(request.url());
-      archiveQueries.push(Object.fromEntries(url.searchParams));
-      const catalog = {
-        schemaVersion: "creative-studio-archive-catalog/1.0",
-        id: "archive_catalog_e2e",
-        provider: "angelo-art-index",
-        runnerId: "runner_e2e",
-        sourceVersion: "completion-v1",
-        sourceFingerprint: "archive-e2e-fingerprint",
-        status: "active",
-        expectedEntryCount: 2,
-        expectedVerifiedCount: 2,
-        expectedUnavailableCount: 0,
-        receivedEntryCount: 2,
-        materializableEntryCount: 2,
-        createdAt: NOW,
-        publishedAt: NOW,
-      };
-      const entries = [{
-        id: "archive_entry_opal",
-        catalogId: catalog.id,
-        sourceRecordType: "completion",
-        sourceRecordId: "record-opal",
-        inventoryRecordId: "inventory-opal",
-        displayName: "Opal garden study",
-        extension: ".png",
-        mediaKind: "image",
-        mimeType: "image/png",
-        technicalCategory: "image",
-        workBucket: "Rebecca studies",
-        archiveDisposition: "project",
-        observedYear: 2025,
-        size: 68,
-        sourceStatus: "available",
-        verificationStatus: "size-match",
-        materializable: true,
-        materializationBlockReason: null,
-      }, {
-        id: "archive_entry_violet",
-        catalogId: catalog.id,
-        sourceRecordType: "completion",
-        sourceRecordId: "record-violet",
-        inventoryRecordId: "inventory-violet",
-        displayName: "Violet canopy frame",
-        extension: ".jpg",
-        mediaKind: "image",
-        mimeType: "image/jpeg",
-        technicalCategory: "image",
-        workBucket: "City studies",
-        archiveDisposition: "asset",
-        observedYear: 2024,
-        size: 96,
-        sourceStatus: "available",
-        verificationStatus: "size-match",
-        materializable: true,
-        materializationBlockReason: null,
-      }];
-      await json(route, { page: { catalog, entries, nextCursor: null, hasMore: false, total: entries.length } });
-      return;
-    }
-
-    const archiveMaterializationMatch = pathname.match(/^\/api\/creative-studio\/archive-index\/entries\/([^/]+)\/materializations$/);
-    if (request.method() === "POST" && archiveMaterializationMatch) {
-      const input = request.postDataJSON() as CreateArchiveMaterializationRequest;
-      const entryId = decodeURIComponent(archiveMaterializationMatch[1]);
-      archiveMaterializations.push({ entryId, input });
-      if (options.failArchiveMaterializationOnce && archiveMaterializations.length === 1) {
-        await json(route, { error: "archive_materialization_copy_verification_failed" }, 409);
-        return;
-      }
-      const createdAt = new Date(Date.parse(NOW) + 17_000).toISOString();
-      const materializationId = `archive_materialization_e2e_${archiveMaterializations.length}`;
-      const asset: MediaAsset = {
-        id: "media_archive_opal_e2e",
-        projectId: input.projectId,
-        kind: "image",
-        name: "Opal garden study",
-        originalFileName: "opal-garden-study.png",
-        mimeType: "image/png",
-        size: 68,
-        source: "archive-index",
-        status: "retained",
-        contentUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        trainingEligible: false,
-        provenance: {
-          materializedFromArchive: true,
-          provider: "angelo-art-index",
-          catalogId: "archive_catalog_e2e",
-          archiveEntryId: entryId,
-          materializationId,
-          sourceVersion: "completion-v1",
-          sourceFingerprint: "archive-e2e-fingerprint",
-          sourceRecordType: "completion",
-          sourceRecordId: entryId === "archive_entry_violet" ? "record-violet" : "record-opal",
-          inventoryRecordId: entryId === "archive_entry_violet" ? "inventory-violet" : "inventory-opal",
-          requestedByOwner: true,
-          materializedAt: createdAt,
-          verification: "size-match",
-          parentAssetIds: [],
-        },
-        createdAt,
-        updatedAt: createdAt,
-      };
-      if (!uploadedAssets.some((item) => item.id === asset.id)) uploadedAssets.push(asset);
-      await json(route, {
-        materialization: {
-          schemaVersion: "creative-studio-archive-materialization/1.0",
-          id: materializationId,
-          catalogId: "archive_catalog_e2e",
-          entryId,
-          projectId: input.projectId,
-          runnerId: "runner_e2e",
-          status: "completed",
-          trainingEligible: false,
-          mediaAssetId: asset.id,
-          error: null,
-          createdAt,
-          updatedAt: createdAt,
-          startedAt: createdAt,
-          completedAt: createdAt,
-        },
-        asset,
-      }, 202);
       return;
     }
 
@@ -754,8 +622,6 @@ async function installVideoBackend(
     videoScriptRequests,
     revisionRequests,
     uploads,
-    archiveQueries,
-    archiveMaterializations,
     workflow: () => workflow,
     workflowByRevision: (revisionId) => workflowRevisions.get(revisionId) ?? null,
     releaseRevision,
@@ -1245,64 +1111,6 @@ test("Simple Create uploads a source in place and preserves the authored prompt 
   await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
   expect(backend.jobs.every((job) => job.workflow?.inputBindings[IMAGE_PARAMETER_ID] === "media_uploaded_e2e_1")).toBe(true);
   expect(backend.jobs.map((job) => job.videoVariant?.role)).toEqual(["aligned", "discovery"]);
-});
-
-test("Angelo Art Index adds a verified image without changing the prompt or generating early", async ({ page }) => {
-  const backend = await installVideoBackend(page, false, { failArchiveMaterializationOnce: true });
-  await page.goto(`${HTTP_STUDIO}/#/dna`);
-
-  await page.getByRole("button", { name: "Video", exact: true }).click();
-  const direction = page.getByLabel("Describe the video");
-  const authoredPrompt = "The opal figure crosses the garden while a violet canopy opens overhead.";
-  await direction.fill(authoredPrompt);
-  await openRetainedWork(page);
-  await page.getByRole("button", { name: "Browse Angelo Art Index" }).click();
-
-  const index = page.getByRole("region", { name: "Angelo Art Index" });
-  await expect(index).toBeVisible();
-  await expect(index.getByRole("option")).toHaveCount(2);
-  await expect.poll(() => backend.archiveQueries.length).toBe(1);
-  expect(backend.archiveQueries[0]).toMatchObject({ mediaKind: "image", materializable: "true", limit: "24" });
-  await index.getByRole("option", { name: "Select Opal garden study from Angelo Art Index" }).click();
-  await index.getByRole("button", { name: "Add to project" }).click();
-
-  await expect(index.getByRole("alert")).toContainText("could not make a safe project copy");
-  await expect(index).not.toContainText("archive_materialization_copy_verification_failed");
-  await expect(direction).toHaveValue(authoredPrompt);
-  expect(backend.jobs).toHaveLength(0);
-  await index.getByRole("button", { name: "Try again" }).click();
-
-  await expect(page.locator(".quick-compose-source > summary")).toContainText("Opal garden study");
-  await expect(page.getByRole("region", { name: "Source and creation type" }).getByRole("img", { name: "Opal garden study source" })).toBeVisible();
-  await expect(direction).toHaveValue(authoredPrompt);
-  expect(backend.archiveMaterializations).toHaveLength(2);
-  expect(backend.archiveMaterializations[1].input.idempotencyKey).toBe(backend.archiveMaterializations[0].input.idempotencyKey);
-  expect(backend.archiveMaterializations[1].input).toMatchObject({ projectId: "project_video_e2e", trainingEligible: false });
-  expect(backend.jobs).toHaveLength(0);
-
-  await page.locator(".quick-primary").click();
-  await expect.poll(() => backend.jobs.length, { timeout: 15_000 }).toBe(2);
-  expect(backend.jobs.every((job) => job.workflow?.inputBindings[IMAGE_PARAMETER_ID] === "media_archive_opal_e2e")).toBe(true);
-});
-
-test("Angelo Art Index avoids a prompt-only image-model trap by choosing compatible video", async ({ page }) => {
-  const backend = await installVideoBackend(page, false);
-  await page.goto(`${HTTP_STUDIO}/#/dna`);
-
-  const authoredPrompt = "A glass garden opens slowly beneath a violet moon.";
-  await page.getByLabel("Describe the image").fill(authoredPrompt);
-  await openRetainedWork(page);
-  await page.getByRole("button", { name: "Browse Angelo Art Index" }).click();
-  const index = page.getByRole("region", { name: "Angelo Art Index" });
-  await index.getByRole("option", { name: "Select Opal garden study from Angelo Art Index" }).click();
-  await index.getByRole("button", { name: "Add to project" }).click();
-
-  await expect(page.getByRole("button", { name: "Video", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByLabel("Describe the video")).toHaveValue(authoredPrompt);
-  await expect(page.getByRole("region", { name: "Source and creation type" }).getByRole("img", { name: "Opal garden study source" })).toBeVisible();
-  await expect(page.getByText("Your installed image model is prompt-only", { exact: false })).toBeVisible();
-  await expect(page.getByText("cannot use Opal garden study", { exact: false })).toHaveCount(0);
-  expect(backend.jobs).toHaveLength(0);
 });
 
 test("Longer video settings require an explicit workload confirmation", async ({ page }) => {

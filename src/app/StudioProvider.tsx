@@ -1,10 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { deriveEvolutionStudies, primaryWorkflowPromptParameter } from "../../shared/contracts";
 import type {
   AcceptanceDecision,
-  ArchiveEntryPage,
-  ArchiveEntryQuery,
   CreateProjectRequest,
   CreateCreativeDnaRequest,
   CreativeDnaArtifact,
@@ -80,7 +78,6 @@ import type {
 } from "../../shared/contracts";
 import { createStudioAdapter, type StudioAdapter } from "../adapters";
 import { isVideoPromptEnhancementError, videoPromptEnhancementErrorMessage } from "./videoPromptEnhancementErrorMessage";
-import { archiveSourceErrorMessage, isArchiveSourceError } from "./archiveSourceErrorMessage";
 
 type WithoutOwnerRequest<T> = T extends unknown ? Omit<T, "projectId" | "idempotencyKey"> : never;
 type CreateVideoScriptDraftInput = WithoutOwnerRequest<CreateVideoScriptDraftRequest>;
@@ -112,8 +109,6 @@ type StudioContextValue = {
   cancelJob: (jobId: string) => Promise<void>;
   reviewArtifact: (artifactId: string, decision: AcceptanceDecision, note: string) => Promise<ReviewArtifactResponse>;
   loadArtifactHistory: (query: ArtifactHistoryQuery) => Promise<ArtifactHistoryPage>;
-  listArchiveEntries: (query: ArchiveEntryQuery) => Promise<ArchiveEntryPage>;
-  addArchiveEntryToProject: (entryId: string) => Promise<MediaAsset>;
   createWorld: (input: CreateWorldRequest) => Promise<World>;
   updateWorld: (worldId: string, input: UpdateWorldRequest) => Promise<World>;
   archiveWorld: (worldId: string, expectedVersion: number) => Promise<World>;
@@ -299,7 +294,6 @@ function message(error: unknown) {
   if (error.message === "love_loop_recipe_mismatch" || error.message === "love_loop_recipe_changed" || error.message === "love_loop_workflow_changed") return "A Love Loop workflow or recipe changed. Use Repair & resume to bind the current fast model.";
   if (error.message === "love_loop_failure_limit_reached") return "Three recent Love Loop renders failed. Inspect their errors, then use Repair & resume.";
   if (isVideoPromptEnhancementError(error)) return videoPromptEnhancementErrorMessage(error);
-  if (isArchiveSourceError(error)) return archiveSourceErrorMessage(error);
   return error.message.replaceAll("_", " ");
 }
 
@@ -329,13 +323,6 @@ function operationKey(prefix: string) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
-const ARCHIVE_MATERIALIZATION_POLL_INTERVAL_MS = 2_000;
-const ARCHIVE_MATERIALIZATION_POLL_ATTEMPTS = 90;
-
-function waitForArchiveMaterializationPoll() {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, ARCHIVE_MATERIALIZATION_POLL_INTERVAL_MS));
-}
-
 function mergeById<T extends { id: string }>(older: readonly T[], newer: readonly T[]) {
   const records = new Map(older.map((item) => [item.id, item]));
   for (const item of newer) records.set(item.id, item);
@@ -358,8 +345,6 @@ function mergeSnapshotHistory(current: StudioSnapshot | null, next: StudioSnapsh
 export function StudioProvider({ children }: { children: ReactNode }) {
   const [adapter] = useState<StudioAdapter>(() => createStudioAdapter());
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
-  const archiveMaterializationKeys = useRef(new Map<string, string>());
-  const archiveMaterializationPromises = useRef(new Map<string, Promise<MediaAsset>>());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -635,60 +620,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     }
   }, [activeProjectId, adapter]);
 
-  const listArchiveEntries = useCallback((query: ArchiveEntryQuery) => adapter.listArchiveEntries(query), [adapter]);
-
-  const addArchiveEntryToProject = useCallback(async (entryId: string) => {
-    if (!activeProjectId) throw new Error("project_required");
-    const projectId = activeProjectId;
-    const operationId = JSON.stringify([projectId, entryId]);
-    const pending = archiveMaterializationPromises.current.get(operationId);
-    if (pending) return pending;
-    const idempotencyKey = archiveMaterializationKeys.current.get(operationId) ?? operationKey("archive_materialize");
-    archiveMaterializationKeys.current.set(operationId, idempotencyKey);
-    const operation = Promise.resolve().then(async () => {
-      setBusy(true);
-      setError("");
-      try {
-        let result = await adapter.createArchiveMaterialization(entryId, {
-          projectId,
-          idempotencyKey,
-          trainingEligible: false,
-        });
-        for (let attempt = 0; attempt < ARCHIVE_MATERIALIZATION_POLL_ATTEMPTS; attempt += 1) {
-          if (result.materialization.status === "failed") {
-            throw new Error(result.materialization.error || "archive_materialization_failed");
-          }
-          if (result.materialization.status === "completed") {
-            if (!result.asset) throw new Error("archive_materialization_asset_missing");
-            const asset = result.asset;
-            setSnapshot((current) => current ? {
-              ...current,
-              mediaAssets: mergeById(current.mediaAssets, [asset])
-                .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)),
-            } : current);
-            return asset;
-          }
-          await waitForArchiveMaterializationPoll();
-          result = await adapter.getArchiveMaterialization(result.materialization.id);
-        }
-        throw new Error("archive_materialization_timed_out");
-      } catch (nextError) {
-        setError(archiveSourceErrorMessage(nextError));
-        throw nextError;
-      } finally {
-        setBusy(false);
-      }
-    });
-    archiveMaterializationPromises.current.set(operationId, operation);
-    const clearPending = () => {
-      if (archiveMaterializationPromises.current.get(operationId) === operation) {
-        archiveMaterializationPromises.current.delete(operationId);
-      }
-    };
-    void operation.then(clearPending, clearPending);
-    return operation;
-  }, [activeProjectId, adapter]);
-
   const createWorld = useCallback((input: CreateWorldRequest) => transact(() => adapter.createWorld(input)), [adapter, transact]);
   const updateWorld = useCallback((worldId: string, input: UpdateWorldRequest) => (
     transact(() => adapter.updateWorld(worldId, input))
@@ -900,8 +831,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     cancelJob,
     reviewArtifact,
     loadArtifactHistory,
-    listArchiveEntries,
-    addArchiveEntryToProject,
     createWorld,
     updateWorld,
     archiveWorld,
@@ -940,7 +869,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     refreshStoryBank,
     updateStoryThread,
     refresh,
-  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, submitWorkflowBatch, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, listArchiveEntries, addArchiveEntryToProject, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, configureLoveLoop, pauseLoveLoop, resumeLoveLoop, disableLoveLoop, refreshStoryBank, updateStoryThread, refresh]);
+  }), [snapshot, loading, busy, error, activeProjectId, activeDna, selectProject, selectDna, createProject, updateProject, archiveProject, saveDna, enhanceVideoPrompt, getVideoPromptEnhancement, createVideoScriptDraft, getVideoScriptDraft, updateVideoScriptDraft, submitAfdfwJob, submitDevelopmentPreviewJob, submitWorkflowJob, submitWorkflowBatch, retryJob, reuseJob, cancelJob, reviewArtifact, loadArtifactHistory, createWorld, updateWorld, archiveWorld, createWorldEntity, updateWorldEntity, createContinuityRule, updateContinuityRule, createCanonReference, updateCanonReference, promoteCanonReference, promoteArtifactToCanon, uploadMedia, uploadWorkflow, saveWorkflowRevision, createGenerationRecipe, updateGenerationRecipe, archiveGenerationRecipe, recordGenerationRecipeEvidence, startDnaTraining, cancelDnaTraining, reviewDnaTraining, startModelTraining, cancelModelTraining, reviewModelTrainingDataset, reviewModelAdapter, enrollLocalRunner, revokeLocalRunner, createOvernightSession, pauseOvernightSession, resumeOvernightSession, cancelOvernightSession, configureLoveLoop, pauseLoveLoop, resumeLoveLoop, disableLoveLoop, refreshStoryBank, updateStoryThread, refresh]);
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

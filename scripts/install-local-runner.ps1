@@ -1,7 +1,6 @@
 param(
   [string]$ApiBase = "https://runner.cs.angelotoborg.com",
   [string]$ComfyUrl = "http://127.0.0.1:8188",
-  [string]$ArchiveRoot = "D:\CreativeArchive",
   [string]$RunnerToken = "",
   [string]$OvernightRecoveryTime = "21:45"
 )
@@ -15,26 +14,18 @@ if (-not $RunnerToken) {
 }
 if ($RunnerToken -notmatch '^csr_[A-Za-z0-9_-]{40,80}$') { throw "The Creative Studio runner token is invalid." }
 if ($ComfyUrl -notmatch '^http://(127\.0\.0\.1|localhost)(:\d+)?$') { throw "ComfyUI must use a localhost URL." }
-$resolvedArchiveRoot = $null
-if ($ArchiveRoot) {
-  if (-not [IO.Path]::IsPathRooted($ArchiveRoot)) { throw "ArchiveRoot must be an absolute path." }
-  if (-not (Test-Path -LiteralPath $ArchiveRoot -PathType Container)) { throw "ArchiveRoot does not exist: $ArchiveRoot" }
-  $resolvedArchiveRoot = (Resolve-Path -LiteralPath $ArchiveRoot).Path
-}
 try { $overnightStart = [datetime]::ParseExact($OvernightRecoveryTime, "HH:mm", [Globalization.CultureInfo]::InvariantCulture) }
 catch { throw "OvernightRecoveryTime must use 24-hour HH:mm format, such as 21:45." }
 
 $configDirectory = Join-Path $env:LOCALAPPDATA "Creative Studio Runner"
 $configPath = Join-Path $configDirectory "config.json"
 New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
-$config = @{
+$configJson = @{
   apiBase = $ApiBase
   token = $RunnerToken
   comfyUrl = $ComfyUrl
   pollIntervalMs = 60000
-}
-if ($resolvedArchiveRoot) { $config.archiveRoot = $resolvedArchiveRoot }
-$configJson = $config | ConvertTo-Json
+} | ConvertTo-Json
 [IO.File]::WriteAllText($configPath, $configJson, (New-Object Text.UTF8Encoding($false)))
 
 $currentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -48,9 +39,8 @@ $triggers = @(
   (New-ScheduledTaskTrigger -Daily -At $overnightStart)
 )
 $settings = New-ScheduledTaskSettingsSet -RestartCount 12 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -StartWhenAvailable -WakeToRun
-Register-ScheduledTask -TaskName "Creative Studio Local Runner" -Action $action -Trigger $triggers -Settings $settings -Description "Runs authenticated Creative Studio work, including verified Angelo Art Index project copies, ComfyUI jobs, CreativeDNA evidence synthesis, and bounded overnight sessions without an open browser." -Force | Out-Null
+Register-ScheduledTask -TaskName "Creative Studio Local Runner" -Action $action -Trigger $triggers -Settings $settings -Description "Runs authenticated Creative Studio ComfyUI jobs, CreativeDNA evidence synthesis, and bounded overnight sessions without an open browser." -Force | Out-Null
 Start-ScheduledTask -TaskName "Creative Studio Local Runner"
 Write-Host "Creative Studio Local Runner installed and started."
 Write-Host "Config: $configPath"
-if ($resolvedArchiveRoot) { Write-Host "Angelo Art Index: $resolvedArchiveRoot" }
 Write-Host "Recovery trigger: $OvernightRecoveryTime daily (the machine and ComfyUI must be available for rendering)."

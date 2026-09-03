@@ -20,6 +20,14 @@ One browser snapshot request replaces the former twelve-request fan-out. The Loc
 
 The current Cloudflare limits used by this budget are documented in the official [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [Queues pricing](https://developers.cloudflare.com/queues/platform/pricing/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [R2 pricing](https://developers.cloudflare.com/r2/pricing/) pages. Limits are account-wide where Cloudflare specifies that scope, so other applications must be budgeted separately.
 
+## D1 write budget
+
+Workers Free permits `100,000` D1 rows written per UTC day. An indexed write counts once for the table row and again for every affected index, so logical records are not a safe estimate of quota cost.
+
+Remote archive discovery must never mirror one D1 row per local file. The retired `0025_archive_index.sql` schema is preserved only as immutable applied history; production runtime code may not mutate its catalog, batch, entry, or materialization tables. A future Archive-to-Create implementation must store the bulk manifest locally or in R2 and keep D1 work bounded to O(1) metadata per explicit owner action.
+
+`npm run check:cloudflare-free` enforces this boundary by fingerprinting the applied migration, scanning later migrations for per-item catalog tables, scanning Worker SQL for writes to the retired tables, and scanning the Runner for autonomous archive-sync markers. Both canonical deployment and standalone `npm run db:production` execute the guard before any remote migration.
+
 ## Storage and background work
 
 - D1 remains the durable authority and is kept within its free daily row-read and row-write allowances. The consolidated snapshot avoids repeating the same table reads across separate endpoints.

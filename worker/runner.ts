@@ -277,13 +277,6 @@ export async function revokeLocalRunner(env: Env, ownerId: string, runnerId: str
       runner_lease_until = null, error = null, updated_at = ?, started_at = null
       where owner_id = ? and runner_id = ? and status = 'running'`)
       .bind(now, ownerId, runnerId),
-    env.DB.prepare(`update creative_archive_catalogs set status = 'failed'
-      where owner_id = ? and runner_id = ? and status = 'staging'`)
-      .bind(ownerId, runnerId),
-    env.DB.prepare(`update creative_archive_materializations set status = 'failed', error = 'runner_revoked',
-      runner_lease_until = null, updated_at = ?, completed_at = ?
-      where owner_id = ? and runner_id = ? and status in ('waiting-for-runner', 'running')`)
-      .bind(now, now, ownerId, runnerId),
   ]);
   const row = await env.DB.prepare(`select ${RUNNER_COLUMNS} from creative_runners where id = ? and owner_id = ?`)
     .bind(runnerId, ownerId).first<RunnerRow>();
@@ -603,10 +596,7 @@ export function isLocalRunnerRoute(route: string) {
     || route === "runner-overnight-heartbeat" || route === "runner-overnight-complete"
     || route === "runner-overnight-fail"
     || route === "runner-story-plan-heartbeat" || route === "runner-story-plan-complete"
-    || route === "runner-story-plan-fail"
-    || route === "runner-archive-sync-start" || route === "runner-archive-sync-batch"
-    || route === "runner-archive-sync-complete" || route === "runner-archive-materialization-claim"
-    || route === "runner-archive-materialization-complete" || route === "runner-archive-materialization-fail";
+    || route === "runner-story-plan-fail";
 }
 
 export function localRunnerJobLabel(job: Job) {
