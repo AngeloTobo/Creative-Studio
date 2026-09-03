@@ -17,6 +17,7 @@ import {
   trustedVideoPresetById,
   trustedVideoPresetStamp,
   type AcceptanceDecision,
+  type ArchiveEntryQuery,
   type ArtifactHistoryQuery,
   type Capability,
   type CreateCanonReferenceRequest,
@@ -94,6 +95,19 @@ import { backendMode } from "../config";
 import { enqueueJob } from "../jobs";
 import { body, boundedText, json } from "../lib/http";
 import { mediaContent, requestedMediaRange, uploadMedia } from "../media";
+import {
+  archiveIndexStatus,
+  archiveMaterializationById,
+  archiveSyncWork,
+  claimArchiveMaterialization,
+  completeArchiveCatalogSync,
+  completeArchiveMaterialization,
+  createArchiveMaterialization,
+  failArchiveMaterialization,
+  listArchiveEntries,
+  putArchiveCatalogEntries,
+  startArchiveCatalogSync,
+} from "../archiveIndex";
 import {
   artifactMediaPath,
   artifactThumbnailPath,
@@ -296,6 +310,7 @@ function statusFor(error: string) {
   if (error === "unsupported_workflow_type") return 415;
   if (error === "unsupported_runner_output_type") return 415;
   if (error === "media_upload_verification_failed") return 502;
+  if (error === "archive_materialization_verification_failed" || error === "archive_materialization_retention_failed") return 502;
   if (error === "invalid_media_range") return 416;
   if (error === "generation_in_progress" || error === "job_not_cancellable" || error === "job_not_retryable"
     || error === "training_job_not_claimable" || error === "training_job_not_cancellable" || error === "training_job_not_completable"
@@ -322,6 +337,12 @@ function statusFor(error: string) {
   if (error === "story_plan_not_completable" || error === "story_thread_version_conflict"
     || error === "story_recommendation_changed") return 409;
   if (error === "generation_batch_conflict" || error === "generation_batch_terminal") return 409;
+  if (error === "archive_sync_source_conflict" || error === "archive_sync_batch_conflict"
+    || error === "archive_sync_entry_conflict" || error === "archive_sync_not_writable"
+    || error === "archive_sync_not_completable" || error === "archive_sync_count_mismatch"
+    || error === "archive_entry_not_materializable" || error === "archive_materialization_idempotency_conflict"
+    || error === "archive_materialization_not_claimable" || error === "archive_materialization_not_completable"
+    || error === "archive_materialization_source_mismatch") return 409;
   if (error.endsWith("_version_conflict") || error === "artifact_acceptance_required" || error === "artifact_acceptance_mismatch"
     || error === "canon_reference_artifact_acceptance_required" || error === "canon_promotion_prerequisite_changed"
     || error === "artifact_already_canonical") return 409;
@@ -358,6 +379,26 @@ function artifactHistoryQuery(url: URL): ArtifactHistoryQuery {
     statuses,
     includeArchived: url.searchParams.get("includeArchived") === "true",
     search: boundedText(url.searchParams.get("q"), 120),
+  };
+}
+
+function archiveEntryQuery(url: URL): ArchiveEntryQuery {
+  const cursorCatalogId = boundedText(url.searchParams.get("cursorCatalogId"), 100);
+  const cursorSortName = boundedText(url.searchParams.get("cursorSortName"), 240);
+  const cursorEntryId = boundedText(url.searchParams.get("cursorEntryId"), 100);
+  const cursorParts = [cursorCatalogId, cursorSortName, cursorEntryId].filter(Boolean).length;
+  if (cursorParts !== 0 && cursorParts !== 3) throw new Error("invalid_archive_entry_cursor");
+  const limit = url.searchParams.get("limit");
+  const observedYear = url.searchParams.get("observedYear");
+  const materializable = url.searchParams.get("materializable");
+  if (materializable !== null && materializable !== "true" && materializable !== "false") throw new Error("invalid_archive_entry_filter");
+  return {
+    cursor: cursorParts === 3 ? { catalogId: cursorCatalogId, sortName: cursorSortName, entryId: cursorEntryId } : null,
+    limit: limit === null ? undefined : Number(limit),
+    search: boundedText(url.searchParams.get("search"), 120),
+    mediaKind: (boundedText(url.searchParams.get("mediaKind"), 20) || null) as ArchiveEntryQuery["mediaKind"],
+    observedYear: observedYear === null || observedYear === "" ? null : Number(observedYear),
+    materializable: materializable === null ? null : materializable === "true",
   };
 }
 
@@ -862,6 +903,12 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     if (!input) throw new Error("invalid_runner_request");
     const heartbeat = await heartbeatLocalRunner(env, runner, input);
     const currentRunner = { ...runner, version: heartbeat.version };
+    const archiveSync = await archiveSyncWork(env, currentRunner, input.archiveIndex);
+    if (archiveSync) return json({ ok: true, kind: "archive-sync", bundle: archiveSync });
+    if (input.archiveIndex?.state === "ready") {
+      const materialization = await claimArchiveMaterialization(env, currentRunner);
+      if (materialization) return json({ ok: true, kind: "archive-materialization", bundle: materialization });
+    }
     if (input.comfyReady !== true) return json({ ok: true, kind: null, bundle: null });
     await reconcileLoveLoops(env, currentRunner.ownerId);
     await reconcileOvernightSessions(env, currentRunner.ownerId);
@@ -892,6 +939,40 @@ async function routeLocalRunnerRequest(request: Request, env: Env, route: NonNul
     const input = await body<RunnerHeartbeatRequest>(request);
     if (!input) throw new Error("invalid_runner_request");
     return json({ ok: true, runner: await heartbeatLocalRunner(env, runner, input) });
+  }
+  if (route === "runner-archive-sync-start") {
+    const input = await body<unknown>(request);
+    if (!input) throw new Error("invalid_archive_sync_request");
+    return json({ ok: true, catalog: await startArchiveCatalogSync(env, runner, input) });
+  }
+  if (route === "runner-archive-sync-batch") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/archive-index\/syncs\/([a-z0-9_]+)\/entries$/i);
+    const input = await body<unknown>(request);
+    if (!match || !input) throw new Error("invalid_archive_sync_batch");
+    return json({ ok: true, catalog: await putArchiveCatalogEntries(env, runner, match[1], input) });
+  }
+  if (route === "runner-archive-sync-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/archive-index\/syncs\/([a-z0-9_]+)\/complete$/i);
+    const input = await body<unknown>(request);
+    if (!match || !input) throw new Error("invalid_archive_sync_request");
+    return json({ ok: true, catalog: await completeArchiveCatalogSync(env, runner, match[1], input) });
+  }
+  if (route === "runner-archive-materialization-claim") {
+    return json({ ok: true, bundle: await claimArchiveMaterialization(env, runner) });
+  }
+  if (route === "runner-archive-materialization-complete") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/archive-materializations\/([a-z0-9_]+)\/complete$/i);
+    if (!match || !request.body) throw new Error("empty_archive_materialization");
+    const declaredSize = Number(request.headers.get("x-cs-file-size") ?? request.headers.get("content-length"));
+    return json({ ok: true, ...await completeArchiveMaterialization(env, runner, match[1],
+      request.headers.get("x-cs-claim-token"), request.body, request.headers.get("content-type") ?? "", declaredSize) });
+  }
+  if (route === "runner-archive-materialization-fail") {
+    const match = url.pathname.match(/^\/api\/creative-studio\/runner\/archive-materializations\/([a-z0-9_]+)\/fail$/i);
+    const input = await body<unknown>(request);
+    if (!match || !input) throw new Error("invalid_archive_materialization_failure");
+    return json({ ok: true, ...await failArchiveMaterialization(env, runner, match[1],
+      request.headers.get("x-cs-claim-token"), input) });
   }
   if (route === "runner-overnight-heartbeat") {
     const match = url.pathname.match(/^\/api\/creative-studio\/runner\/overnight\/([a-z0-9_]+)\/heartbeat$/i);
@@ -1775,6 +1856,23 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const match = url.pathname.match(/^\/api\/creative-studio\/media\/([a-z0-9_]+)\/content$/i);
       if (!match) return json({ ok: false, error: "invalid_media_route" }, { status: 400 });
       return await mediaContent(env, request, session.userId, match[1]);
+    }
+    if (route === "archive-index-status") {
+      return json({ ok: true, ...await archiveIndexStatus(env, session.userId) });
+    }
+    if (route === "archive-index-list") {
+      return json({ ok: true, page: await listArchiveEntries(env, session.userId, archiveEntryQuery(url)) });
+    }
+    if (route === "archive-materialization-create") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/archive-index\/entries\/([a-z0-9_]+)\/materializations$/i);
+      const input = await body<unknown>(request);
+      if (!match || !input) throw new Error("invalid_archive_materialization_request");
+      return json({ ok: true, ...await createArchiveMaterialization(env, session.userId, match[1], input) }, { status: 202 });
+    }
+    if (route === "archive-materialization-get") {
+      const match = url.pathname.match(/^\/api\/creative-studio\/archive-index\/materializations\/([a-z0-9_]+)$/i);
+      if (!match) throw new Error("invalid_archive_materialization_request");
+      return json({ ok: true, ...await archiveMaterializationById(env, session.userId, match[1]) });
     }
     if (route === "workflows-list") return json({ ok: true, workflows: await listWorkflows(env, session.userId) });
     if (route === "workflow-import") return json({ ok: true, workflow: await importWorkflow(env, request, session.userId) }, { status: 201 });

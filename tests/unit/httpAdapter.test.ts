@@ -356,6 +356,100 @@ describe("HTTP adapter request budget", () => {
     expect(init).toMatchObject({ credentials: "include", headers: { "content-type": "application/json" } });
   });
 
+  it("uses encoded Art Index paging and explicit materialization endpoints", async () => {
+    const catalog = {
+      schemaVersion: "creative-studio-archive-catalog/1.0" as const,
+      id: "archive_catalog_1",
+      provider: "angelo-art-index" as const,
+      runnerId: "runner_1",
+      sourceVersion: "completion-v1",
+      sourceFingerprint: "fingerprint-1",
+      status: "active" as const,
+      expectedEntryCount: 1,
+      expectedVerifiedCount: 1,
+      expectedUnavailableCount: 0,
+      receivedEntryCount: 1,
+      materializableEntryCount: 1,
+      createdAt: now,
+      publishedAt: now,
+    };
+    const entry = {
+      id: "archive_entry_1",
+      catalogId: catalog.id,
+      sourceRecordType: "completion",
+      sourceRecordId: "record-1",
+      inventoryRecordId: "inventory-1",
+      displayName: "Opal study",
+      extension: ".png",
+      mediaKind: "image" as const,
+      mimeType: "image/png",
+      technicalCategory: "image",
+      workBucket: "Rebecca studies",
+      archiveDisposition: "project",
+      observedYear: 2025,
+      size: 68,
+      sourceStatus: "available",
+      verificationStatus: "size-match" as const,
+      materializable: true,
+      materializationBlockReason: null,
+    };
+    const materialization = {
+      schemaVersion: "creative-studio-archive-materialization/1.0" as const,
+      id: "archive_materialization_1",
+      catalogId: catalog.id,
+      entryId: entry.id,
+      projectId: "project_1",
+      runnerId: "runner_1",
+      status: "waiting-for-runner" as const,
+      trainingEligible: false,
+      mediaAssetId: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      completedAt: null,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+      const pathname = new URL(String(input), "https://creative-studio.test").pathname;
+      if (pathname.endsWith("/entries")) return Response.json({ ok: true, page: { catalog, entries: [entry], nextCursor: null, hasMore: false, total: 1 } });
+      return Response.json({ ok: true, materialization });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = createHttpAdapter();
+
+    await adapter.listArchiveEntries({
+      cursor: { catalogId: "catalog / current", sortName: "Opal & blue", entryId: "entry ? 1" },
+      limit: 24,
+      search: "  opal / blue  ",
+      mediaKind: "image",
+      observedYear: 2025,
+      materializable: true,
+    });
+    await adapter.createArchiveMaterialization(entry.id, { projectId: "project_1", idempotencyKey: "archive_once_1", trainingEligible: false });
+    await adapter.getArchiveMaterialization(materialization.id);
+
+    const listUrl = new URL(String(fetchMock.mock.calls[0][0]), "https://creative-studio.test");
+    expect(listUrl.pathname).toBe("/api/creative-studio/archive-index/entries");
+    expect(Object.fromEntries(listUrl.searchParams)).toMatchObject({
+      cursorCatalogId: "catalog / current",
+      cursorSortName: "Opal & blue",
+      cursorEntryId: "entry ? 1",
+      limit: "24",
+      search: "opal / blue",
+      mediaKind: "image",
+      observedYear: "2025",
+      materializable: "true",
+    });
+    expect(fetchMock.mock.calls.map(([url]) => new URL(String(url), "https://creative-studio.test").pathname)).toEqual([
+      "/api/creative-studio/archive-index/entries",
+      "/api/creative-studio/archive-index/entries/archive_entry_1/materializations",
+      "/api/creative-studio/archive-index/materializations/archive_materialization_1",
+    ]);
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ projectId: "project_1", idempotencyKey: "archive_once_1", trainingEligible: false });
+  });
+
   it("uses only the exact World and explicit canon-promotion endpoints", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       void init;

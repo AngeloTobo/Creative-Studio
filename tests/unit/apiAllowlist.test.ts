@@ -33,6 +33,10 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/media")).toBe("media-list");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/media")).toBe("media-upload");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/media/media_123/content")).toBe("media-content");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/archive-index/status")).toBe("archive-index-status");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/archive-index/entries")).toBe("archive-index-list");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/archive-index/entries/archiveentry_123/materializations")).toBe("archive-materialization-create");
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/archive-index/materializations/archivemat_123")).toBe("archive-materialization-get");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/workflows")).toBe("workflows-list");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/workflows")).toBe("workflow-import");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/workflows/workflow_123/revisions")).toBe("workflow-revision-create");
@@ -50,6 +54,12 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/production-cockpit")).toBe("production-cockpit");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/training/claim")).toBe("runner-training-claim");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/work/claim")).toBe("runner-work-claim");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/archive-index/syncs")).toBe("runner-archive-sync-start");
+    expect(matchCreativeStudioRoute("PUT", "/api/creative-studio/runner/archive-index/syncs/archivecatalog_123/entries")).toBe("runner-archive-sync-batch");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/archive-index/syncs/archivecatalog_123/complete")).toBe("runner-archive-sync-complete");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/archive-materializations/claim")).toBe("runner-archive-materialization-claim");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/archive-materializations/archivemat_123/complete")).toBe("runner-archive-materialization-complete");
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/archive-materializations/archivemat_123/fail")).toBe("runner-archive-materialization-fail");
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/love-loop")).toBe("love-loop-get");
     expect(matchCreativeStudioRoute("PUT", "/api/creative-studio/love-loop")).toBe("love-loop-configure");
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/love-loop/pause")).toBe("love-loop-pause");
@@ -75,5 +85,7 @@ describe("Creative Studio BFF route allowlist", () => {
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/artifacts/artifact_123/promote-to-canon")) .toBeNull();
     expect(matchCreativeStudioRoute("POST", "/api/creative-studio/love-loop/run-arbitrary")) .toBeNull();
     expect(matchCreativeStudioRoute("GET", "/api/creative-studio/worlds/world_123/references/reference_123")) .toBeNull();
+    expect(matchCreativeStudioRoute("GET", "/api/creative-studio/archive-index/entries/archiveentry_123/raw-path")) .toBeNull();
+    expect(matchCreativeStudioRoute("POST", "/api/creative-studio/runner/archive-index/arbitrary")) .toBeNull();
   });
 });

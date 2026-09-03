@@ -2,6 +2,10 @@ import {
   CREATIVE_STUDIO_ROUTES,
   type AcceptanceDecision,
   type ApiResult,
+  type ArchiveEntryPageResponse,
+  type ArchiveEntryQuery,
+  type ArchiveMaterializationResponse,
+  type CreateArchiveMaterializationRequest,
   type CreateCreativeDnaRequest,
   type CreateCreativeDnaResponse,
   type CreateProjectRequest,
@@ -140,6 +144,22 @@ function artifactHistoryUrl(query: ArtifactHistoryQuery) {
   return `${CREATIVE_STUDIO_ROUTES.artifacts}?${params.toString()}`;
 }
 
+function archiveEntryPageUrl(query: ArchiveEntryQuery) {
+  const params = new URLSearchParams();
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.cursor) {
+    params.set("cursorCatalogId", query.cursor.catalogId);
+    params.set("cursorSortName", query.cursor.sortName);
+    params.set("cursorEntryId", query.cursor.entryId);
+  }
+  if (query.search?.trim()) params.set("search", query.search.trim());
+  if (query.mediaKind) params.set("mediaKind", query.mediaKind);
+  if (query.observedYear !== undefined && query.observedYear !== null) params.set("observedYear", String(query.observedYear));
+  if (query.materializable !== undefined && query.materializable !== null) params.set("materializable", String(query.materializable));
+  const queryString = params.toString();
+  return `${CREATIVE_STUDIO_ROUTES.archiveIndex}/entries${queryString ? `?${queryString}` : ""}`;
+}
+
 export function createHttpAdapter(): StudioAdapter {
   const activePollIntervalMs = resolveHttpPollInterval(import.meta.env.VITE_CREATIVE_STUDIO_LOCAL, window.location.hostname);
   const load = async (): Promise<StudioSnapshot> => {
@@ -254,6 +274,19 @@ export function createHttpAdapter(): StudioAdapter {
     async listArtifactHistory(query: ArtifactHistoryQuery) {
       const result = await request<ArtifactHistoryPageResponse>(artifactHistoryUrl(query));
       return result.page;
+    },
+    async listArchiveEntries(query: ArchiveEntryQuery) {
+      const result = await request<ArchiveEntryPageResponse>(archiveEntryPageUrl(query));
+      return result.page;
+    },
+    async createArchiveMaterialization(entryId: string, input: CreateArchiveMaterializationRequest) {
+      return request<ArchiveMaterializationResponse>(`${CREATIVE_STUDIO_ROUTES.archiveIndex}/entries/${encodeURIComponent(entryId)}/materializations`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+    async getArchiveMaterialization(materializationId: string) {
+      return request<ArchiveMaterializationResponse>(`${CREATIVE_STUDIO_ROUTES.archiveIndex}/materializations/${encodeURIComponent(materializationId)}`);
     },
     async createWorld(input: CreateWorldRequest) {
       const result = await request<WorldResponse>(CREATIVE_STUDIO_ROUTES.worlds, { method: "POST", body: JSON.stringify(input) });

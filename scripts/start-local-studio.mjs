@@ -10,6 +10,8 @@ const workerOrigin = "http://127.0.0.1:8787";
 const comfyOrigin = String(process.env.CS_COMFY_URL || "http://127.0.0.1:8188").replace(/\/+$/, "");
 const runtimeRoot = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
 const runnerConfigPath = join(runtimeRoot, "Creative Studio Runner", "local-config.json");
+const detectedArchiveRoot = String(process.env.CS_ARCHIVE_ROOT || "").trim()
+  || (process.platform === "win32" && existsSync("D:\\CreativeArchive") ? "D:\\CreativeArchive" : "");
 const wranglerBin = join(repoRoot, "node_modules", "wrangler", "bin", "wrangler.js");
 const viteBin = join(repoRoot, "node_modules", "vite", "bin", "vite.js");
 const runnerBin = join(repoRoot, "runner", "index.mjs");
@@ -125,13 +127,26 @@ function protectRunnerConfig() {
 
 async function ensureLocalRunnerConfig() {
   const current = readLocalRunnerConfig();
-  if (current && await runnerTokenWorks(current)) return current;
+  if (current && await runnerTokenWorks(current)) {
+    const desired = { ...current, ...(detectedArchiveRoot ? { archiveRoot: detectedArchiveRoot } : {}) };
+    if (JSON.stringify(desired) !== JSON.stringify(current)) {
+      writeFileSync(runnerConfigPath, `${JSON.stringify(desired, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+      protectRunnerConfig();
+    }
+    return desired;
+  }
   const { response, payload } = await jsonRequest("/api/creative-studio/runners/enroll", {
     method: "POST",
     body: JSON.stringify({ name: "Angelo RTX 3090 · local" }),
   });
   if (!response.ok || payload?.ok !== true || !payload.token) fail(payload?.error || "Could not enroll the local hardware runner.");
-  const config = { apiBase: workerOrigin, token: payload.token, comfyUrl: comfyOrigin, pollIntervalMs: 5_000 };
+  const config = {
+    apiBase: workerOrigin,
+    token: payload.token,
+    comfyUrl: comfyOrigin,
+    ...(detectedArchiveRoot ? { archiveRoot: detectedArchiveRoot } : {}),
+    pollIntervalMs: 5_000,
+  };
   mkdirSync(dirname(runnerConfigPath), { recursive: true });
   writeFileSync(runnerConfigPath, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   protectRunnerConfig();

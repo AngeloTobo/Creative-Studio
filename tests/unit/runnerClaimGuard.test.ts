@@ -88,6 +88,34 @@ describe("Local Runner pre-claim Comfy idle guard", () => {
     });
   });
 
+  it("uses the consolidated claim to complete archive work while Comfy is unavailable", async () => {
+    const archiveMachineState = {
+      ...machineState,
+      archiveIndex: { state: "unavailable", error: "archive_index_records_missing" },
+    };
+    const bundle = { materialization: { id: "archmat_test" }, claimToken: "claim-test" };
+    const request = vi.fn(async () => ({ kind: "archive-materialization", bundle }));
+    const executeArchiveMaterialization = vi.fn(async () => undefined);
+
+    await expect(runOnce(config, {
+      machineState: async () => archiveMachineState,
+      observeQueue: async () => ({ state: "unreachable", error: "comfyui_queue_unreachable" }),
+      request,
+      executeArchiveMaterialization,
+      videoDoctor: async () => null,
+    })).resolves.toBe(true);
+
+    expect(request).toHaveBeenCalledWith(config, "/api/creative-studio/runner/work/claim", {
+      method: "POST",
+      body: JSON.stringify({
+        ...archiveMachineState,
+        comfyReady: false,
+        error: "comfyui_queue_unreachable",
+      }),
+    });
+    expect(executeArchiveMaterialization).toHaveBeenCalledWith(config, bundle, expect.objectContaining({ request }));
+  });
+
   it("does not mistake a malformed reachable queue response for an idle queue", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       queue_running: [],

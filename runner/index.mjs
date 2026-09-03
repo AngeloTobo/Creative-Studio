@@ -24,8 +24,17 @@ import {
   isForeignRunnerGpuLockContention,
 } from "./gpuCoordinator.mjs";
 import { collectVideoDoctor } from "./videoDoctor.mjs";
+import {
+  ARCHIVE_SYNC_SCHEMA_VERSION,
+  archiveCatalogBatches,
+  archiveCatalogSyncRequest,
+  archiveIndexSelfTest,
+  archiveSourceStamp,
+  loadArchiveCatalog,
+  resolveArchiveMaterialization,
+} from "./archiveIndex.mjs";
 
-export const RUNNER_VERSION = "1.22.0";
+export const RUNNER_VERSION = "1.23.0";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -128,11 +137,13 @@ export function loadConfig(path = configPath()) {
   const token = String(process.env.CS_RUNNER_TOKEN || parsed.token || "");
   const comfyUrl = String(process.env.CS_COMFY_URL || parsed.comfyUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
   const comfyLogPath = String(process.env.CS_COMFY_LOG_PATH || parsed.comfyLogPath || "").trim() || null;
+  const archiveRoot = String(process.env.CS_ARCHIVE_ROOT || parsed.archiveRoot || "").trim() || null;
   const pollIntervalMs = resolveRunnerPollInterval(apiBase, process.env.CS_RUNNER_POLL_MS || parsed.pollIntervalMs);
   if (!/^https:\/\//.test(apiBase) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBase)) throw new Error("Runner apiBase must use HTTPS or local HTTP.");
   if (!/^csr_[A-Za-z0-9_-]{40,80}$/.test(token)) throw new Error("Runner token is missing or invalid.");
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(comfyUrl)) throw new Error("ComfyUI must be bound to localhost.");
-  return { apiBase, token, comfyUrl, comfyLogPath, pollIntervalMs };
+  if (archiveRoot && !/^[A-Za-z]:[\\/]/.test(archiveRoot)) throw new Error("Art Index archiveRoot must be an absolute Windows path.");
+  return { apiBase, token, comfyUrl, comfyLogPath, archiveRoot, pollIntervalMs };
 }
 
 export function resolveRunnerPollInterval(apiBase, value) {
@@ -353,6 +364,111 @@ async function runnerRequest(config, path, init = {}) {
   return payload;
 }
 
+export function createArchiveIndexRunnerState() {
+  return { catalog: null, error: null };
+}
+
+const PROCESS_ARCHIVE_INDEX = createArchiveIndexRunnerState();
+
+function safeArchiveIndexError(caught) {
+  const value = caught instanceof Error ? caught.message : "archive_index_unavailable";
+  return /^archive_[a-z0-9_:.-]+$/i.test(value) ? value.slice(0, 160) : "archive_index_unavailable";
+}
+
+export function archiveIndexObservation(config, state = PROCESS_ARCHIVE_INDEX) {
+  if (!config.archiveRoot) {
+    state.catalog = null;
+    state.error = "archive_index_root_not_configured";
+    return { schemaVersion: ARCHIVE_SYNC_SCHEMA_VERSION, state: "unavailable", error: state.error };
+  }
+  try {
+    const stamp = archiveSourceStamp(config.archiveRoot);
+    if (!state.catalog || state.catalog.sourceStamp !== stamp) state.catalog = loadArchiveCatalog(config.archiveRoot);
+    state.error = null;
+    return {
+      schemaVersion: ARCHIVE_SYNC_SCHEMA_VERSION,
+      state: "ready",
+      sourceVersion: state.catalog.sourceVersion,
+      sourceFingerprint: state.catalog.sourceFingerprint,
+      expectedEntryCount: state.catalog.expectedEntryCount,
+      expectedVerifiedCount: state.catalog.expectedVerifiedCount,
+      expectedUnavailableCount: state.catalog.expectedUnavailableCount,
+    };
+  } catch (caught) {
+    state.catalog = null;
+    state.error = safeArchiveIndexError(caught);
+    return { schemaVersion: ARCHIVE_SYNC_SCHEMA_VERSION, state: "unavailable", error: state.error };
+  }
+}
+
+export async function executeArchiveSyncBundle(config, bundle, options = {}) {
+  const request = options.request || runnerRequest;
+  const state = options.archiveIndexState || PROCESS_ARCHIVE_INDEX;
+  const observation = archiveIndexObservation(config, state);
+  const catalog = state.catalog;
+  if (observation.state !== "ready" || !catalog) throw new Error(observation.error || "archive_index_unavailable");
+  if (bundle?.observation?.sourceFingerprint !== catalog.sourceFingerprint
+    || bundle?.observation?.sourceVersion !== catalog.sourceVersion) throw new Error("archive_sync_observation_changed");
+  const started = await request(config, "/api/creative-studio/runner/archive-index/syncs", {
+    method: "POST",
+    body: JSON.stringify(archiveCatalogSyncRequest(catalog)),
+  });
+  const syncCatalog = started?.catalog;
+  if (!syncCatalog?.id || syncCatalog.sourceFingerprint !== catalog.sourceFingerprint) {
+    throw new Error("archive_sync_catalog_mismatch");
+  }
+  if (syncCatalog.status !== "active") {
+    const batches = archiveCatalogBatches(catalog, bundle.maxBatchSize);
+    for (const batch of batches) {
+      await request(config, `/api/creative-studio/runner/archive-index/syncs/${encodeURIComponent(syncCatalog.id)}/entries`, {
+        method: "PUT",
+        body: JSON.stringify(batch),
+      });
+    }
+    await request(config, `/api/creative-studio/runner/archive-index/syncs/${encodeURIComponent(syncCatalog.id)}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ schemaVersion: ARCHIVE_SYNC_SCHEMA_VERSION }),
+    });
+  }
+  process.stdout.write(`[Creative Studio Runner] synchronized ${catalog.expectedEntryCount.toLocaleString("en-US")} sanitized Angelo Art Index records (${catalog.sourceVersion})\n`);
+}
+
+export async function executeArchiveMaterializationBundle(config, bundle, options = {}) {
+  const request = options.request || runnerRequest;
+  const state = options.archiveIndexState || PROCESS_ARCHIVE_INDEX;
+  const materializationId = bundle?.materialization?.id;
+  const claimToken = String(bundle?.claimToken || "");
+  if (!materializationId || !claimToken) throw new Error("archive_materialization_claim_invalid");
+  try {
+    const observation = archiveIndexObservation(config, state);
+    if (observation.state !== "ready" || !state.catalog) throw new Error(observation.error || "archive_index_unavailable");
+    const retained = await resolveArchiveMaterialization(state.catalog, bundle.source);
+    await request(config, `/api/creative-studio/runner/archive-materializations/${encodeURIComponent(materializationId)}/complete`, {
+      method: "POST",
+      headers: {
+        "content-type": retained.contentType,
+        "x-cs-file-size": String(retained.size),
+        "x-cs-file-name": encodeURIComponent(retained.fileName),
+        "x-cs-claim-token": claimToken,
+      },
+      body: retained.bytes,
+    });
+    process.stdout.write(`[Creative Studio Runner] safely copied Angelo Art Index item into project media (${materializationId})\n`);
+  } catch (caught) {
+    const error = safeArchiveIndexError(caught).replace(/^archive_index_unavailable$/, "archive_materialization_failed");
+    try {
+      await request(config, `/api/creative-studio/runner/archive-materializations/${encodeURIComponent(materializationId)}/fail`, {
+        method: "POST",
+        headers: { "x-cs-claim-token": claimToken },
+        body: JSON.stringify({ error }),
+      });
+    } catch (reportError) {
+      process.stderr.write(`[Creative Studio Runner] could not report archive copy failure ${materializationId}: ${runnerLogLabel(reportError?.message)}\n`);
+    }
+    process.stderr.write(`[Creative Studio Runner] archive copy failed ${materializationId}: ${error}\n`);
+  }
+}
+
 async function comfyInfo(config) {
   const response = await fetch(`${config.comfyUrl}/system_stats`, { signal: AbortSignal.timeout(5_000) });
   if (!response.ok) throw new Error(`comfyui_unavailable_${response.status}`);
@@ -379,6 +495,7 @@ async function machineState(config, activeJobId = null, error = null) {
     ...info,
     activeJobId,
     error: reportedError,
+    archiveIndex: archiveIndexObservation(config),
     modelTrainingProviders: aceStepProviderList(detectAceStepRuntime()),
   };
 }
@@ -3112,17 +3229,37 @@ export async function runOnce(config, options = {}) {
     queueObservation: queue,
     systemStats: currentMachineState.comfyReady ? "available" : "unavailable",
   }).catch(() => null);
-  if (queue.state !== "idle") {
+  const queueBlocked = queue.state !== "idle";
+  if (queueBlocked && !currentMachineState.archiveIndex) {
     const reason = comfyQueueClaimBlockReason(queue);
     if (videoDoctor) await heartbeat(config, null, reason, videoDoctor).catch(() => undefined);
     else await heartbeat(config, null, reason).catch(() => undefined);
     return false;
   }
-  const claimState = videoDoctor ? { ...currentMachineState, videoDoctor } : currentMachineState;
+  const claimState = {
+    ...currentMachineState,
+    ...(queueBlocked ? { comfyReady: false, error: comfyQueueClaimBlockReason(queue) } : {}),
+    ...(videoDoctor ? { videoDoctor } : {}),
+  };
   const work = await claimRequest(config, "/api/creative-studio/runner/work/claim", {
     method: "POST",
     body: JSON.stringify(claimState),
   });
+  if (work.kind === "archive-sync" && work.bundle) {
+    await (options.executeArchiveSync || executeArchiveSyncBundle)(config, work.bundle, {
+      request: claimRequest,
+      archiveIndexState: options.archiveIndexState,
+    });
+    return true;
+  }
+  if (work.kind === "archive-materialization" && work.bundle) {
+    await (options.executeArchiveMaterialization || executeArchiveMaterializationBundle)(config, work.bundle, {
+      request: claimRequest,
+      archiveIndexState: options.archiveIndexState,
+    });
+    return true;
+  }
+  if (queueBlocked) return false;
   if (work.kind === "overnight-plan" && work.bundle) {
     process.stdout.write(`[Creative Studio Runner] claimed overnight plan ${work.bundle.session.id}\n`);
     await executeOvernightPlanBundle(config, work.bundle, options);
@@ -3224,6 +3361,7 @@ export function resolveRunnerFollowUpInterval(apiBase) {
 }
 
 async function selfTest() {
+  archiveIndexSelfTest();
   if (resolveRunnerPollInterval("https://runner.cs.angelotoborg.com", 5_000) !== MIN_IDLE_POLL_INTERVAL_MS
     || resolveRunnerPollInterval("http://127.0.0.1:8787", 5_000) !== LOCAL_IDLE_POLL_INTERVAL_MS
     || resolveRunnerFollowUpInterval("https://runner.cs.angelotoborg.com") !== REMOTE_ACTIVE_POLL_INTERVAL_MS

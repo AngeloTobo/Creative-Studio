@@ -1,4 +1,5 @@
 export * from "./api";
+export * from "./archiveIndex";
 export * from "./creativeDna";
 export * from "./domain";
 export * from "./evolution";
