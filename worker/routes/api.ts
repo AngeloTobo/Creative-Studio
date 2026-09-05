@@ -1783,7 +1783,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const videoPerformance = localWorkflow ? await revalidatedVideoPerformance(env, session.userId, original) : undefined;
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
         && !/lmstudio_|comfyui_execution_timed_out|cancelled|interrupted/i.test(original.error ?? "")
-        && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
+        && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed|Provided readable stream must have a known length/i.test(original.error ?? "");
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
         projectId: original.projectId,

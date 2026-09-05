@@ -4036,7 +4036,10 @@ describe("Creative Studio Worker API", () => {
     expect(await result(invalid)).toMatchObject({ error: "mesh_source_binding_invalid" });
   });
 
-  it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
+  it.each([
+    "The operation was aborted due to timeout",
+    "Provided readable stream must have a known length (request/response body or readable half of FixedLengthStream)",
+  ])("pairs a runner and recovers video with exact provenance after %s", async (retentionError) => {
     const ownerId = "development-angelo";
     const project = await testProject(ownerId, "Runner Study");
     const dna = await createLocalDna(env, ownerId, {
@@ -4255,7 +4258,7 @@ describe("Creative Studio Worker API", () => {
     expect(resumed.bundle.job).toMatchObject({ upstreamId: "comfy-prompt-h3-001", executionStage: "preparing-inputs" });
 
     await routeCreativeStudioApi(request(`/api/creative-studio/runner/jobs/${created.job.id}/fail`, {
-      method: "POST", headers: runnerHeaders, body: JSON.stringify({ error: "The operation was aborted due to timeout" }),
+      method: "POST", headers: runnerHeaders, body: JSON.stringify({ error: retentionError }),
     }), local);
     const retried = await result(await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${created.job.id}/retry`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "runner_video_retry_001" }),

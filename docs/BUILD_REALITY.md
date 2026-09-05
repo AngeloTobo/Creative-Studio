@@ -2,6 +2,13 @@
 
 Last verified: 2026-09-05 (America/Chicago)
 
+## Missing video recovery - September 5 update
+
+- Sixteen Rebecca video jobs completed in ComfyUI but failed local retention with `Provided readable stream must have a known length`. The installed sized-stream storage fix addresses new uploads; historical failures still needed recovery.
+- Retry now recognizes that specific storage failure and preserves its existing Comfy prompt ID, original workflow and settings, project, and retry lineage. The normal Runner retrieves the saved result instead of submitting another render. An API regression covers this exact error through retry, Runner claim and retained output, alongside timeout recovery.
+- All sixteen entries were recovered through the installed Runner into Rebecca. Each retained download matches the SHA-256 and size of its corresponding Comfy output, and each successor preserves its original upstream ID and retry lineage. There are seven distinct file hashes because several original attempts produced repeated results. No new Comfy generation was submitted; original failed records remain intact. The recovery manifest is private local evidence at `output/recovered-videos.json` and is not committed.
+- The full release gate passed 386 app/Runner tests, 78 Worker tests and 82 desktop/mobile browser tests (six intentional skips), plus all lint, typecheck, installer, build and environment checks. The host build/install succeeded, recovery cards render in the actual Rebecca gallery, and a recovered 30.042-second video plays through the application's media endpoint without decoder errors. Final Runner heartbeat is healthy with no active job; Comfy queues are empty. Anonymous remote access still redirects to Access. No migration, Comfy restart or model load was needed.
+
 ## Scene-grounded video sound - September 5 update
 
 - Removed the unconditional synth arpeggios, percussion, and melodic-hook directive from video compilation and the bundled LTX Fast PC example. New compilation replaces that exact legacy injected default when reusing a setup; it preserves authored musical requests and retained history.
