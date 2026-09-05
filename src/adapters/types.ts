@@ -1,5 +1,9 @@
 import type {
   AcceptanceDecision,
+  ArchiveEntryPage,
+  ArchiveEntryQuery,
+  ArchiveMaterializationResponse,
+  CreateArchiveMaterializationRequest,
   CreateCreativeDnaRequest,
   CreativeDnaArtifact,
   ReviewArtifactResponse,
@@ -83,6 +87,9 @@ export interface StudioAdapter {
   cancelJob(jobId: string): Promise<Job>;
   reviewArtifact(artifactId: string, decision: AcceptanceDecision, note: string): Promise<ReviewArtifactResponse>;
   listArtifactHistory(query: ArtifactHistoryQuery): Promise<ArtifactHistoryPage>;
+  listArchiveEntries(query: ArchiveEntryQuery): Promise<ArchiveEntryPage>;
+  createArchiveMaterialization(entryId: string, input: CreateArchiveMaterializationRequest): Promise<ArchiveMaterializationResponse>;
+  getArchiveMaterialization(materializationId: string): Promise<ArchiveMaterializationResponse>;
   createWorld(input: CreateWorldRequest): Promise<World>;
   updateWorld(worldId: string, input: UpdateWorldRequest): Promise<World>;
   archiveWorld(worldId: string, expectedVersion: number): Promise<World>;

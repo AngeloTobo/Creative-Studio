@@ -454,24 +454,61 @@ type MediaRow = {
   originalFileName: string;
   mimeType: string;
   size: number;
-  source: "upload";
+  source: "upload" | "archive-index";
   status: "retained";
   trainingEligible: number;
+  provenanceJson: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
 const MEDIA_COLUMNS = `id, project_id as projectId, kind, name, original_file_name as originalFileName,
   mime_type as mimeType, size, source, status, training_eligible as trainingEligible,
-  created_at as createdAt, updated_at as updatedAt`;
+  provenance_json as provenanceJson, created_at as createdAt, updated_at as updatedAt`;
+
+function mediaProvenance(row: MediaRow): MediaAsset["provenance"] {
+  if (row.source === "upload") return { uploadedByOwner: true, uploadedAt: row.createdAt, parentAssetIds: [] };
+  let value: unknown;
+  try { value = JSON.parse(row.provenanceJson ?? ""); } catch { throw new Error("media_provenance_invalid"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("media_provenance_invalid");
+  const provenance = value as Record<string, unknown>;
+  if (provenance.materializedFromArchive !== true || provenance.provider !== "angelo-art-index"
+    || provenance.requestedByOwner !== true || provenance.verification !== "size-match"
+    || typeof provenance.catalogId !== "string" || typeof provenance.archiveEntryId !== "string"
+    || typeof provenance.materializationId !== "string" || typeof provenance.materializedAt !== "string"
+    || typeof provenance.sourceVersion !== "string" || typeof provenance.sourceFingerprint !== "string"
+    || typeof provenance.sourceRecordType !== "string" || typeof provenance.sourceRecordId !== "string"
+    || (provenance.inventoryRecordId !== null && typeof provenance.inventoryRecordId !== "string")
+    || !Array.isArray(provenance.parentAssetIds) || provenance.parentAssetIds.some((parent) => typeof parent !== "string")) {
+    throw new Error("media_provenance_invalid");
+  }
+  return {
+    materializedFromArchive: true,
+    provider: "angelo-art-index",
+    catalogId: provenance.catalogId,
+    archiveEntryId: provenance.archiveEntryId,
+    materializationId: provenance.materializationId,
+    sourceVersion: provenance.sourceVersion,
+    sourceFingerprint: provenance.sourceFingerprint,
+    sourceRecordType: provenance.sourceRecordType,
+    sourceRecordId: provenance.sourceRecordId,
+    inventoryRecordId: provenance.inventoryRecordId,
+    requestedByOwner: true,
+    materializedAt: provenance.materializedAt,
+    verification: "size-match",
+    parentAssetIds: provenance.parentAssetIds,
+  };
+}
 
 function mapMedia(row: MediaRow): MediaAsset {
+  const media = { ...row };
+  Reflect.deleteProperty(media, "provenanceJson");
   return {
-    ...row,
+    ...media,
     size: Number(row.size),
     trainingEligible: Boolean(row.trainingEligible),
     contentUrl: `/api/creative-studio/media/${row.id}/content`,
-    provenance: { uploadedByOwner: true, uploadedAt: row.createdAt, parentAssetIds: [] },
+    provenance: mediaProvenance(row),
   };
 }
 
@@ -490,6 +527,12 @@ export async function mediaAssetsByIds(env: Env, ownerId: string, mediaIds: stri
   return (result.results ?? []).map(mapMedia);
 }
 
+export async function mediaAssetById(env: Env, ownerId: string, mediaId: string): Promise<MediaAsset | null> {
+  const row = await env.DB.prepare(`select ${MEDIA_COLUMNS} from creative_media_assets where owner_id = ? and id = ?`)
+    .bind(ownerId, mediaId).first<MediaRow>();
+  return row ? mapMedia(row) : null;
+}
+
 export async function createMediaAsset(
   env: Env,
   ownerId: string,
@@ -503,15 +546,19 @@ export async function createMediaAsset(
     size: number;
     r2Key: string;
     trainingEligible: boolean;
+    source?: "upload" | "archive-index";
+    provenance?: MediaAsset["provenance"] | null;
   },
 ) {
   const now = new Date().toISOString();
+  const source = input.source ?? "upload";
+  const provenanceJson = source === "archive-index" ? JSON.stringify(input.provenance) : null;
   await env.DB.prepare(`insert into creative_media_assets (
     id, owner_id, project_id, kind, name, original_file_name, mime_type, size, r2_key,
-    source, status, training_eligible, created_at, updated_at
-  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'upload', 'retained', ?, ?, ?)`)
+    source, status, training_eligible, provenance_json, created_at, updated_at
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'retained', ?, ?, ?, ?)`)
     .bind(input.id, ownerId, input.projectId, input.kind, input.name, input.originalFileName,
-      input.mimeType, input.size, input.r2Key, input.trainingEligible ? 1 : 0, now, now).run();
+      input.mimeType, input.size, input.r2Key, source, input.trainingEligible ? 1 : 0, provenanceJson, now, now).run();
   return mapMedia({
     id: input.id,
     projectId: input.projectId,
@@ -520,9 +567,10 @@ export async function createMediaAsset(
     originalFileName: input.originalFileName,
     mimeType: input.mimeType,
     size: input.size,
-    source: "upload",
+    source,
     status: "retained",
     trainingEligible: input.trainingEligible ? 1 : 0,
+    provenanceJson,
     createdAt: now,
     updatedAt: now,
   });

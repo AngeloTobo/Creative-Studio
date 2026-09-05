@@ -3,12 +3,21 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "dev:worker": "wrangler dev --local --port 8787",
-    "local": "node scripts/start-local-studio.mjs",
+    "local": "npm run host:start",
+    "local:development": "node scripts/start-local-studio.mjs",
+    "host:migrate": "node scripts/migrate-cloud-to-pc.mjs",
+    "host:start": "node scripts/start-pc-host.mjs",
+    "host:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1",
+    "host:installer:check": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1 -PathValidationSelfTest && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1 -ProcessIdentitySelfTest && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1 -NodeRuntimeSelfTest",
+    "build:host": "npm run typecheck && node scripts/build-pc-host.mjs",
     "db:local": "wrangler d1 migrations apply creative-studio --local",
-    "db:production": "npm run check:cloudflare-free && wrangler d1 migrations apply creative-studio --remote --env production",
+    "db:production": "node scripts/refuse-cloud-writes.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.worker-test.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
     "test": "vitest run",
@@ -23,9 +32,11 @@
     "runner:once": "node runner/index.mjs --once",
     "runner:check": "node runner/index.mjs --self-test",
     "build": "npm run typecheck && vite build",
-    "check": "npm run lint && npm run test && npm run test:worker && npm run runner:check && npm run check:env && npm run check:cloudflare-free && npm run build && npm run check:secrets",
+    "check": "npm run lint && npm run test && npm run test:worker && npm run runner:check && npm run host:installer:check && npm run check:env && npm run check:cloudflare-free && npm run build && npm run check:secrets",
     "check:all": "npm run check && npm run test:e2e",
-    "deploy:production": "npm run check:all && npm run check:env:production && npm run db:production && wrangler deploy --env production"
+    "deploy:pc-host": "npm run check:all && npm run build:host && npm run host:install",
+    "deploy:production": "npm run deploy:pc-host",
+    "cloud:retire": "npm run check:env:production && npm run check:cloudflare-free && wrangler deploy --config wrangler.retired.jsonc"
   },
   "dependencies": {
     "ffmpeg-static": "5.3.0",

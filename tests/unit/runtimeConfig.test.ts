@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LOCAL_HTTP_POLL_INTERVAL_MS,
+  PC_HOST_HTTP_POLL_INTERVAL_MS,
   REMOTE_HTTP_POLL_INTERVAL_MS,
   resolveHttpPollInterval,
   resolveStudioAdapterMode,
@@ -21,5 +22,12 @@ describe("runtime environment validation", () => {
     expect(resolveHttpPollInterval("false", "127.0.0.1")).toBe(REMOTE_HTTP_POLL_INTERVAL_MS);
     expect(() => resolveHttpPollInterval("true", "cs.angelotoborg.com")).toThrow("allowed only on localhost");
     expect(() => resolveHttpPollInterval("sometimes", "localhost")).toThrow("Invalid VITE_CREATIVE_STUDIO_LOCAL");
+  });
+
+  it("uses a bounded fast cadence only on the approved PC-hosted origins", () => {
+    expect(resolveHttpPollInterval(undefined, "127.0.0.1", "true")).toBe(LOCAL_HTTP_POLL_INTERVAL_MS);
+    expect(resolveHttpPollInterval(undefined, "cs.angelotoborg.com", "true")).toBe(PC_HOST_HTTP_POLL_INTERVAL_MS);
+    expect(() => resolveHttpPollInterval(undefined, "cs-origin-test.angelotoborg.com", "true")).toThrow("restricted to approved");
+    expect(() => resolveHttpPollInterval(undefined, "example.com", "true")).toThrow("restricted to approved");
   });
 });

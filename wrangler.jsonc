@@ -37,62 +37,24 @@
     "production": {
       "name": "creative-studio",
       "workers_dev": false,
-      "routes": [
-        {
-          "pattern": "cs.angelotoborg.com",
-          "custom_domain": true
-        },
-        {
-          "pattern": "runner.cs.angelotoborg.com",
-          "custom_domain": true
-        }
-      ],
+      "preview_urls": false,
+      "routes": [],
       "vars": {
-        "BACKEND_MODE": "afdfw",
-        "LOCAL_HARDWARE_ONLY": "false",
+        "CLOUD_EXECUTION_MODE": "retired",
+        "BACKEND_MODE": "retired",
+        "LOCAL_HARDWARE_ONLY": "true",
         "AFDFW_BASE_URL": ""
       },
-      "services": [
-        {
-          "binding": "AFDFW",
-          "service": "art-feed-dfw"
-        }
-      ],
+      "services": [],
       "queues": {
-        "producers": [
-          {
-            "binding": "JOB_QUEUE",
-            "queue": "creative-studio-jobs"
-          }
-        ],
-        "consumers": [
-          {
-            "queue": "creative-studio-jobs",
-            "max_batch_size": 1,
-            "max_batch_timeout": 2,
-            "max_retries": 3,
-            "max_concurrency": 1,
-            "dead_letter_queue": "creative-studio-jobs-dlq"
-          }
-        ]
+        "producers": [],
+        "consumers": []
       },
       "triggers": {
-        "crons": ["0 * * * *"]
+        "crons": []
       },
-      "r2_buckets": [
-        {
-          "binding": "ARTIFACTS",
-          "bucket_name": "creative-studio-artifacts"
-        }
-      ],
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "creative-studio",
-          "database_id": "aed622ee-4caa-4704-80c4-4b847a8fdd9c",
-          "migrations_dir": "migrations"
-        }
-      ]
+      "r2_buckets": [],
+      "d1_databases": []
     }
   }
 }

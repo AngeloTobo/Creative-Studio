@@ -336,10 +336,74 @@ describe("Creative Studio Worker API", () => {
 
   it("requires a protected AFDFW target outside development mode", () => {
     expect(backendMode({ DB: env.DB })).toBe("development");
+    expect(() => backendMode({ DB: env.DB, BACKEND_MODE: "self-hosted" })).toThrow("self_hosted_owner_not_configured");
+    expect(() => backendMode({ DB: env.DB, BACKEND_MODE: "self-hosted", SELF_HOSTED_OWNER_ID: "owner-local" })).toThrow("self_hosted_owner_not_configured");
+    expect(backendMode({
+      DB: env.DB,
+      BACKEND_MODE: "self-hosted",
+      SELF_HOSTED_OWNER_ID: "owner-local",
+      SELF_HOSTED_ACCESS_EMAIL: "angelo@example.com",
+      SELF_HOSTED_INTERNAL_TOKEN: "self-hosted-test-token-that-is-longer-than-forty-characters",
+    })).toBe("self-hosted");
     expect(() => backendMode({ DB: env.DB, BACKEND_MODE: "afdfw" })).toThrow("afdfw_backend_not_configured");
     expect(() => backendMode({ DB: env.DB, BACKEND_MODE: "afdfw", AFDFW_BASE_URL: "http://remote.example" })).toThrow("insecure_afdfw_base_url");
     expect(backendMode({ DB: env.DB, BACKEND_MODE: "afdfw", AFDFW_BASE_URL: "https://afdfw.example" })).toBe("afdfw");
     expect(backendMode({ DB: env.DB, BACKEND_MODE: "afdfw", AFDFW_BASE_URL: "http://127.0.0.1:8788" })).toBe("afdfw");
+  });
+
+  it("pins self-hosted owner identity behind the host token and Access identity", async () => {
+    const token = "self-hosted-test-token-that-is-longer-than-forty-characters";
+    const selfHosted: Env = {
+      DB: env.DB,
+      BACKEND_MODE: "self-hosted",
+      SELF_HOSTED_OWNER_ID: "owner-local",
+      SELF_HOSTED_DISPLAY_NAME: "Angelo Local",
+      SELF_HOSTED_ACCESS_EMAIL: "angelo@example.com",
+      SELF_HOSTED_INTERNAL_TOKEN: token,
+    };
+
+    const missingPinnedIdentity = await routeCreativeStudioApi(new Request("http://127.0.0.1:8788/api/creative-studio/session", {
+      headers: { "x-cs-host-token": token },
+    }), { ...selfHosted, SELF_HOSTED_ACCESS_EMAIL: "" });
+    expect(missingPinnedIdentity.status).toBe(503);
+    expect(await result(missingPinnedIdentity)).toMatchObject({ error: "self_hosted_owner_not_configured" });
+
+    const missingToken = await routeCreativeStudioApi(request("/api/creative-studio/session"), selfHosted);
+    expect(missingToken.status).toBe(401);
+    expect(await result(missingToken)).toMatchObject({ error: "approved_login_required" });
+
+    const missingAccess = await routeCreativeStudioApi(request("/api/creative-studio/session", {
+      headers: { "x-cs-host-token": token },
+    }), selfHosted);
+    expect(missingAccess.status).toBe(401);
+    expect(await result(missingAccess)).toMatchObject({ error: "approved_login_required" });
+
+    const wrongAccessOwner = await routeCreativeStudioApi(request("/api/creative-studio/session", {
+      headers: {
+        "x-cs-host-token": token,
+        "cf-access-authenticated-user-email": "someone-else@example.com",
+        "cf-access-jwt-assertion": "signed-by-access",
+      },
+    }), selfHosted);
+    expect(wrongAccessOwner.status).toBe(401);
+
+    const remote = await routeCreativeStudioApi(request("/api/creative-studio/session", {
+      headers: {
+        "x-cs-host-token": token,
+        "cf-access-authenticated-user-email": "Angelo@Example.com",
+        "cf-access-jwt-assertion": "signed-by-access",
+      },
+    }), selfHosted);
+    expect(remote.status).toBe(200);
+    expect(await result(remote)).toMatchObject({
+      session: { status: "approved", userId: "owner-local", displayName: "Angelo Local" },
+    });
+
+    const loopback = await routeCreativeStudioApi(new Request("http://127.0.0.1:8788/api/creative-studio/session", {
+      headers: { "x-cs-host-token": token },
+    }), selfHosted);
+    expect(loopback.status).toBe(200);
+    expect(await result(loopback)).toMatchObject({ session: { userId: "owner-local" } });
   });
 
   it("rejects unauthenticated AFDFW mode before touching owner data", async () => {
@@ -422,6 +486,50 @@ describe("Creative Studio Worker API", () => {
     expect(response.status).toBe(400);
     expect(await result(response)).toMatchObject({ ok: false, error: "local_comfyui_workflow_required" });
     expect(await env.DB.prepare("select count(*) as count from creative_jobs").first<{ count: number }>()).toMatchObject({ count: 0 });
+  });
+
+  it("keeps self-hosted mode hardware-only even if the optional local flag is omitted", async () => {
+    const ownerId = "owner-self-hosted-local-only";
+    const token = "self-hosted-local-only-token-longer-than-forty-characters";
+    const selfHosted: Env = {
+      DB: env.DB,
+      BACKEND_MODE: "self-hosted",
+      SELF_HOSTED_OWNER_ID: ownerId,
+      SELF_HOSTED_ACCESS_EMAIL: "angelo@example.com",
+      SELF_HOSTED_INTERNAL_TOKEN: token,
+    };
+    const project = await testProject(ownerId, "Self-hosted Local Only");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "Self-hosted DNA",
+      directive: "Keep every generation function on this PC.",
+      targetModality: "image",
+    });
+    const localRequest = (path: string, init: RequestInit = {}) => new Request(`http://127.0.0.1:8788${path}`, {
+      ...init,
+      headers: { "x-cs-host-token": token, ...init.headers },
+    });
+
+    const snapshot = await result(await routeCreativeStudioApi(localRequest("/api/creative-studio/snapshot"), selfHosted)) as {
+      snapshot: { adapter: { label: string; development: boolean }; capabilities: Array<{ key: string; provider: string }> };
+    };
+    expect(snapshot.snapshot.adapter).toMatchObject({ label: "Creative Studio Local BFF · hardware-only", development: false });
+    expect(snapshot.snapshot.capabilities).toContainEqual(expect.objectContaining({ key: "afdfw-session", provider: "remote mode only" }));
+
+    const response = await routeCreativeStudioApi(localRequest("/api/creative-studio/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        modality: "image",
+        idempotencyKey: "self_hosted_must_stay_local_001",
+      }),
+    }), selfHosted);
+    expect(response.status).toBe(400);
+    expect(await result(response)).toMatchObject({ error: "local_comfyui_workflow_required" });
+    expect(await env.DB.prepare("select count(*) as count from creative_jobs where owner_id = ?")
+      .bind(ownerId).first<{ count: number }>()).toMatchObject({ count: 0 });
   });
 
   it("requires an explicit AFDFW provider instead of using it as a production fallback", async () => {
@@ -1179,6 +1287,90 @@ describe("Creative Studio Worker API", () => {
     }), workerEnv("afdfw", afdfwFor(ownerA)));
     expect(rightOwner.status).toBe(200);
     expect(await result(rightOwner)).toMatchObject({ ok: true, artifact: { status: "accepted" }, acceptance: { decision: "accepted", note: "Keep this direction.", actor: "angelo" } });
+  });
+
+  it("retains an Art Index image once with fixed provenance and training disabled", async () => {
+    const ownerId = "owner-archive";
+    const token = "archive-host-token-that-is-longer-than-forty-characters";
+    const project = await testProject(ownerId, "Archive Materialization");
+    const { bucket, values } = memoryBucket();
+    const selfHosted: Env = {
+      DB: env.DB,
+      ARTIFACTS: bucket,
+      BACKEND_MODE: "self-hosted",
+      LOCAL_HARDWARE_ONLY: "true",
+      SELF_HOSTED_OWNER_ID: ownerId,
+      SELF_HOSTED_ACCESS_EMAIL: "angelo@example.com",
+      SELF_HOSTED_INTERNAL_TOKEN: token,
+    };
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const provenance = {
+      materializedFromArchive: true,
+      provider: "angelo-art-index",
+      catalogId: "archivecatalog_local_0123456789abcdef0123",
+      archiveEntryId: "archiveentry_0123456789abcdef0123",
+      materializationId: "archivemat_0123456789abcdef01234567",
+      sourceVersion: "2026-09-03T00:00:00.000Z",
+      sourceFingerprint: "a".repeat(64),
+      sourceRecordType: "archive-file",
+      sourceRecordId: "record-0123",
+      inventoryRecordId: "inventory-0123",
+      requestedByOwner: true,
+      materializedAt: "2026-09-03T00:00:00.000Z",
+      verification: "size-match",
+      parentAssetIds: [],
+    };
+    const upload = () => routeCreativeStudioApi(new Request("http://127.0.0.1:8788/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("Indexed Artwork.png"),
+        "x-cs-file-size": String(bytes.byteLength),
+        "x-cs-training-eligible": "false",
+        "x-cs-source": "archive-index",
+        "x-cs-media-id": "media_archive_0123456789abcdef01234567",
+        "x-cs-archive-provenance": encodeURIComponent(JSON.stringify(provenance)),
+        "x-cs-host-token": token,
+      },
+      body: bytes,
+    }), selfHosted);
+
+    const first = await upload();
+    expect(first.status).toBe(201);
+    const firstPayload = await result(first) as { asset: Record<string, unknown> };
+    expect(firstPayload.asset).toMatchObject({
+      id: "media_archive_0123456789abcdef01234567",
+      projectId: project.id,
+      source: "archive-index",
+      trainingEligible: false,
+      provenance,
+    });
+
+    const retry = await upload();
+    expect(retry.status).toBe(201);
+    expect(await result(retry)).toMatchObject({ asset: { id: firstPayload.asset.id, provenance } });
+    expect(values.size).toBe(1);
+    expect(await env.DB.prepare("select count(*) as count from creative_media_assets where owner_id = ?")
+      .bind(ownerId).first<{ count: number }>()).toMatchObject({ count: 1 });
+
+    const trainingAttempt = await routeCreativeStudioApi(new Request("http://127.0.0.1:8788/api/creative-studio/media", {
+      method: "POST",
+      headers: {
+        "content-type": "image/png",
+        "x-cs-project-id": project.id,
+        "x-cs-file-name": encodeURIComponent("Indexed Artwork.png"),
+        "x-cs-file-size": String(bytes.byteLength),
+        "x-cs-training-eligible": "true",
+        "x-cs-source": "archive-index",
+        "x-cs-media-id": "media_archive_0123456789abcdef01234567",
+        "x-cs-archive-provenance": encodeURIComponent(JSON.stringify(provenance)),
+        "x-cs-host-token": token,
+      },
+      body: bytes,
+    }), selfHosted);
+    expect(trainingAttempt.status).toBe(400);
+    expect(await result(trainingAttempt)).toMatchObject({ error: "archive_media_training_consent_forbidden" });
   });
 
   it("uploads, verifies, lists, and serves owner-scoped project media", async () => {

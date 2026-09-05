@@ -157,10 +157,21 @@ export function compileVideoPromptWithSpeech(
   value: unknown,
   input: VideoSpeechInput | undefined,
   profile: Pick<VideoPromptProfile, "outputFormat">,
-  options: { continuationSound?: boolean; soundDesign?: boolean } = {},
+  options: { continuationSound?: boolean; soundDesign?: boolean; inputMode?: VideoPromptInputMode } = {},
 ) {
   let basePrompt = String(value ?? "").replace(/\r\n?/g, "\n").trim();
   if (basePrompt.length < 4) throw new Error("directive_required");
+  if (profile.outputFormat === "minimax-h3-timeline" && options.inputMode) {
+    const hasFrame = options.inputMode === "image-to-video" || options.inputMode === "video-extension";
+    const linesWithoutCanonicalAlignment = basePrompt.split("\n")
+      .filter((line) => line.trim() !== MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION);
+    basePrompt = linesWithoutCanonicalAlignment.join("\n").trim();
+    if (hasFrame) {
+      basePrompt = `${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${basePrompt}`;
+    } else if (/<?Picture\s+1>?/i.test(basePrompt)) {
+      throw new Error("video_prompt_enhancement_minimax_picture_alignment_unexpected");
+    }
+  }
   const soundDesign = options.continuationSound || options.soundDesign !== false;
   if (options.continuationSound && !basePrompt.includes(VIDEO_EXTENSION_SOUND_DIRECTIVE)) {
     if (profile.outputFormat === "minimax-h3-timeline" && /(Audio\s*:\s*[^\n]*)/i.test(basePrompt)) {

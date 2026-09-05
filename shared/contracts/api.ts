@@ -124,6 +124,7 @@ export const CREATIVE_STUDIO_ROUTES = {
   videoScripts: `${CREATIVE_STUDIO_API_PREFIX}/video-scripts`,
   artifacts: `${CREATIVE_STUDIO_API_PREFIX}/artifacts`,
   media: `${CREATIVE_STUDIO_API_PREFIX}/media`,
+  archiveIndex: `${CREATIVE_STUDIO_API_PREFIX}/archive-index`,
   workflows: `${CREATIVE_STUDIO_API_PREFIX}/workflows`,
   recipes: `${CREATIVE_STUDIO_API_PREFIX}/recipes`,
   trainingJobs: `${CREATIVE_STUDIO_API_PREFIX}/training-jobs`,
@@ -148,6 +149,7 @@ export type CreativeStudioRoute =
   | "dna-list" | "dna-create" | "jobs-list" | "jobs-create" | "job-batch-create" | "job-retry" | "job-cancel" | "prompt-enhancement-create" | "prompt-enhancement-get" | "video-script-create" | "video-script-get" | "video-script-update"
   | "artifacts-list" | "artifact-review" | "artifact-media" | "artifact-thumbnail"
   | "media-list" | "media-upload" | "media-content" | "capabilities"
+  | "archive-index-status" | "archive-index-list" | "archive-materialization-create" | "archive-materialization-get"
   | "workflows-list" | "workflow-import" | "workflow-revision-create" | "workflow-content" | "job-reuse"
   | "recipes-list" | "recipe-get" | "recipe-create" | "recipe-update" | "recipe-delete" | "recipe-evidence-create"
   | "training-jobs-list" | "training-job-create" | "training-job-cancel" | "training-job-review" | "production-loops" | "production-cockpit"
@@ -207,6 +209,10 @@ export function matchCreativeStudioRoute(method: string, pathname: string): Crea
   if (method === "GET" && pathname === "/api/creative-studio/media") return "media-list";
   if (method === "POST" && pathname === "/api/creative-studio/media") return "media-upload";
   if (method === "GET" && /^\/api\/creative-studio\/media\/[a-z0-9_]+\/content$/i.test(pathname)) return "media-content";
+  if (method === "GET" && pathname === "/api/creative-studio/archive-index/status") return "archive-index-status";
+  if (method === "GET" && pathname === "/api/creative-studio/archive-index/entries") return "archive-index-list";
+  if (method === "POST" && /^\/api\/creative-studio\/archive-index\/entries\/[a-z0-9_]+\/materializations$/i.test(pathname)) return "archive-materialization-create";
+  if (method === "GET" && /^\/api\/creative-studio\/archive-index\/materializations\/[a-z0-9_]+$/i.test(pathname)) return "archive-materialization-get";
   if (method === "GET" && pathname === "/api/creative-studio/workflows") return "workflows-list";
   if (method === "POST" && pathname === "/api/creative-studio/workflows") return "workflow-import";
   if (method === "POST" && /^\/api\/creative-studio\/workflows\/[a-z0-9_]+\/revisions$/i.test(pathname)) return "workflow-revision-create";

@@ -53,6 +53,8 @@ import {
   videoScriptWordRange,
   videoWorkflowPromptProfile,
   type Artifact,
+  type ArchiveEntry,
+  type ArchiveEntryCursor,
   type MediaAsset,
   type ImagePerformanceMode,
   type WorkflowDefinition,
@@ -122,6 +124,8 @@ import {
 } from "../../app/videoPromptEnhancementErrorMessage";
 import { videoPairIdForOutputBatch } from "./directVideo";
 import { RecommendedDirectionsRail, type StoryRecommendationHandoff } from "../stories/StoryBankRail";
+import { ArchiveSourceBrowser } from "./ArchiveSourceBrowser";
+import { archiveSourceErrorMessage } from "../../app/archiveSourceErrorMessage";
 import "./GenerationView.css";
 
 const ACCEPTED_MEDIA = "image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,video/mp4,video/webm,video/quicktime";
@@ -133,6 +137,7 @@ type QuickSource = {
   kind: QuickSourceKind;
   name: string;
   source: "upload" | "artifact";
+  origin: "upload" | "archive-index" | "artifact";
   trainingEligible: boolean;
   createdAt: string;
   previewUrl: string | null;
@@ -141,6 +146,7 @@ type QuickSource = {
 };
 
 const SOURCE_GALLERY_LIMIT = 6;
+const ARCHIVE_SOURCE_PAGE_SIZE = 24;
 const STANDARD_VIDEO_OUTPUT_COUNTS = [1, 2] as const satisfies readonly GenerationOutputCount[];
 
 type CreateIntentOption = { id: CreateIntent; label: string; icon: "image" | "video" | "music" | "dna" };
@@ -184,6 +190,7 @@ function sourceFromAsset(asset: MediaAsset): QuickSource {
     kind: asset.kind,
     name: asset.name,
     source: "upload",
+    origin: asset.source,
     trainingEligible: asset.trainingEligible,
     createdAt: asset.createdAt,
     previewUrl: asset.contentUrl,
@@ -198,6 +205,7 @@ function sourceFromArtifact(artifact: Artifact): QuickSource {
     kind: artifact.kind === "music" ? "audio" : artifact.kind,
     name: artifact.name,
     source: "artifact",
+    origin: "artifact",
     trainingEligible: false,
     createdAt: artifact.createdAt,
     previewUrl: artifact.preview.url,
@@ -209,6 +217,11 @@ function sourceFromArtifact(artifact: Artifact): QuickSource {
 function newestQuickSources(sources: QuickSource[]) {
   return [...new Map(sources.map((source) => [source.id, source])).values()]
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.name.localeCompare(right.name));
+}
+
+function quickSourceOriginLabel(source: QuickSource) {
+  if (source.origin === "archive-index") return "Art Index";
+  return source.origin === "artifact" ? "Generated" : "Upload";
 }
 
 function QuickSourceVisual({ source, alt = "" }: { source: QuickSource; alt?: string }) {
@@ -315,6 +328,8 @@ export function GenerationView({
     selectDna,
     saveDna,
     uploadMedia,
+    listArchiveEntries,
+    addArchiveEntryToProject,
     submitAfdfwJob,
     submitDevelopmentPreviewJob,
     submitWorkflowJob,
@@ -333,6 +348,7 @@ export function GenerationView({
   const { latest: latestSession, save: saveSession, clear: clearSession } = useCreativeSessions(activeProjectId);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const sourcePickerRef = useRef<HTMLDetailsElement>(null);
+  const archiveSourceRequestRef = useRef(0);
   const projectDna = snapshot?.dnaArtifacts.filter((artifact) => artifact.projectId === activeProjectId) ?? [];
   const availableDna = snapshot ? projectDna.filter((artifact) => creativeDnaCanGenerate(snapshot, artifact)) : [];
   const retainedReuseDna = initialReuseArtifact
@@ -471,6 +487,19 @@ export function GenerationView({
   const [selectedTrustedVideoPresetId, setSelectedTrustedVideoPresetId] = useState<TrustedVideoPresetId | null>(initialReuseSettings?.videoPerformance?.trustedPreset?.id ?? null);
   const [heavyRenderConfirmationOpen, setHeavyRenderConfirmationOpen] = useState(false);
   const [sourceGalleryExpanded, setSourceGalleryExpanded] = useState(false);
+  const [archiveSourceOpen, setArchiveSourceOpen] = useState(false);
+  const [archiveSourceEntries, setArchiveSourceEntries] = useState<ArchiveEntry[]>([]);
+  const [archiveSourceNextCursor, setArchiveSourceNextCursor] = useState<ArchiveEntryCursor | null>(null);
+  const [archiveSourceTotal, setArchiveSourceTotal] = useState(0);
+  const [archiveSourceHasMore, setArchiveSourceHasMore] = useState(false);
+  const [archiveSourceLoaded, setArchiveSourceLoaded] = useState(false);
+  const [archiveSourceCatalogAvailable, setArchiveSourceCatalogAvailable] = useState(false);
+  const [archiveSourceLoading, setArchiveSourceLoading] = useState(false);
+  const [archiveSourceAdding, setArchiveSourceAdding] = useState(false);
+  const [archiveSourceError, setArchiveSourceError] = useState("");
+  const [archiveSourceErrorKind, setArchiveSourceErrorKind] = useState<"load" | "add" | null>(null);
+  const [archiveSourceSearch, setArchiveSourceSearch] = useState("");
+  const [selectedArchiveSourceId, setSelectedArchiveSourceId] = useState("");
   const [creativeToolsOpen, setCreativeToolsOpen] = useState(() => Boolean(initialReuseArtifact) || (!hasInitialIncomingAction && creativeSessionHasHiddenControls(latestSession)));
   const [generationRoute, setGenerationRoute] = useState<GenerationRoute>(() => (
     initialReuseSettings?.provider.startsWith("afdfw-") ? "afdfw" : "local"
@@ -585,6 +614,20 @@ export function GenerationView({
       setSelectedTrustedVideoPresetId(null);
       trustedVideoRestoreRef.current = null;
       setSourceGalleryExpanded(false);
+      archiveSourceRequestRef.current += 1;
+      setArchiveSourceOpen(false);
+      setArchiveSourceEntries([]);
+      setArchiveSourceNextCursor(null);
+      setArchiveSourceTotal(0);
+      setArchiveSourceHasMore(false);
+      setArchiveSourceLoaded(false);
+      setArchiveSourceCatalogAvailable(false);
+      setArchiveSourceLoading(false);
+      setArchiveSourceAdding(false);
+      setArchiveSourceError("");
+      setArchiveSourceErrorKind(null);
+      setArchiveSourceSearch("");
+      setSelectedArchiveSourceId("");
       setGenerationRoute("local");
       setDevelopmentPreviewSelected(false);
       setNotice("");
@@ -940,6 +983,14 @@ export function GenerationView({
     : requestedWorkflow && (generationIntent !== "video" || workflowSupportsVideoDuration(requestedWorkflow, videoDurationSeconds))
       ? requestedWorkflow
       : preferredWorkflow;
+  const workflowAcceptsImageSource = (candidate: WorkflowDefinition) => candidate.currentRevision.parameters.some((parameter) => (
+    parameter.kind === "media" && (!parameter.mediaKind || parameter.mediaKind === "image")
+  ));
+  const archiveSourceRequiresVideo = intent === "image"
+    && !intentWorkflows.some(workflowAcceptsImageSource)
+    && workflows.some((candidate) => workflowCreateIntent(candidate.modality) === "video"
+      && workflowSupportsVideoDuration(candidate, videoDurationSeconds)
+      && workflowAcceptsImageSource(candidate));
   const durationFallback = generationIntent === "video" && requestedWorkflow && workflow && requestedWorkflow.id !== workflow.id
     ? `${videoWorkflowDurationProfile(requestedWorkflow).label} supports up to ${videoDurationLabel(videoWorkflowDurationProfile(requestedWorkflow).maxSeconds)}; ${workflow.name} is selected for this length.`
     : null;
@@ -1067,6 +1118,7 @@ export function GenerationView({
     }, videoPromptProfile, {
       continuationSound: videoOperation?.audioMode === "new-sound",
       soundDesign: generatedSoundEnabled,
+      inputMode: promptEnhancementInputMode,
     });
   };
   const promptEnhancementMatchesWorkflow = Boolean(workflow && activePromptEnhancement
@@ -1706,6 +1758,11 @@ export function GenerationView({
   const chooseIntent = (nextIntent: CreateIntent) => {
     pendingFourWaySubmission.current = "";
     if (nextIntent !== intent) {
+      archiveSourceRequestRef.current += 1;
+      setArchiveSourceOpen(false);
+      setArchiveSourceLoading(false);
+      setArchiveSourceError("");
+      setArchiveSourceErrorKind(null);
       setSelectedStoryRecommendation(undefined);
       clearVideoPromptEnhancement();
       setDirection((current) => directionAfterIntentChange(intent, nextIntent, current));
@@ -2300,6 +2357,87 @@ export function GenerationView({
     }
     setOutputCount(count);
     setLocalError("");
+  };
+
+  const loadArchiveSources = async (
+    search: string,
+    cursor: ArchiveEntryCursor | null = null,
+    append = false,
+  ) => {
+    const requestId = ++archiveSourceRequestRef.current;
+    const requestProjectId = activeProjectId;
+    setArchiveSourceLoading(true);
+    setArchiveSourceError("");
+    setArchiveSourceErrorKind(null);
+    if (!append) setSelectedArchiveSourceId("");
+    try {
+      const page = await listArchiveEntries({
+        cursor,
+        limit: ARCHIVE_SOURCE_PAGE_SIZE,
+        search: search.trim(),
+        mediaKind: "image",
+        materializable: true,
+      });
+      if (requestId !== archiveSourceRequestRef.current || requestProjectId !== directionProjectId.current) return;
+      setArchiveSourceEntries((current) => append
+        ? [...new Map([...current, ...page.entries].map((entry) => [entry.id, entry])).values()]
+        : page.entries);
+      setArchiveSourceNextCursor(page.nextCursor);
+      setArchiveSourceHasMore(page.hasMore);
+      setArchiveSourceTotal(page.total);
+      setArchiveSourceCatalogAvailable(Boolean(page.catalog));
+      setArchiveSourceLoaded(true);
+    } catch (nextError) {
+      if (requestId !== archiveSourceRequestRef.current || requestProjectId !== directionProjectId.current) return;
+      setArchiveSourceError(archiveSourceErrorMessage(nextError, "browse"));
+      setArchiveSourceErrorKind("load");
+      setArchiveSourceLoaded(true);
+    } finally {
+      if (requestId === archiveSourceRequestRef.current && requestProjectId === directionProjectId.current) setArchiveSourceLoading(false);
+    }
+  };
+
+  const openArchiveSources = () => {
+    setArchiveSourceOpen(true);
+    setArchiveSourceSearch("");
+    setArchiveSourceEntries([]);
+    setArchiveSourceLoaded(false);
+    setSelectedArchiveSourceId("");
+    void loadArchiveSources("");
+  };
+
+  const addSelectedArchiveSource = async () => {
+    const entry = archiveSourceEntries.find((item) => item.id === selectedArchiveSourceId);
+    if (!entry || archiveSourceAdding) return;
+    const requestProjectId = activeProjectId;
+    setArchiveSourceAdding(true);
+    setArchiveSourceError("");
+    setArchiveSourceErrorKind(null);
+    try {
+      const asset = await addArchiveEntryToProject(entry.id);
+      if (requestProjectId !== directionProjectId.current) return;
+      if (asset.projectId !== requestProjectId || asset.kind !== "image" || asset.source !== "archive-index") {
+        throw new Error("archive_materialization_asset_mismatch");
+      }
+      if (asset.id !== quickSourceId) detachAssistedVideoScript();
+      setSelectedStoryRecommendation(undefined);
+      if (archiveSourceRequiresVideo) chooseIntent("video");
+      setQuickSourceId(asset.id);
+      setInputBindings({});
+      setSourceGalleryExpanded(false);
+      setArchiveSourceOpen(false);
+      setLocalError("");
+      setNotice(archiveSourceRequiresVideo
+        ? `${asset.name} was added from Angelo Art Index. Your installed image model is prompt-only, so Video was selected with your prompt unchanged. Review it, then Generate.`
+        : `${asset.name} was added from Angelo Art Index as your source. Review your prompt, then Generate.`);
+      if (sourcePickerRef.current) sourcePickerRef.current.open = false;
+    } catch (nextError) {
+      if (requestProjectId !== directionProjectId.current) return;
+      setArchiveSourceError(archiveSourceErrorMessage(nextError));
+      setArchiveSourceErrorKind("add");
+    } finally {
+      if (requestProjectId === directionProjectId.current) setArchiveSourceAdding(false);
+    }
   };
 
   const uploadAndUseMedia = async (file: File | null) => {
@@ -3084,7 +3222,7 @@ export function GenerationView({
               <Orb size={138} />
               <span className="quick-orb-action"><Icon name="plus" size={13} />{uiOnlyDevelopment ? "Worker needed to upload" : "Add source"}</span>
             </button>}
-            <div className="quick-orb-copy"><strong>{quickSource?.name ?? "Start with words—or drop a file here"}</strong><small>{quickSource ? `${quickSource.source === "upload" ? "Uploaded" : "Retained"} ${quickSource.kind}` : "A source is optional"}</small></div>
+            <div className="quick-orb-copy"><strong>{quickSource?.name ?? "Start with words—or drop a file here"}</strong><small>{quickSource ? `${quickSource.origin === "archive-index" ? "Art Index" : quickSource.source === "upload" ? "Uploaded" : "Retained"} ${quickSource.kind}` : "A source is optional"}</small></div>
           </div>
           {quickSource?.kind === "video" && quickSource.previewUrl ? <details className="quick-source-playback"><summary><Icon name="video" size={13} /> Preview source video</summary><video key={quickSource.id} src={quickSource.previewUrl} poster={quickSource.posterUrl ?? undefined} controls playsInline preload="metadata" aria-label={`${quickSource.name} source video`} /></details> : null}
           {quickSource?.kind === "audio" && quickSource.previewUrl ? <details className="quick-source-playback"><summary><Icon name="music" size={13} /> Preview source audio</summary><audio key={quickSource.id} src={quickSource.previewUrl} controls preload="none" aria-label={`${quickSource.name} source audio`} /></details> : null}
@@ -3100,11 +3238,30 @@ export function GenerationView({
         <details ref={sourcePickerRef} className="quick-compose-panel quick-compose-source">
           <summary>
             <span className={`quick-compose-preview${quickSource ? ` ${quickSource.kind}` : " empty"}`} style={quickSource ? { background: `linear-gradient(135deg, ${quickSource.colors[0]}, ${quickSource.colors[1]})` } : undefined}>{quickSource ? <QuickSourceVisual source={quickSource} /> : <Icon name="plus" size={18} />}</span>
-            <span className="quick-compose-summary-copy"><small>Source</small><strong>{quickSource?.name ?? (intent === "train" ? "Choose media" : "Prompt only")}</strong><em>{quickSource ? `${quickSource.source === "upload" ? "Upload" : "Generated"} / ${quickSource.kind}` : `${sourceChoices.length} retained available`}</em></span>
+            <span className="quick-compose-summary-copy"><small>Source</small><strong>{quickSource?.name ?? (intent === "train" ? "Choose media" : "Prompt only")}</strong><em>{quickSource ? `${quickSourceOriginLabel(quickSource)} / ${quickSource.kind}` : `${sourceChoices.length} retained available`}</em></span>
             <span className="quick-compose-change">{quickSource ? "Change" : "Choose"}</span><Icon name="chevronDown" size={14} />
           </summary>
           <div className="quick-compose-panel-body">
-            <section className={`quick-source-gallery${sourceGalleryExpanded ? " expanded" : ""}`} aria-label={sourcePickerLabel}>
+            {archiveSourceOpen ? <ArchiveSourceBrowser
+              entries={archiveSourceEntries}
+              total={archiveSourceTotal}
+              hasMore={archiveSourceHasMore}
+              loaded={archiveSourceLoaded}
+              catalogAvailable={archiveSourceCatalogAvailable}
+              loading={archiveSourceLoading}
+              adding={archiveSourceAdding}
+              error={archiveSourceError}
+              search={archiveSourceSearch}
+              selectedEntryId={selectedArchiveSourceId}
+              onSearchChange={setArchiveSourceSearch}
+              onSearch={() => void loadArchiveSources(archiveSourceSearch)}
+              onClearSearch={() => { setArchiveSourceSearch(""); void loadArchiveSources(""); }}
+              onRetry={() => archiveSourceErrorKind === "add" ? void addSelectedArchiveSource() : void loadArchiveSources(archiveSourceSearch)}
+              onLoadMore={() => archiveSourceNextCursor ? void loadArchiveSources(archiveSourceSearch, archiveSourceNextCursor, true) : undefined}
+              onSelect={(entryId) => { setSelectedArchiveSourceId(entryId); setArchiveSourceError(""); setArchiveSourceErrorKind(null); }}
+              onAdd={() => void addSelectedArchiveSource()}
+              onBack={() => { archiveSourceRequestRef.current += 1; setArchiveSourceOpen(false); setArchiveSourceLoading(false); setArchiveSourceError(""); setArchiveSourceErrorKind(null); }}
+            /> : <section className={`quick-source-gallery${sourceGalleryExpanded ? " expanded" : ""}`} aria-label={sourcePickerLabel}>
               <header><span><strong>{sourcePickerLabel}</strong><small>{quickSource ? quickSource.name : `${sourceChoices.length} compatible retained`}</small></span>{sourceChoices.length > SOURCE_GALLERY_LIMIT ? <button type="button" className="link-btn" disabled={busy} onClick={() => setSourceGalleryExpanded((current) => !current)}>{sourceGalleryExpanded ? "Show newest" : `View all ${sourceChoices.length}`}</button> : null}</header>
               <div className="quick-source-gallery-grid" role="group" aria-label={`${sourcePickerLabel} gallery`}>
                 <label className={`quick-source-card quick-source-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
@@ -3112,19 +3269,23 @@ export function GenerationView({
                   <span className="quick-source-visual"><Icon name="plus" size={22} /></span>
                   <span className="quick-source-copy"><strong>{busy ? "Working…" : uploadSourceLabel}</strong><small>{uiOnlyDevelopment ? "Worker required" : "From this device"}</small></span>
                 </label>
+                {(intent === "image" || (intent === "video" && !videoOperation)) ? <button type="button" className="quick-source-card quick-source-archive" disabled={busy} onClick={openArchiveSources}>
+                  <span className="quick-source-visual"><Icon name="archive" size={22} /></span>
+                  <span className="quick-source-copy"><strong>Browse Angelo Art Index</strong><small>Verified image copy</small></span>
+                </button> : null}
                 {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { if (quickSourceId) detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
                   <span className="quick-source-visual"><Icon name="generate" size={22} /></span>
                   <span className="quick-source-copy"><strong>No source</strong><small>Start from prompt</small></span>
                   {!quickSource ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
                 </button> : null}
-                {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { if (source.id !== quickSourceId) { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); } setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
+                {visibleSourceChoices.map((source) => <button type="button" key={source.id} className={`quick-source-card${quickSource?.id === source.id ? " on" : ""}`} aria-label={`Use ${source.name} ${source.origin === "archive-index" ? "from Angelo Art Index" : source.source === "upload" ? "upload" : "generated work"}`} aria-pressed={quickSource?.id === source.id} disabled={busy} onClick={() => { if (source.id !== quickSourceId) { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); } setQuickSourceId(source.id); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
                   <span className={`quick-source-visual ${source.kind}`} style={{ background: `linear-gradient(135deg, ${source.colors[0]}, ${source.colors[1]})` }}><QuickSourceVisual source={source} /><span className="quick-source-kind"><Icon name={source.kind === "audio" ? "music" : source.kind} size={11} /></span></span>
-                  <span className="quick-source-copy"><strong>{source.name}</strong><small>{source.source === "upload" ? "Upload" : "Generated"} · {source.kind}</small></span>
+                  <span className="quick-source-copy"><strong>{source.name}</strong><small>{quickSourceOriginLabel(source)} · {source.kind}</small></span>
                   {quickSource?.id === source.id ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
                 </button>)}
               </div>
               <button type="button" className="link-btn quick-source-library" onClick={onMedia}>Open full media library</button>
-            </section>
+            </section>}
           </div>
         </details>
         {selectedSourceCompatibilityError ? <div className="quick-source-conflict" role="alert"><Icon name="shield" size={16} /><span><strong>{workflow?.name} cannot use {quickSource?.name}.</strong><small>Choose a compatible model or continue without this source. Creative Studio will not silently drop it.</small></span><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setLocalError(""); setNotice("Continuing without a source."); }}>Continue without source</button></div> : null}

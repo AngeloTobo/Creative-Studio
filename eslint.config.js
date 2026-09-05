@@ -25,7 +25,7 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.worker, ...globals.serviceworker } },
   },
   {
-    files: ["*.config.{js,ts}", "scripts/**/*.mjs", "runner/**/*.mjs"],
+    files: ["*.config.{js,ts}", "scripts/**/*.mjs", "runner/**/*.mjs", "local-host/**/*.mjs"],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 );

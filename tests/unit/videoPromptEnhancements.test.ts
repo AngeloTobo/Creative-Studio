@@ -79,6 +79,20 @@ describe("video prompt enhancement contracts", () => {
       .toBe(enDashTimeline);
   });
 
+  it("re-canonicalizes first-frame alignment after owner edits and removes it when the source is detached", () => {
+    const profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V", inputMode: "image-to-video" });
+    const timeline = h3Timeline.replace(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n`, "");
+    const restored = compileVideoPromptWithSpeech(timeline, undefined, profile, { inputMode: "image-to-video" });
+    expect(restored.prompt.startsWith(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\nSHOT 1`)).toBe(true);
+    expect(restored.prompt.match(/<Picture 1>/g)).toHaveLength(1);
+
+    const deduplicated = compileVideoPromptWithSpeech(h3Timeline, undefined, profile, { inputMode: "video-extension" });
+    expect(deduplicated.prompt.match(/<Picture 1>/g)).toHaveLength(1);
+
+    const sourceDetached = compileVideoPromptWithSpeech(h3Timeline, undefined, profile, { inputMode: "text-to-video" });
+    expect(sourceDetached.prompt).not.toContain("Picture 1");
+  });
+
   it("rejects source references without a frame and timelines that do not reach the selected duration", () => {
     const profile = videoPromptProfileForIdentity({ name: "MiniMax H3 I2V" });
     const timeline = h3Timeline.replace(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n`, "");

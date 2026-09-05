@@ -1,5 +1,6 @@
 import {
   GEMMA_VIDEO_PROMPT_MODEL,
+  MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION,
   VIDEO_PROMPT_ENHANCED_MAX_LENGTH,
   VIDEO_PROMPT_SOURCE_MAX_LENGTH,
   normalizeEnhancedVideoPrompt,
@@ -331,6 +332,15 @@ export async function videoPromptEnhancementStampForJob(env: Env, ownerId: strin
   const basePrompt = boundedPrompt(input.basePrompt, VIDEO_PROMPT_ENHANCED_MAX_LENGTH);
   const appliedPrompt = boundedPrompt(input.appliedPrompt, VIDEO_PROMPT_ENHANCED_MAX_LENGTH);
   if (basePrompt.length < 4 || appliedPrompt.length < 4) throw new Error("invalid_prompt_enhancement_use");
+  if (row.outputFormat === "minimax-h3-timeline") {
+    const hasFrame = row.inputMode === "image-to-video" || row.inputMode === "video-extension";
+    const appliedLines = appliedPrompt.split("\n");
+    const canonicalFrameAlignment = appliedLines[0] === MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION
+      && !/<?Picture\s+1>?/i.test(appliedLines.slice(1).join("\n"));
+    if ((hasFrame && !canonicalFrameAlignment) || (!hasFrame && /<?Picture\s+1>?/i.test(appliedPrompt))) {
+      throw new Error("prompt_enhancement_picture_alignment_mismatch");
+    }
+  }
   return {
     schemaVersion: "creative-studio-video-prompt-enhancement/1.0",
     requestId: row.id,

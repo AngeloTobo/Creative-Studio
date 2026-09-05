@@ -276,12 +276,44 @@ function developmentMode(env: Env) {
   return backendMode(env) === "development";
 }
 
+function selfHostedMode(env: Env) {
+  return backendMode(env) === "self-hosted";
+}
+
+function localBackendMode(env: Env) {
+  return developmentMode(env) || selfHostedMode(env);
+}
+
 function localHardwareMode(env: Env) {
-  return developmentMode(env) && env.LOCAL_HARDWARE_ONLY === "true";
+  return selfHostedMode(env) || (developmentMode(env) && env.LOCAL_HARDWARE_ONLY === "true");
 }
 
 async function ownerSession(env: Env, request: Request): Promise<OwnerSession> {
   if (developmentMode(env)) return { status: "development", userId: "development-angelo", displayName: "Angelo" };
+  if (selfHostedMode(env)) {
+    const ownerId = boundedText(env.SELF_HOSTED_OWNER_ID, 120);
+    const internalToken = String(env.SELF_HOSTED_INTERNAL_TOKEN ?? "").trim();
+    const expectedEmail = String(env.SELF_HOSTED_ACCESS_EMAIL ?? "").trim().toLowerCase();
+    const presentedToken = String(request.headers.get("x-cs-host-token") ?? "").trim();
+    if (!ownerId || internalToken.length < 40 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(expectedEmail) || expectedEmail.length > 320) {
+      throw new Error("self_hosted_owner_not_configured");
+    }
+    if (presentedToken !== internalToken) throw new Error("approved_login_required");
+    const url = new URL(request.url);
+    const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    if (!loopback) {
+      const accessEmail = String(request.headers.get("cf-access-authenticated-user-email") ?? "").trim().toLowerCase();
+      const accessJwt = String(request.headers.get("cf-access-jwt-assertion") ?? "").trim();
+      if (!accessEmail || !accessJwt || accessEmail !== expectedEmail) {
+        throw new Error("approved_login_required");
+      }
+    }
+    return {
+      status: "approved",
+      userId: ownerId,
+      displayName: boundedText(env.SELF_HOSTED_DISPLAY_NAME, 80) || "Angelo",
+    };
+  }
   return afdfwSession(env, request);
 }
 
@@ -656,7 +688,7 @@ function aceStepAdapterParameterIds(workflow: Awaited<ReturnType<typeof workflow
 
 async function capabilities(env: Env, session: OwnerSession, knownRunners?: Awaited<ReturnType<typeof listLocalRunners>>): Promise<Capability[]> {
   const checkedAt = new Date().toISOString();
-  if (developmentMode(env)) {
+  if (localBackendMode(env)) {
     const runnerList = knownRunners ?? await listLocalRunners(env, session.userId);
     const runnerAvailable = runnerList.some((runner) => runner.state === "online" || runner.state === "busy");
     const trainingRunnerAvailable = runnerList.some((runner) => (runner.state === "online" || runner.state === "busy") && supportsCreativeDnaMediaDescriptions(runner.version));
@@ -1272,7 +1304,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         env,
         session.userId,
         input,
-        developmentMode(env) ? null : reconciliationEmail(request),
+        localBackendMode(env) ? null : reconciliationEmail(request),
       );
       if (registered.status === "failed" || registered.status === "cancelled") throw new Error("generation_batch_terminal");
       const reconciled = await reconcileGenerationBatch(request, env, session.userId, registered.id) ?? registered;
@@ -1680,8 +1712,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         dna,
         modality: original.modality,
         idempotencyKey: idempotencyKey(input.idempotencyKey),
-        reconcileEmail: developmentMode(env) || localWorkflow ? null : reconciliationEmail(request),
-        provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
+        reconcileEmail: localBackendMode(env) || localWorkflow ? null : reconciliationEmail(request),
+        provider: localWorkflow ? original.provider : localBackendMode(env) ? "development-worker" : original.provider,
         promptOverride: original.settingsStamp.prompt,
         executionTarget: localWorkflow ? "local-comfyui" : "afdfw",
         workflowId: original.settingsStamp.workflow?.workflowId ?? null,
@@ -1690,14 +1722,14 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           ...original.settingsStamp,
           createdAt,
           reusedFromJobId: original.id,
-          provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
+          provider: localWorkflow ? original.provider : localBackendMode(env) ? "development-worker" : original.provider,
           evolution: undefined,
           loveLoop: undefined,
           videoPerformance: videoPerformance?.stamp,
           videoDurationSeconds: videoPerformance?.effectiveDuration ?? original.settingsStamp.videoDurationSeconds,
         },
       });
-      if (!developmentMode(env) && !localWorkflow) {
+      if (!localBackendMode(env) && !localWorkflow) {
         try { await enqueueJob(env, created.job.id); } catch (error) { console.error("creative_studio_job_reuse_enqueue_failed", created.job.id, error); }
       }
       return json({ ok: true, job: created.job }, { status: 202 });
@@ -1729,8 +1761,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         dna,
         modality: original.modality,
         idempotencyKey: idempotencyKey(input.idempotencyKey),
-        reconcileEmail: developmentMode(env) || localWorkflow ? null : reconciliationEmail(request),
-        provider: localWorkflow ? original.provider : developmentMode(env) ? "development-worker" : original.provider,
+        reconcileEmail: localBackendMode(env) || localWorkflow ? null : reconciliationEmail(request),
+        provider: localWorkflow ? original.provider : localBackendMode(env) ? "development-worker" : original.provider,
         retryOfJobId: original.id,
         promptOverride: original.settingsStamp.prompt,
         executionTarget: localWorkflow ? "local-comfyui" : "afdfw",
@@ -1747,7 +1779,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
           videoDurationSeconds: videoPerformance?.effectiveDuration ?? original.settingsStamp.videoDurationSeconds,
         },
       });
-      if (!developmentMode(env) && !localWorkflow) {
+      if (!localBackendMode(env) && !localWorkflow) {
         try { await enqueueJob(env, created.job.id); } catch (error) { console.error("creative_studio_job_retry_enqueue_failed", created.job.id, error); }
       }
       return json({ ok: true, job: created.job }, { status: 202 });

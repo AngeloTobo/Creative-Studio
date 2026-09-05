@@ -311,6 +311,19 @@ describe("durable video prompt enhancement", () => {
       }),
     }), env));
     expect(completed.promptEnhancement.enhancedPrompt).toBe(`${MINIMAX_PICTURE_ALIGNMENT_INSTRUCTION}\n${enhancedTimeline}`);
+    await expect(videoPromptEnhancementStampForJob(env, "development-angelo", {
+      requestId: acceptedPayload.promptEnhancement.id,
+      basePrompt: completed.promptEnhancement.enhancedPrompt,
+      appliedPrompt: enhancedTimeline,
+      projectId: activeProject.project.id,
+      workflowId: imported.workflow.id,
+      workflowRevisionId: imported.workflow.currentRevision.id,
+      promptProfileId: "minimax-h3-i2v-motion/1.0",
+      promptOutputFormat: "minimax-h3-timeline",
+      videoDurationSeconds: 10,
+      inputMode: "image-to-video",
+      sourceId: activeSource.asset.id,
+    })).rejects.toThrow("prompt_enhancement_picture_alignment_mismatch");
 
     const rejected = await routeCreativeStudioApi(request("/api/creative-studio/prompt-enhancements", {
       method: "POST",

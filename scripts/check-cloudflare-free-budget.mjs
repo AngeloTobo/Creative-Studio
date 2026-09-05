@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
+import { retiredCloudDeploymentIssues, retiredCloudExecutionIssues } from "./cloud-execution-policy.mjs";
 
 const root = new URL("../", import.meta.url);
 const config = JSON.parse(readFileSync(new URL("wrangler.jsonc", root), "utf8"));
-const production = config.env?.production ?? {};
+const retirementConfig = JSON.parse(readFileSync(new URL("wrangler.retired.jsonc", root), "utf8"));
 const runner = readFileSync(new URL("runner/index.mjs", root), "utf8");
 const provider = readFileSync(new URL("src/app/StudioProvider.tsx", root), "utf8");
 const adapter = readFileSync(new URL("src/adapters/httpAdapter.ts", root), "utf8");
@@ -11,6 +12,9 @@ const runtime = readFileSync(new URL("src/config/runtime.ts", root), "utf8");
 const jobs = readFileSync(new URL("worker/jobs.ts", root), "utf8");
 const workerEntry = readFileSync(new URL("worker/index.ts", root), "utf8");
 const issues = [];
+
+issues.push(...retiredCloudExecutionIssues(config));
+issues.push(...retiredCloudDeploymentIssues(retirementConfig));
 
 function filesUnder(directory, extensions) {
   return readdirSync(new URL(`${directory}/`, root), { withFileTypes: true }).flatMap((entry) => {
@@ -23,7 +27,7 @@ function filesUnder(directory, extensions) {
 // The remote archive is intentionally not a row-per-file D1 catalog. One
 // 17,353-item sync consumed 192,000 billed writes once table indexes and
 // retries were counted. Future archive browsing must keep its bulk manifest
-// local or in R2 and reserve D1 for O(1) catalog/materialization metadata.
+// on the PC and never reserve cloud rows for per-artwork metadata.
 const frozenArchiveMigration = "migrations/0025_archive_index.sql";
 const frozenArchiveMigrationHash = "f26930ab32d30d0c4a470005bedbb6e8e1798da5fcb03eff79db4eb60d2c6ea6";
 const frozenArchiveMigrationSource = readFileSync(new URL(frozenArchiveMigration, root), "utf8").replace(/\r\n/g, "\n");
@@ -57,18 +61,22 @@ for (const relative of filesUnder("worker", [".ts"])) {
   }
 }
 
-const retiredArchiveSyncMarkers = ["archiveCatalogBatches", "/archive-index/syncs", 'kind === "archive-sync"'];
-for (const relative of filesUnder("runner", [".js", ".mjs", ".ts"])) {
+const retiredArchiveSyncMarkers = [
+  "archiveCatalogBatches",
+  "/archive-index/syncs",
+  'kind === "archive-sync"',
+  "ARCHIVE_SYNC_SCHEMA_VERSION",
+  "ARCHIVE_SYNC_BATCH_LIMIT",
+];
+const archiveRuntimeFiles = ["runner", "worker", "local-host", "shared/contracts", "src"]
+  .flatMap((directory) => filesUnder(directory, [".js", ".mjs", ".ts", ".tsx"]));
+for (const relative of archiveRuntimeFiles) {
   const source = readFileSync(new URL(relative, root), "utf8");
   for (const marker of retiredArchiveSyncMarkers) {
     if (source.includes(marker)) issues.push(`${relative} restores retired autonomous archive sync marker ${marker}.`);
   }
 }
 
-const consumer = production.queues?.consumers?.find((item) => item.queue === "creative-studio-jobs");
-const crons = production.triggers?.crons ?? [];
-if (crons.length !== 1 || crons[0] !== "0 * * * *") issues.push("Production must keep exactly one hourly recovery cron.");
-if (Number(consumer?.max_retries ?? 99) > 3) issues.push("Queue retries must stay capped at three.");
 if (!runner.includes("MIN_IDLE_POLL_INTERVAL_MS = 60_000")) issues.push("Runner idle polling must stay at one minute or slower.");
 if (!runner.includes('resolveRunnerPollInterval("https://runner.cs.angelotoborg.com", 5_000)')) issues.push("The runner must self-test the remote polling floor.");
 if (!runner.includes("/api/creative-studio/runner/work/claim")) issues.push("Runner must use the consolidated work-claim request.");
@@ -81,17 +89,9 @@ if (workerEntry.includes("reconcileLoveLoops")) issues.push("Love Loop must reus
 if (workerEntry.includes("ensureAutomaticStoryRefresh") || workerEntry.includes("claimStoryPlan")) {
   issues.push("Story Bank planning must reuse Local Runner claims instead of the scheduled Worker trigger.");
 }
-for (const binding of ["durable_objects", "workflows", "containers", "browser"]) {
-  if (production[binding]) issues.push(`Paid-only binding must not be configured: ${binding}.`);
-}
-
 if (issues.length) {
   process.stderr.write(`${issues.map((issue) => `- ${issue}`).join("\n")}\n`);
   process.exit(1);
 }
 
-const runnerIdleRequestsPerDay = 24 * 60;
-const visibleActiveBrowserRequestsPerDay = 24 * 60;
-const recoveryRequestsPerDay = 24;
-const baseline = runnerIdleRequestsPerDay + visibleActiveBrowserRequestsPerDay + recoveryRequestsPerDay;
-process.stdout.write(`Creative Studio free-tier guard passed: <=${baseline.toLocaleString("en-US")} baseline Worker invocations/day before explicit user actions or active Queue messages.\n`);
+process.stdout.write("Creative Studio Cloudflare guard passed: 0 configured Worker routes, Queue consumers, cron triggers, D1 bindings, R2 bindings, or service bindings.\n");

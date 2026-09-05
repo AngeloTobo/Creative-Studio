@@ -4,9 +4,11 @@ Creative Studio is Angelo's private, standalone creative workstation for turning
 
 **Idea or source -> CreativeDNA -> generate -> retain -> review -> evolve**
 
-[Open the production studio](https://cs.angelotoborg.com) | [Build reality](docs/BUILD_REALITY.md) | [Local-first guide](docs/LOCAL_FIRST.md)
+[Open the remote studio](https://cs.angelotoborg.com) | [Build reality](docs/BUILD_REALITY.md) | [Local-first guide](docs/LOCAL_FIRST.md)
 
-Creative Studio owns its interface, projects, typed contracts, jobs, media, artifact history, model library, training records, and review decisions. Production uses one narrow AFDFW approved-session handoff; AFDFW generation is a separate, optional image/music route that must be selected explicitly. AFDFW is not the application shell and is never exposed to the browser through a generic proxy.
+Creative Studio owns its interface, projects, typed contracts, jobs, media, artifact history, model library, training records, and review decisions. The approved production architecture is PC-hosted: the UI, API, D1-compatible state, R2-compatible media, Local Runner, and ComfyUI work all run on this workstation. Cloudflare is only the Access-protected tunnel doorway; AFDFW is not the application shell or an implicit fallback.
+
+The guarded cloud-to-PC migration, PC-host installation, Cloudflare Worker execution retirement, HomeAI Tunnel/DNS cutover, and authenticated remote desktop/mobile QA completed on 2026-09-03. Localhost and `cs.angelotoborg.com` now reach the same PC authority.
 
 ## The four working surfaces
 
@@ -36,13 +38,13 @@ Every submitted workflow job retains its exact revision, SHA-256 content stamp, 
 
 - **Creative Sessions:** Create autosaves the current project-scoped draft in this browser's device storage, including its retained source reference, direction, media kind, workflow/revision, graphical settings, dialogue, full-script seed, editable scene, optional spoken line, durable request/revision, and Scout/Explore/Master goal. Home can reopen the newest draft, and a successfully queued submission clears it. Sessions do not live in D1, follow the owner to another device, or replace durable jobs; completed full-script drafts and their owner edit revisions do live durably in Creative Studio storage.
 - **Scout direction boards:** choosing Scout for an image with an image source queues Refine, Correct, and Discovery as three independent durable evolution jobs under one study ID. Their retained results stay grouped for comparison while each branch keeps its exact prompt, workflow revision, settings, source provenance, and evolution role.
-- **Generation Recipes:** Create can save and reload an owner-scoped recipe containing the exact executable workflow revision, model identifier, prompt profile, scalar parameters, supported source kinds, and Scout/Explore/Master tier. D1 migration `0014_generation_recipes.sql` adds durable recipe and recipe-evidence records. Evidence can be recorded from an owned terminal job only when its project scope, modality, workflow revision, parameters, model, prompt profile, and executable workflow inputs match. To keep visible-work polling inside the free-plan budget, the consolidated snapshot returns the 50 most recently updated active recipes and the 10 newest evidence observations per recipe; an explicit recipe detail request returns up to 100 observations.
+- **Generation Recipes:** Create can save and reload an owner-scoped recipe containing the exact executable workflow revision, model identifier, prompt profile, scalar parameters, supported source kinds, and Scout/Explore/Master tier. D1 migration `0014_generation_recipes.sql` adds durable recipe and recipe-evidence records. Evidence can be recorded from an owned terminal job only when its project scope, modality, workflow revision, parameters, model, prompt profile, and executable workflow inputs match. To keep routine PC-host refresh bounded, the consolidated snapshot returns the 50 most recently updated active recipes and the 10 newest evidence observations per recipe; an explicit recipe detail request returns up to 100 observations.
 
 ### Creative Worlds and character continuity
 
 Creative Worlds are project-scoped, versioned continuity records. A World can contain characters, places, and objects; `must`, `prefer`, and `avoid` rules scoped by modality; and provenance-bearing visual or retained-work references. Every update uses an expected version so a stale browser cannot silently overwrite newer canon.
 
-Generation can opt into one active World and an exact selection of entity, rule, and canonical-reference versions for a local ComfyUI image or video. The Worker re-loads those owner-scoped records, rejects stale or retired selections, compiles the provider-safe continuity directive, and stamps the exact selected records, versioned redaction references, and compiled text into the durable job. Later World edits therefore cannot rewrite what an earlier result was asked to preserve. Commercial reference identity remains provenance-only; the Worker checks the complete submitted prompt against every stored World reference before anything can reach ComfyUI.
+Generation can opt into one active World and an exact selection of entity, rule, and canonical-reference versions for a local ComfyUI image or video. The local BFF re-loads those owner-scoped records, rejects stale or retired selections, compiles the provider-safe continuity directive, and stamps the exact selected records, versioned redaction references, and compiled text into the durable job. Later World edits therefore cannot rewrite what an earlier result was asked to preserve. Commercial reference identity remains provenance-only; the BFF checks the complete submitted prompt against every stored World reference before anything can reach ComfyUI.
 
 Artifact acceptance and canon are deliberately separate decisions. Accepting a result makes its prompt and settings eligible for CreativeDNA training; it does **not** make the result part of a World. Promoting an accepted, retained artifact to canon requires a second explicit confirmation, a note, selected continuity facets, an active entity version, and the acceptance evidence. The append-only promotion record keeps the actor, reference version, source artifact, and review linkage.
 
@@ -94,11 +96,11 @@ Home and Work present the run as one compact group. Every successful output is r
 
 | Mode | Start | Execution and storage |
 | --- | --- | --- |
-| **Local-first** | `npm run local` | Vite, Wrangler-local BFF, local D1/R2, Local Runner, ComfyUI, and this machine's GPU. No Cloudflare or AFDFW runtime traffic. |
-| **Remote production** | [cs.angelotoborg.com](https://cs.angelotoborg.com) | Cloudflare Access, Creative Studio Worker/D1/R2/Queue, and a paired Windows Local Runner. AFDFW remains a separate optional image/music route. |
+| **PC host** | `npm run local` or the installed Scheduled Task | Built UI, Worker-compatible local BFF, pinned local D1/R2 state, Local Runner, ComfyUI, and this machine's GPU. |
+| **Remote doorway** | [cs.angelotoborg.com](https://cs.angelotoborg.com) | The same PC host through Cloudflare Access and HomeAI Tunnel v10. Cloudflare does not execute application functions or own active Creative Studio data. |
 | **UI development** | `npm run dev` | Explicitly labeled browser-local metadata and preview behavior only. It starts empty and cannot retain real uploads, pair runners, or train models. |
 
-Local and remote stores are intentionally separate. Nothing synchronizes or publishes local projects, media, settings stamps, or decisions in the background.
+The historical Cloudflare D1 database and R2 bucket are preserved read-only for rollback evidence. They are not a second live store, are not synchronized, and are never written or deleted by normal PC-host commands.
 
 ## Run locally on this workstation
 
@@ -116,10 +118,14 @@ Local and remote stores are intentionally separate. Nothing synchronizes or publ
 
 ```powershell
 npm ci
-npm run local
+npm run build:host
 ```
 
-Open the URL printed by the launcher (`http://127.0.0.1:5173` by default). The command applies local migrations, starts or reuses the BFF on port `8787`, creates or reuses an ACL-protected localhost runner credential outside the repository, starts Local Runner 1.21.0, and starts Vite. A machine-local process lock prevents a second Creative Studio runner from competing for the same GPU.
+This workstation completed the guarded cloud-to-PC copy and PC-host installation on 2026-09-03. Its protected receipt is `%LOCALAPPDATA%\Creative Studio Host\backups\20260903T130433Z\migration-receipt.json`; do not rerun the one-time migration against the installed state. The enabled `Creative Studio PC Host` Scheduled Task starts the host at sign-in, while `npm run local` runs the same host in the foreground for diagnostics only when the installed task is stopped.
+
+Open `http://127.0.0.1:8787`. The gateway serves the built UI and forwards API work to a loopback-only Worker-compatible process on `127.0.0.1:8788`. Its pinned state, credentials, receipts, logs, and R2-compatible bytes live under `%LOCALAPPDATA%\Creative Studio Host`, outside the repository. One host lock and one Runner lock prevent duplicate writers or GPU claimers.
+
+The **Archive** source in Create is backed directly by verified filesystem receipts under `D:\CreativeArchive`. It exposes 17,353 indexed records, of which 1,767 are currently eligible for explicit materialization. Browsing does not create D1 rows. Choosing one eligible artwork verifies the source again and copies only that file into the active local project with provenance.
 
 Local Runner 1.19 includes a read-only Video Doctor. It correlates the exact Creative Studio job and Comfy prompt with queue reachability, system-status health, and a bounded local log tail, then sends only allowlisted diagnostic facts through the existing heartbeat. It uses no LLM or GPU and never cancels, restarts, retries, unloads, or changes a workflow on its own. System and Work show one prioritized next step while keeping evidence collapsed.
 
@@ -131,7 +137,7 @@ Then:
 4. Choose the model in Create and submit.
 5. Follow the durable run and review its result in Work.
 
-Press `Ctrl+C` in the launcher terminal to stop the processes it started. A BFF that was already running is reused and is not stopped. Local D1/R2 state lives under the ignored `.wrangler` directory.
+Press `Ctrl+C` only when running the foreground host. The installed Scheduled Task is the normal persistent owner and must remain the only PC-host instance.
 
 For UI-only development, run:
 
@@ -156,17 +162,20 @@ npm run dev
 
 The browser still calls only `/api/creative-studio/*`; Vite proxies those requests to the localhost BFF.
 
-## Pair this workstation with the remote studio
+## Verified PC-host cutover
 
-1. Open **Studio -> System -> Runners** in the production app.
-2. Create a shown-once machine credential.
-3. From this repository, run:
+The local authority is now installed and verified:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-local-runner.ps1
-```
+1. The stable migration receipt records 25 D1 migrations across 40 tables, `integrity=ok`, zero foreign-key violations, and the imported snapshot counts, including 2 projects, 10 workflows, 224 workflow revisions, 151 jobs, 115 artifacts, 33 media assets, and 32 acceptances.
+2. All 233 referenced R2 objects, totaling 315,823,973 bytes, were copied and verified. The receipt records no cloud writes or deletions.
+3. The enabled `Creative Studio PC Host` task owns listeners on `127.0.0.1:8787` and `127.0.0.1:8788`; the old `Creative Studio Local Runner` task is disabled. The local root returns `200`, and host health reports `ok`, `authority=this-pc`, and the 17,353/1,767 Archive counts.
+4. Cloudflare Worker version `4ae4c678-9c2f-48f9-993d-a82926b842f6` is deployed at 100% with the retired fail-closed variables and no application route/domain, D1/R2, Queue, cron, service, assets, preview, or `workers.dev` binding.
+5. HomeAI Tunnel configuration v10 routes `cs.angelotoborg.com` to `http://localhost:8787` before its catch-all. The DNS dashboard records `Tunnel` / `HomeAI` / `Proxied` / `Auto`; at cutover verification, independent Cloudflare and Google DNS-over-HTTPS checks resolved `104.21.18.119` and `172.67.181.206`.
+6. Anonymous remote access receives the expected Cloudflare Access `302`. Authenticated desktop and 390-by-844 mobile sessions render Creative Studio; mobile document width equals its 390-pixel viewport and the app origin emits no console messages. Archive shows 1,767 eligible works, search `0015` returns three results, and the existing materialized `0015` is usable.
+7. The live gateway rejects missing trusted headers with `401`, serves the approved root with `200`, and keeps the approved Runner route unavailable with `404`.
+8. A first supported installer restart exposed a PID-reuse race. The corrected identity check (`Test-SameProcessIdentity`), safe skip path, and `host:installer:check` guard are now in place. Final hardening also pins the exact Access owner and public hostname, canonicalizes route case before enforcing owner/Runner boundaries, rotates Archive retry identity only after a confirmed terminal failure, and requires Node.js 24's verified SQLite backup support. A later controlled `host:install` restart passed with the post-materialization local D1 state and its 234 R2 objects / 321,901,818 bytes unchanged.
 
-The installer prompts for that bearer credential, stores the configuration at `%LOCALAPPDATA%\Creative Studio Runner\config.json` with a current-user ACL, registers sign-in plus daily 21:45 wake/recovery triggers, and starts the runner. Creative Studio stores only its hash, while the installed runner continues using the credential until the machine is revoked from the same Runners panel. ComfyUI remains localhost-only and must be available before any work is claimed. Override the recovery time with `-OvernightRecoveryTime "22:30"` if needed.
+Cloud D1 post-cutover analytics report zero write queries and zero rows written. Cloud R2 remains unchanged at 233 objects and 315,823,973 bytes. ComfyUI was offline during cutover verification, so no generation or GPU execution is claimed.
 
 Install the optional pinned ACE-Step 1.5 runtime and Base checkpoints once:
 
@@ -189,21 +198,22 @@ Never print or commit a runner credential; keep the installed configuration outs
 
 ```mermaid
 flowchart LR
-  UI["React + TypeScript"] -->|"/api/creative-studio/*"| BFF["Creative Studio Worker / BFF"]
-  BFF --> D1["Creative Studio D1"]
-  BFF --> R2["Creative Studio R2"]
-  BFF --> Q["Durable job queue"]
-  Q -->|"explicit remote jobs only"| AF["Allowlisted AFDFW capabilities"]
-  LR["Windows Local Runner"] <-->|"leases, heartbeats, retained output"| BFF
+  LOCAL["localhost browser"] --> GATEWAY["PC gateway 127.0.0.1:8787"]
+  REMOTE["Cloudflare Access + HomeAI Tunnel v10"] --> GATEWAY
+  GATEWAY -->|"/api/creative-studio/*"| BFF["Worker-compatible local BFF 127.0.0.1:8788"]
+  BFF --> D1["Pinned local D1 state"]
+  BFF --> R2["Pinned local R2 media"]
+  LR["Single Windows Local Runner"] <-->|"claims, heartbeats, retained output"| GATEWAY
   LR -->|"localhost"| COMFY["ComfyUI + local GPU"]
+  ART["Verified Art Index receipts"] -->|"browse in memory; copy one selected file"| GATEWAY
 ```
 
 - The frontend imports shared contracts but no AFDFW frontend code, routes, CSS, components, or branding.
 - Browser traffic is limited to `/api/creative-studio/*`. Unknown API paths return `404`.
-- Creative Studio D1 owns projects, DNA versions, Worlds, entities, continuity rules, canon references and promotions, workflows, jobs, training, runners, artifacts, evidence, and decisions.
-- Creative Studio R2 owns uploaded media, every completed result, and retained video thumbnails.
-- Local workflow jobs are claimed by the authenticated machine runner and never enter the AFDFW queue consumer.
-- AFDFW access is method-and-path allowlisted for approved session handoff and explicitly selected image/music generation only. There is no arbitrary forwarder.
+- The pinned local D1-compatible store owns projects, DNA versions, Worlds, entities, continuity rules, canon references and promotions, workflows, jobs, training, runners, artifacts, evidence, and decisions.
+- The pinned local R2-compatible store owns uploaded media, every completed result, and retained video thumbnails.
+- Local workflow jobs are claimed directly by the authenticated local Runner; there is no Cloudflare Queue consumer or scheduled Worker loop.
+- Art Index browsing is receipt-backed and read-only. Materialization is one explicit, provenance-stamped local copy, not a catalog sync.
 - Accepting an artifact changes only Creative Studio review and training evidence. It never mutates AFDFW profile, Core, feed, or canonical state.
 - Commercial reference identity may stay in provenance while being excluded from provider prompts.
 
@@ -211,21 +221,19 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/BACKEND_CONTRACT.md](
 
 ## Cloudflare production boundary
 
-Production is private behind the `Angelo only` Cloudflare Access policy.
+The remote production doorway is private behind the `Angelo only` Cloudflare Access policy and executes on the PC through HomeAI Tunnel v10.
 
 | Resource | Production binding |
 | --- | --- |
-| Worker | `creative-studio` |
-| D1 | `creative-studio` |
-| R2 | `creative-studio-artifacts` |
-| Queue | `creative-studio-jobs` -> `creative-studio-jobs-dlq` |
-| Recovery | Hourly scheduled sweep |
-| Local runner API | `runner.cs.angelotoborg.com` with revocable bearer credentials and no application shell |
-| Optional backend | Same-account `AFDFW` service binding to `art-feed-dfw` |
+| Access + Tunnel | HomeAI v10: `cs.angelotoborg.com` -> `http://localhost:8787`, before catch-all |
+| Worker routes/domains | None in the retirement contract |
+| D1/R2 bindings | None; historical resources remain preserved read-only |
+| Queue/cron/service bindings | None |
+| Active application authority | This PC's pinned state and single local Runner |
 
-The production configuration disables the generic `workers.dev` route. Snapshot reads replace many parallel requests, browser polling runs only for visible active work, remote polling is bounded and backs off after failures, and the Local Runner uses a unified claim/heartbeat cadence. `npm run check:cloudflare-free` enforces a modeled baseline of at most 2,904 Worker requests per day for one remote runner, one visible active browser, and the hourly recovery trigger. Extra tabs, enrolled runners, owner actions, Queue deliveries, and other account Workers add requests; this is not a hard account ceiling.
+The deployed retirement configuration, Worker version `4ae4c678-9c2f-48f9-993d-a82926b842f6`, disables `workers.dev` and previews and declares no Worker route, custom domain, D1/R2 binding, Queue producer/consumer, cron, assets, or service binding. `npm run check:cloudflare-free` fails if any of those execution surfaces return. The configured Worker baseline is zero; remote requests execute against the PC host rather than a Worker.
 
-See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the allowance model and rate-limit response.
+See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the guard and incident boundary.
 
 ## Known boundaries
 
@@ -242,9 +250,9 @@ See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the all
 - Runtime estimates require comparable completed evidence and exclude unknown queue or cold-model-load time.
 - The consolidated snapshot intentionally exposes a bounded recent window; older retained records are available through the cursor-paginated artifact-history API rather than increasing every background refresh.
 - Creative Sessions are browser-and-device local drafts rather than Worker records; they do not synchronize between devices or local-first and remote stores.
-- World continuity is supported for local ComfyUI image and video generation. Music continuity and optional AFDFW generation do not accept a World selection in this phase.
-- Local and remote data do not synchronize automatically.
-- AFDFW is optional and never an implicit fallback when a local workflow is missing.
+- World continuity is supported for local ComfyUI image and video generation. Music continuity does not accept a World selection in this phase; AFDFW execution is unavailable in the retired cloud plane.
+- The preserved historical cloud snapshot does not synchronize with or receive writes from the PC host.
+- AFDFW is not bound in the approved PC-host production contract, and a missing local workflow never falls through to any remote provider.
 
 ## Verify
 
@@ -254,9 +262,7 @@ Run the canonical full source and browser gate:
 npm run check:all
 ```
 
-`npm run check` runs ESLint, browser-domain Vitest, Workers-runtime tests against isolated D1 migrations, the Local Runner self-test, environment validation, the Cloudflare free-tier guard, TypeScript, the production build, and the source secret scan. `check:all` adds the serial desktop/mobile Playwright matrix.
-
-The production-proven Overnight Studio release passes 157 browser-domain tests, 49 Workers-runtime tests, the Local Runner/environment/free-tier/build/secret gates, and 50 Playwright checks with 44 exercised passes plus six intentional device-specific skips. Migration `0020_overnight_studio.sql` is applied remotely, Worker version `c4558c34-c816-432e-a8fe-92b86a726fb0` is deployed at 100%, and the workstation runner reports `1.13.0` idle with no error and a daily wake/recovery trigger; exact release evidence lives in [docs/BUILD_REALITY.md](docs/BUILD_REALITY.md).
+`npm run check` runs ESLint, browser-domain Vitest, Workers-runtime tests against isolated local migrations, the Local Runner self-test, environment validation, the tunnel-only Cloudflare guard, TypeScript, the production build, and the source secret scan. `check:all` adds the serial desktop/mobile Playwright matrix.
 
 Production configuration can be checked without deploying:
 
@@ -264,7 +270,7 @@ Production configuration can be checked without deploying:
 npm run check:env:production
 ```
 
-The production release command runs the full gate, validates production configuration, applies remote D1 migrations, and publishes the Worker and assets. It assumes the Cloudflare D1, R2, Queues, custom domains, Access application, and service binding are already provisioned and Wrangler is authenticated:
+The normal production command verifies, builds, and installs the PC host. It does not apply a remote migration or publish a Worker:
 
 ```powershell
 npm run deploy:production
@@ -275,15 +281,21 @@ npm run deploy:production
 | Command | Purpose |
 | --- | --- |
 | `npm run local` | Start the complete local-first stack. |
+| `npm run host:migrate` | One-time cloud-to-PC copy, already completed on this workstation; it refuses the installed state and must not be rerun as an update. |
+| `npm run build:host` | Build the UI for the persistent PC host. |
+| `npm run host:install` | Install or update the single PC-host Scheduled Task after migration. |
+| `npm run host:installer:check` | Run the PowerShell 5.1 path, process-identity, and Node.js/SQLite recovery-runtime guards without changing tasks or processes. |
+| `npm run deploy:pc-host` | Run release gates, build, and install the PC host. |
 | `npm run dev` | Start the UI-only development adapter. |
 | `npm run dev:worker` | Start the Wrangler-local Worker on port 8787. |
 | `npm run runner:once` | Run one foreground Local Runner cycle. |
 | `npm run runner:check` | Run the Local Runner self-test. |
 | `npm run check` | Run the complete non-browser source, runtime, build, and secret gate. |
 | `npm run check:all` | Add the desktop/mobile Playwright matrix to `check`. |
-| `npm run check:env:production` | Validate production bindings and environment without publishing. |
-| `npm run db:production` | Apply production D1 migrations. This changes remote state. |
-| `npm run deploy:production` | Verify, migrate, and deploy production. |
+| `npm run check:env:production` | Validate the explicit Cloudflare execution-retirement contract without publishing. |
+| `npm run db:production` | Refuse remote D1 writes. |
+| `npm run cloud:retire` | Explicitly republish the fail-closed retirement configuration if recovery ever requires it; retirement is already deployed. |
+| `npm run deploy:production` | Compatibility alias for `deploy:pc-host`; it performs no cloud deploy. |
 
 ## Repository map
 
@@ -306,7 +318,7 @@ docs/                Architecture, contracts, prompt profiles, operations, and v
 - [Architecture](docs/ARCHITECTURE.md)
 - [Backend contract and AFDFW allowlist](docs/BACKEND_CONTRACT.md)
 - [Model-specific prompt profiles](docs/MODEL_PROMPT_PROFILES.md)
-- [Cloudflare free-plan budget](docs/CLOUDFLARE_FREE_BUDGET.md)
+- [Cloudflare tunnel-only guard](docs/CLOUDFLARE_FREE_BUDGET.md)
 - [Production release checklist](docs/PRODUCTION_READINESS.md)
 - [Verified build and production reality](docs/BUILD_REALITY.md)
 

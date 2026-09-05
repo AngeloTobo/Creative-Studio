@@ -1,6 +1,6 @@
-import type { MediaKind } from "../shared/contracts";
+import type { MediaAsset, MediaKind } from "../shared/contracts";
 import { boundedText, id } from "./lib/http";
-import { createMediaAsset, mediaObjectById, projectById } from "./repository";
+import { createMediaAsset, mediaAssetById, mediaObjectById, projectById } from "./repository";
 import type { Env } from "./types";
 
 export const MAX_MEDIA_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -50,16 +50,59 @@ function uploadHeaders(request: Request) {
   return { projectId, originalFileName, mimeType, claimedSize, trainingEligible: training === "true", kind };
 }
 
+type ArchiveProvenance = Extract<MediaAsset["provenance"], { materializedFromArchive: true }>;
+
+function archiveUpload(env: Env, request: Request): { assetId: string; provenance: ArchiveProvenance } | null {
+  const source = String(request.headers.get("x-cs-source") ?? "").trim();
+  if (!source) return null;
+  if (source !== "archive-index" || env.BACKEND_MODE !== "self-hosted") throw new Error("invalid_media_source");
+  const expectedToken = String(env.SELF_HOSTED_INTERNAL_TOKEN ?? "").trim();
+  const token = String(request.headers.get("x-cs-host-token") ?? "").trim();
+  if (expectedToken.length < 40 || token !== expectedToken) throw new Error("approved_login_required");
+  const assetId = boundedText(request.headers.get("x-cs-media-id"), 100);
+  if (!/^media_archive_[a-f0-9]{24}$/.test(assetId)) throw new Error("invalid_archive_media_id");
+  let provenance: unknown;
+  try { provenance = JSON.parse(decodeURIComponent(request.headers.get("x-cs-archive-provenance") ?? "")); }
+  catch { throw new Error("invalid_archive_media_provenance"); }
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) throw new Error("invalid_archive_media_provenance");
+  const value = provenance as Record<string, unknown>;
+  if (value.materializedFromArchive !== true || value.provider !== "angelo-art-index"
+    || value.requestedByOwner !== true || value.verification !== "size-match"
+    || typeof value.catalogId !== "string" || typeof value.archiveEntryId !== "string"
+    || typeof value.materializationId !== "string" || typeof value.materializedAt !== "string"
+    || !Number.isFinite(Date.parse(value.materializedAt))
+    || typeof value.sourceVersion !== "string" || typeof value.sourceFingerprint !== "string"
+    || !/^[a-f0-9]{64}$/.test(value.sourceFingerprint)
+    || typeof value.sourceRecordType !== "string" || typeof value.sourceRecordId !== "string"
+    || (value.inventoryRecordId !== null && typeof value.inventoryRecordId !== "string")
+    || !Array.isArray(value.parentAssetIds) || value.parentAssetIds.length !== 0) {
+    throw new Error("invalid_archive_media_provenance");
+  }
+  return { assetId, provenance: value as ArchiveProvenance };
+}
+
 export async function uploadMedia(env: Env, request: Request, ownerId: string) {
   if (!env.ARTIFACTS) throw new Error("media_storage_not_configured");
   const input = uploadHeaders(request);
+  const archive = archiveUpload(env, request);
+  if (archive && input.trainingEligible) throw new Error("archive_media_training_consent_forbidden");
   const project = await projectById(env, ownerId, input.projectId);
   if (!project) throw new Error("project_not_found");
   if (project.status === "archived") throw new Error("project_archived");
   if (!request.body) throw new Error("empty_media_upload");
 
-  const assetId = id("media");
+  const assetId = archive?.assetId ?? id("media");
   const r2Key = `owners/${encodeURIComponent(ownerId)}/projects/${project.id}/media/${assetId}/source`;
+  const existing = archive ? await mediaAssetById(env, ownerId, assetId) : null;
+  if (existing && archive) {
+    const stored = await env.ARTIFACTS.head(r2Key);
+    const provenance = existing.provenance;
+    if (existing.projectId !== project.id || existing.source !== "archive-index" || existing.size !== input.claimedSize
+      || !stored || stored.size !== input.claimedSize || !("materializedFromArchive" in provenance)
+      || provenance.materializationId !== archive.provenance.materializationId
+      || provenance.archiveEntryId !== archive.provenance.archiveEntryId) throw new Error("archive_materialization_conflict");
+    return existing;
+  }
   await env.ARTIFACTS.put(r2Key, request.body, {
     httpMetadata: { contentType: input.mimeType },
     customMetadata: {
@@ -69,6 +112,8 @@ export async function uploadMedia(env: Env, request: Request, ownerId: string) {
       originalFileName: input.originalFileName,
       trainingEligible: String(input.trainingEligible),
       uploadedAt: new Date().toISOString(),
+      source: archive ? "archive-index" : "upload",
+      ...(archive ? { archiveEntryId: archive.provenance.archiveEntryId, materializationId: archive.provenance.materializationId } : {}),
     },
   });
   const stored = await env.ARTIFACTS.head(r2Key);
@@ -88,6 +133,8 @@ export async function uploadMedia(env: Env, request: Request, ownerId: string) {
       size: stored.size,
       r2Key,
       trainingEligible: input.trainingEligible,
+      source: archive ? "archive-index" : "upload",
+      provenance: archive?.provenance ?? null,
     });
   } catch (error) {
     await env.ARTIFACTS.delete(r2Key);
