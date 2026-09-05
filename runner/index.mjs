@@ -28,7 +28,7 @@ import {
 } from "./gpuCoordinator.mjs";
 import { collectVideoDoctor } from "./videoDoctor.mjs";
 
-export const RUNNER_VERSION = "1.23.1";
+export const RUNNER_VERSION = "1.23.2";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -490,6 +490,15 @@ export function buildAceStepCaptionGraph(filename, label = "Untitled audio") {
   return graph;
 }
 
+const VIDEO_SCENE_SOUND_GUIDANCE = [
+  "Design sound from the actual scene: a quiet location-specific bed of natural ambience, with only a few material textures and synchronized foley events motivated by visible actions or established offscreen sources.",
+  "Place each sound at its causal action with a believable onset, rise, decay, and quiet between events. Distinguish close foreground detail from distant background ambience; match perspective, spatial movement, and reverberation to the physical space.",
+  "Do not invent a whoosh or impact for camera movement, a focus change, or changing light alone. Avoid dense generic cue lists and continuous maximum intensity; a still scene can remain quiet.",
+  "No music, score, instruments, rhythmic beat, or musical risers by default. Add music only when the owner's brief explicitly requests it or a visible musical source motivates it; style, mood, and the word cinematic alone do not request music.",
+  "A separately planned song or soundtrack does not authorize music in the video; keep that output's musical directions separate from the video's location sound.",
+  "Preserve explicit mute, silence, or keep-source audio instructions and exact authored speech. Do not turn this sound guidance into dialogue, narration, lyrics, or new vocalizations.",
+].join(" ");
+
 export function buildGemmaVideoPromptGraph(sourcePrompt, options = {}) {
   const source = String(sourcePrompt || "").replace(/\s+/g, " ").trim().slice(0, 4_000);
   if (source.split(/\s+/).filter(Boolean).length < 3) throw new Error("video_prompt_too_short");
@@ -524,7 +533,8 @@ export function buildGemmaVideoPromptGraph(sourcePrompt, options = {}) {
       hasFrame
         ? "The bound frame is authoritative. Begin SHOT 1 with the first motion or change; do not recap its static appearance or opening composition. Refer to visible details only when they move or change. Write literal subject action, small gestures or reactions, environmental motion, camera behavior, light changes, and a clear final beat. Preserve identity and continuity while inventing one plausible visual development without replacing the scene."
         : "Across the chronological shots, write literal subject action, small gestures or reactions, environmental motion, camera behavior, light changes, and a clear final beat. Preserve visible identity and first-frame composition when a frame is supplied. Invent one specific but plausible visual development that makes the motion more surprising without replacing the scene.",
-      "The Audio sentence may combine synchronized ambience, action sounds, and restrained non-diegetic music, or explicitly state no music. Do not invent dialogue.",
+      "Use the Audio sentence for the scene sound design. Do not invent dialogue.",
+      VIDEO_SCENE_SOUND_GUIDANCE,
       `Write ${hasFrame ? "45 to 155" : "60 to 180"} English words total. Use no markdown, title, preamble, reasoning, model name, commercial identity, captions, logos, black frames, abrupt cuts, or generic cinematic filler.`,
       `SOURCE: <video_direction>${source}</video_direction>`,
     ].join("\n");
@@ -538,6 +548,7 @@ export function buildGemmaVideoPromptGraph(sourcePrompt, options = {}) {
         ? "The bound frame is authoritative. Begin with the first motion or change; do not restate its static subject appearance, composition, materials, color, or light. Describe visible details only as they change through concrete action, environmental response, camera movement, lighting change, and a clear end state while preserving identity and continuity."
         : "Describe a literal chronological sequence from opening through the final moment: subject appearance and gesture, concrete action, environmental response, camera movement, lighting changes, and a clear end state. Establish the opening composition concretely.",
       ltx ? "Stay concise because the selected workflow may apply its own TextGenerateLTX2Prompt expansion. Do not add headings, shot lists, or dense adjective stacks." : "Add one specific, plausible visual turn that makes the motion less predictable while keeping continuity.",
+      VIDEO_SCENE_SOUND_GUIDANCE,
       "Do not name the model, discuss prompting, name or imitate a commercial artist, invent story facts, or request captions, logos, visible model titles, black frames, or abrupt unexplained cuts.",
       `SOURCE: <video_direction>${source}</video_direction>`,
     ].join("\n");
@@ -726,8 +737,8 @@ function buildFullGemmaVideoScriptGraph(input, options = {}) {
     ? "After the required Picture 1 line, begin SHOT 1 with the first motion or change"
     : "Begin fullScript with the first motion or change";
   const visualCoverageInstruction = hasFrame
-    ? `The bound frame is authoritative. ${frameStartInstruction}; do not add a static recap or caption of visible appearance or opening composition. Mention appearance, materials, palette, environment, and light only when they change or move. Preserve identity and continuity while directing concrete actions and reactions, camera framing, focus and movement, and a clear final image or resolved beat.${mode === "tighten" ? " Preserve deliberately authored facts from sourceScript where they matter, but do not add a new opening recap." : ""} Include synchronized nonverbal sound, ambience, and music or an explicit absence of music. fullScript must never contain dialogue or speech instructions because spokenText is compiled separately.`
-    : "Write a complete provider-ready visual scene in fullScript: establish the subject and framing; progress through specific visible actions and reactions; direct camera framing, focus, and movement; describe environmental motion and changing light; land on a clear final image or resolved beat; and include synchronized nonverbal sound, ambience, and music or an explicit absence of music. fullScript must never contain dialogue or speech instructions because spokenText is compiled separately.";
+    ? `The bound frame is authoritative. ${frameStartInstruction}; do not add a static recap or caption of visible appearance or opening composition. Mention appearance, materials, palette, environment, and light only when they change or move. Preserve identity and continuity while directing concrete actions and reactions, camera framing, focus and movement, and a clear final image or resolved beat.${mode === "tighten" ? " Preserve deliberately authored facts from sourceScript where they matter, but do not add a new opening recap." : ""} Include scene-grounded synchronized nonverbal sound and ambience. fullScript must never contain dialogue or speech instructions because spokenText is compiled separately.`
+    : "Write a complete provider-ready visual scene in fullScript: establish the subject and framing; progress through specific visible actions and reactions; direct camera framing, focus, and movement; describe environmental motion and changing light; land on a clear final image or resolved beat; and include scene-grounded synchronized nonverbal sound and ambience. fullScript must never contain dialogue or speech instructions because spokenText is compiled separately.";
   const evidence = JSON.stringify({
     seedPhrases,
     sourceScript: sourceScript || null,
@@ -741,6 +752,7 @@ function buildFullGemmaVideoScriptGraph(input, options = {}) {
     `The selected profile is ${profile.label} for ${profile.targetModel}, with ${profile.outputFormat} output. Follow that format precisely.`,
     `The result must describe exactly ${range.duration} seconds and fullScript must contain ${range.minimum} to ${range.maximum} English words. Scale the number of beats and motion to what can physically read in that duration.`,
     visualCoverageInstruction,
+    VIDEO_SCENE_SOUND_GUIDANCE,
     "Favor concrete nouns and verbs over adjective stacks. Every direction must be filmable. Do not merely restate the seed, write a synopsis, explain your choices, or produce generic cinematic filler.",
     formatInstruction,
     dialogueInstruction,
@@ -966,11 +978,11 @@ function overnightOutputGuidance(output) {
   }
   if (output.modality === "video" && output.promptOutputFormat === "minimax-h3-timeline") {
     const duration = Number(output.videoDurationSeconds) || 5;
-    return `Write a source-free MiniMax H3 timeline for exactly ${duration} seconds. Begin with SHOT 1 and concrete timestamps from 0.00s through exactly ${duration}.00s; end with exactly one Audio: line containing synchronized ambience, action sounds, and restrained original music. Do not mention Picture 1 or a reference frame. Do not invent dialogue, narration, lyrics, captions, titles, logos, black frames, or a model name.`;
+    return `Write a source-free MiniMax H3 timeline for exactly ${duration} seconds. Begin with SHOT 1 and concrete timestamps from 0.00s through exactly ${duration}.00s; end with exactly one Audio: line for scene-grounded sound. ${VIDEO_SCENE_SOUND_GUIDANCE} Do not mention Picture 1 or a reference frame. Do not invent dialogue, narration, lyrics, captions, titles, logos, black frames, or a model name.`;
   }
   if (output.modality === "video") {
     const duration = Number(output.videoDurationSeconds) || 5;
-    return `Write one flowing plain-English paragraph for exactly ${duration} seconds. Establish the opening composition, then describe chronological subject action, environmental response, camera and focus movement, changing light, and a resolved final image. Include synchronized nonverbal ambience, action sounds, and restrained original music. Do not use headings, shot labels, timestamps, dialogue, narration, lyrics, captions, titles, logos, black frames, or a model name.`;
+    return `Write one flowing plain-English paragraph for exactly ${duration} seconds. Establish the opening composition, then describe chronological subject action, environmental response, camera and focus movement, changing light, and a resolved final image. Include scene-grounded nonverbal sound. ${VIDEO_SCENE_SOUND_GUIDANCE} Do not use headings, shot labels, timestamps, dialogue, narration, lyrics, captions, titles, logos, black frames, or a model name.`;
   }
   if (output.promptOutputFormat === "structured-caption") {
     return "Write a MiniMax Music 3 instrumental structured caption of 120 to 220 words with exactly these headings in order inside the prompt string: ### Global Metadata, ### Vocal Details, ### Arrangement. Describe supported genre, mood arc, instrumentation, sonic palette, production, an explicitly instrumental lead texture, and a section-by-section musical progression. Do not include lyrics, biography, visual framing, or an artist or song name.";
@@ -1163,14 +1175,14 @@ function storyPromptGuidance(workflow) {
     const source = workflow.sourceId
       ? "Use the provided start image as the exact first frame. The bound frame is authoritative: do not recap its static appearance or opening composition; begin SHOT 1 with the first motion or change and mention visible details only when they change."
       : "Establish the opening frame directly; this is source-free text-to-video.";
-    return `${source} Write a MiniMax H3 timeline for exactly ${duration} seconds. Begin with SHOT 1 and concrete timestamps from 0.00s through exactly ${duration}.00s. Drive a clear action, environmental response, camera progression, and resolved final image. End with exactly one Audio: line containing synchronized ambience, action sounds, and restrained original music. No dialogue unless the evidence contains an exact authored line; no narration, lyrics, captions, titles, logos, black frames, or model names.`;
+    return `${source} Write a MiniMax H3 timeline for exactly ${duration} seconds. Begin with SHOT 1 and concrete timestamps from 0.00s through exactly ${duration}.00s. Drive a clear action, environmental response, camera progression, and resolved final image. End with exactly one Audio: line for scene-grounded sound. ${VIDEO_SCENE_SOUND_GUIDANCE} No dialogue unless the evidence contains an exact authored line; no narration, lyrics, captions, titles, logos, black frames, or model names.`;
   }
   if (workflow.modality === "video") {
     const duration = Number(workflow.durationSeconds) || 5;
     if (!workflow.sourceId) {
-      return `Write one chronological plain-English paragraph for exactly ${duration} seconds. Establish the opening composition, then specify concrete subject action, environmental response, camera and focus movement, changing light, synchronized nonverbal ambience and original music, and a resolved final image. No headings, timestamps, dialogue unless explicitly authored, narration, lyrics, captions, titles, logos, black frames, or model names.`;
+      return `Write one chronological plain-English paragraph for exactly ${duration} seconds. Establish the opening composition, then specify concrete subject action, environmental response, camera and focus movement, changing light, scene-grounded nonverbal sound, and a resolved final image. ${VIDEO_SCENE_SOUND_GUIDANCE} No headings, timestamps, dialogue unless explicitly authored, narration, lyrics, captions, titles, logos, black frames, or model names.`;
     }
-    return `Use the provided start image as the exact first frame. The bound frame is authoritative: do not recap its static appearance or opening composition; begin with the first motion or change and mention visible details only when they change. Write one chronological plain-English paragraph for exactly ${duration} seconds that specifies concrete subject action, environmental response, camera and focus movement, changing light, synchronized nonverbal ambience and original music, and a resolved final image. No headings, timestamps, dialogue unless explicitly authored, narration, lyrics, captions, titles, logos, black frames, or model names.`;
+    return `Use the provided start image as the exact first frame. The bound frame is authoritative: do not recap its static appearance or opening composition; begin with the first motion or change and mention visible details only when they change. Write one chronological plain-English paragraph for exactly ${duration} seconds that specifies concrete subject action, environmental response, camera and focus movement, changing light, scene-grounded nonverbal sound, and a resolved final image. ${VIDEO_SCENE_SOUND_GUIDANCE} No headings, timestamps, dialogue unless explicitly authored, narration, lyrics, captions, titles, logos, black frames, or model names.`;
   }
   if (workflow.promptOutputFormat === "structured-caption") {
     return "Write a MiniMax Music 3 instrumental structured caption of 120 to 220 words with exactly these headings in order inside the prompt string: ### Global Metadata, ### Vocal Details, ### Arrangement. Put each heading on its own line and begin its non-empty section body on the following line. Describe genre and mood arc, tempo only when meaningful, instrumentation, sonic palette, production, an explicitly instrumental lead texture, and section-by-section musical progression. Translate the story into music rather than retelling biography or visual composition. No lyrics, artist names, song names, visual camera language, or unrelated continuity notes.";
@@ -2372,14 +2384,19 @@ export async function combineVideoExtension(sourceBytes, sourceContentType, cont
   }
 }
 
-export async function assertGeneratedVideoAudio(bytes, contentTypeValue) {
+export function requiresGeneratedVideoAudio(job) {
+  return job?.modality === "video" && Boolean(job.settingsStamp?.videoSpeech)
+    && job.settingsStamp?.videoOperation?.kind !== "extend";
+}
+
+export async function assertGeneratedVideoAudio(bytes, contentTypeValue, errorCode = "video_extension_generated_audio_missing") {
   const directory = await mkdtemp(join(tmpdir(), "creative-studio-video-audio-check-"));
   const inputPath = join(directory, `source.${videoExtension(contentTypeValue)}`);
   try {
     await writeFile(inputPath, bytes);
     const probe = await probeVideoFile(inputPath);
     if (!probe.hasAudio || !(await videoHasAudibleAudio(inputPath))) {
-      throw new Error("video_extension_generated_audio_missing");
+      throw new Error(errorCode);
     }
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -2735,6 +2752,10 @@ async function executeBundle(config, bundle, options = {}) {
         }
         outputFileName = `${bundle.job.id}-continuation.${videoExtension(retained.contentType)}`;
       }
+    }
+    if (requiresGeneratedVideoAudio(bundle.job)) {
+      await requireJobHeartbeat(config, bundle.job.id, { progress: 93, stage: "post-processing" }, promptId);
+      await assertGeneratedVideoAudio(retained.bytes, retained.contentType, "video_generated_audio_missing");
     }
     let videoThumbnail = null;
     if (bundle.job.modality === "video") {

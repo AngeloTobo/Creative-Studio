@@ -89,6 +89,9 @@ describe("real artifact media review", () => {
     expect(missingSound?.action).toContain("Retry repeats the same sound settings");
     expect(missingSound?.action).toContain("Open the source video in Create");
     expect(jobIssuePresentation("failed", "video_audio_probe_failed", "video")?.summary).toContain("FFmpeg");
+    const normalMissingSound = jobIssuePresentation("failed", "video_generated_audio_missing", "video");
+    expect(normalMissingSound?.summary).toContain("without audible sound");
+    expect(normalMissingSound?.action).toContain("Create to choose a model with video and audio output");
     expect(jobIssuePresentation("running", null, "music")).toBeNull();
   });
 });

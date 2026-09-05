@@ -170,7 +170,7 @@ test("Ideas keeps CreativeDNA as optional context and hands source work to the c
   await expect(page.getByRole("button", { name: "Local Gemma offline" })).toBeDisabled();
   await expect(page.getByText(/no proven quality lift yet/i)).toBeVisible();
   await expect(page.getByRole("button", { name: "No dialogue", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByText(/model-tuned ambience and sound design/)).toBeVisible();
+  await expect(page.getByText(/Natural ambience, textures, and action-matched Foley/)).toBeVisible();
   await page.getByRole("button", { name: "Exact script", exact: true }).click();
   const originalScript = "Look at the light.";
   const exactScriptInput = page.getByRole("textbox", { name: "Exact spoken words" });

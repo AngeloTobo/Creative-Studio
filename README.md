@@ -21,6 +21,11 @@ The guarded cloud-to-PC migration, PC-host installation, Cloudflare Worker execu
 
 Legacy deep links still resolve into the correct Work or Studio section, but the primary desktop and mobile navigation stays limited to these four destinations.
 
+### Video sound
+
+New video prompts default to scene sound: natural location ambience, material textures, and sparse Foley timed to visible action. The prompt planner describes concrete sound sources, distance and reverberation, onset and decay, and quiet moments. It adds music only when the brief requests it or a musical source belongs to the scene. Speech settings and explicit silent/original-audio extensions remain separate.
+
+Reusing a setup removes the former injected synth/percussion default; existing jobs and retained videos keep their original provenance. New sound-requested videos must contain a decoded audible track before completion. This checks missing or silent audio, not synchronization or artistic quality; inspect the rendered result. LTX generates sound jointly with video, so the local model's fidelity remains a practical limit.
 ### Image style training and 3D
 
 **Train my style** uses 3–40 selected, training-consented images. Review the captions before starting native ComfyUI training. The first supported base is the installed Stable Diffusion 1.5 checkpoint, with 512px copies, rank 8, batch size one, gradient checkpointing, and offloading. Proof, balanced, and deep run 100, 500, or 1,500 steps. The checkpoint stays private and review-required; approval creates a matching SD1.5 generation workflow. Its learned weights do not apply to unrelated image, video, song, or mesh models. Native ComfyUI training nodes remain experimental, and training completion alone is not a quality assessment.

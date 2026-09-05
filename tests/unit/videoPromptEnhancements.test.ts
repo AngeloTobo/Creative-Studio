@@ -7,6 +7,7 @@ import {
   normalizeVideoSpeechStamp,
   VIDEO_EXTENSION_SOUND_DIRECTIVE,
   VIDEO_NO_DIALOGUE_DIRECTIVE,
+  VIDEO_SOUND_DESIGN_DIRECTIVE,
   videoPromptProfileForIdentity,
 } from "../../shared/contracts";
 
@@ -125,10 +126,11 @@ describe("video prompt enhancement contracts", () => {
       mode: "no-speech",
       authoredText: null,
       spokenText: null,
-      directive: "No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns. Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.",
+      directive: `${VIDEO_NO_DIALOGUE_DIRECTIVE} ${VIDEO_SOUND_DESIGN_DIRECTIVE}`,
     });
     expect(compiled.prompt).toMatch(/Audio: .*No dialogue or intelligible human speech/);
-    expect(compiled.prompt).toContain("bright arpeggiated synths");
+    expect(compiled.prompt).toContain("Foley synchronized to visible actions");
+    expect(compiled.prompt).not.toContain("bright arpeggiated synths");
     expect(compiled.prompt).not.toMatch(/Owl City/i);
     expect(compiled.prompt).not.toContain("(S1)");
     expect(normalizeVideoSpeechStamp(compiled.speech)).toEqual(compiled.speech);
@@ -145,6 +147,38 @@ describe("video prompt enhancement contracts", () => {
     expect(ltx.prompt.match(new RegExp(VIDEO_EXTENSION_SOUND_DIRECTIVE, "g"))).toHaveLength(1);
     expect(ltx.prompt).toContain("do not loop the source track or leave the new segment silent");
     expect(ltx.prompt).toContain("No dialogue or intelligible human speech");
+  });
+
+  it("replaces only the old injected music default when a retained setup is reused", () => {
+    const legacy = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
+    const source = `A boot lands in wet gravel. Audio: close gravel crunch and a short puddle splash. ${VIDEO_NO_DIALOGUE_DIRECTIVE} ${legacy}`;
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5" });
+    const compiled = compileVideoPromptWithSpeech(source, undefined, profile);
+    expect(compiled.prompt).toContain("close gravel crunch and a short puddle splash");
+    expect(compiled.prompt).not.toContain("arpeggiated");
+    expect(compiled.prompt).toContain("No added music, beat, or score unless explicitly requested");
+    const recompiled = compileVideoPromptWithSpeech(compiled.prompt, undefined, profile);
+    expect(recompiled.prompt.split(VIDEO_SOUND_DESIGN_DIRECTIVE)).toHaveLength(2);
+    expect(recompiled.prompt.split(VIDEO_NO_DIALOGUE_DIRECTIVE)).toHaveLength(2);
+    expect(normalizeVideoSpeechStamp(recompiled.speech)).toEqual(recompiled.speech);
+  });
+
+  it("preserves expressly authored music and exact dialogue while applying the scene sound policy", () => {
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5" });
+    const compiled = compileVideoPromptWithSpeech("A pianist presses one key. Keep the requested gentle piano score under the rain.", { mode: "exact-script", text: "Listen to the rain." }, profile);
+    expect(compiled.prompt).toContain("Keep the requested gentle piano score under the rain.");
+    expect(compiled.speech.spokenText).toBe("Listen to the rain.");
+    expect(compiled.prompt).toContain('"Listen to the rain."');
+    expect(compiled.prompt).toContain("unless explicitly requested");
+  });
+
+  it("removes inherited generated-sound defaults from an explicitly silent extension", () => {
+    const profile = videoPromptProfileForIdentity({ name: "LTX 2.5" });
+    const previous = compileVideoPromptWithSpeech("The curtains settle as the camera stops.", undefined, profile, { continuationSound: true });
+    const silent = compileVideoPromptWithSpeech(previous.prompt, undefined, profile, { soundDesign: false });
+    expect(silent.prompt).not.toContain(VIDEO_SOUND_DESIGN_DIRECTIVE);
+    expect(silent.prompt).not.toContain(VIDEO_EXTENSION_SOUND_DIRECTIVE);
+    expect(silent.speech.directive).toBe(VIDEO_NO_DIALOGUE_DIRECTIVE);
   });
 
   it("does not add sound-generation instructions to source-only or silent extensions", () => {

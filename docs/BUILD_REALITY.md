@@ -2,6 +2,15 @@
 
 Last verified: 2026-09-05 (America/Chicago)
 
+## Scene-grounded video sound - September 5 update
+
+- Removed the unconditional synth arpeggios, percussion, and melodic-hook directive from video compilation and the bundled LTX Fast PC example. New compilation replaces that exact legacy injected default when reusing a setup; it preserves authored musical requests and retained history.
+- Simple enhancement, full scripts, Overnight video, and Story video now request concrete location ambience, material textures, causal Foley, spatial perspective, onset/decay and quiet. No incidental music is prescribed; music remains explicit or tied to a musical source in the scene. Camera-only movement does not justify a sound effect. Song generation remains separate.
+- Runner 1.23.2 extends the existing decoded-audio check to normal video jobs carrying a sound/speech stamp. Missing tracks and silence produce video_generated_audio_missing; a quiet test track passes. Existing extension silence/original-audio behavior is preserved. Native LTX audio remains connected to the final video output; no new model or generation provider is required.
+- This release does not certify audiovisual synchronization or parity with a remote video model. Local Gemma blind review is supplementary: a baseline audiovisual review missed audible sound and its audio-only follow-up invented out-of-range timestamps, so those interpretations cannot substitute for inspecting the clip.
+- Verification: the full release gate passed 386 app/Runner tests, 77 Worker tests, and 82 desktop/mobile browser checks, with six intentional device skips, plus lint, TypeScript, Runner/installer checks, environment guards, build and secret scan. The final failure-message adjustment also passed its focused tests and final host build. Runner 1.23.2 is installed and the PC host is healthy; no migration or ComfyUI restart was needed. The installed mobile composer displays the new sound guidance.
+- Private retained proof `artifact_job_bfdc9320e46e41c5b4da` used the normal prompt helper and LTX Fast PC workflow. A visual-only teapot-pouring brief produced trickle, final drip/wet tap and room-tone directions without music. The 5.042-second 352x608, 24 FPS H.264/AAC output has stereo 48 kHz audio (mean -35.9 dB, peak -2.4 dB), passed the new audio gate, frame inspection and complete browser playback without decoder errors. A duration-bounded blind audio review reported clinks, rumble and hiss with no discernible music, but did not confidently identify water. The video also has model-generated object/motion quirks. This proves the corrected pipeline and audible output, not precise Foley realism or synchronization. Existing retained videos were not rewritten.
+
 ## PC creative workstation - September 5 release
 
 - Create exposes Image, Video, Song, and 3D mesh directly. Image-to-mesh uses a retained source and the installed native Hunyuan3D 2.1 graph; results retain a downloadable GLB. MiniMax Music3 has an installed, bounded 30-second song workflow. Meshes do not appear as unsupported image/audio/video inputs elsewhere.

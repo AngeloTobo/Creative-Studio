@@ -38,8 +38,12 @@ export type VideoPromptProfile = {
   maximumWords: number;
 };
 
-export const VIDEO_SOUND_DESIGN_DIRECTIVE = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
-export const VIDEO_EXTENSION_SOUND_DIRECTIVE = "Generate a new synchronized soundtrack for this continuation with fresh ambience, effects, and music shaped by the new action; do not loop the source track or leave the new segment silent.";
+export const VIDEO_SOUND_DESIGN_DIRECTIVE = "Sound follows the scene: natural location ambience, material textures, and sparse Foley synchronized to visible actions and contacts. Foreground events rise, change, and decay with the action; quieter environmental sound provides depth. Match distance, movement, and reverberation to the space. Let quiet moments breathe. Camera movement alone makes no sound. No added music, beat, or score unless explicitly requested; an audible musical source in the scene may sound naturally.";
+export const VIDEO_EXTENSION_SOUND_DIRECTIVE = "Continue the location ambience coherently, with fresh synchronized textures and Foley shaped by the new action; do not loop the source track or leave the new segment silent. Add music only when explicitly requested or produced by a musical source in the scene.";
+// Recognize only our former injected defaults when recompiling a retained setup.
+// Saved jobs and owner-authored musical directions remain unchanged.
+const LEGACY_VIDEO_SOUND_DESIGN_DIRECTIVE = "Keep sound active with scene-specific ambience and effects, bright arpeggiated synths, sparkling electronic layers, buoyant programmed percussion, wistful melodic hooks, and a dreamy nocturnal-city texture when appropriate.";
+const LEGACY_VIDEO_EXTENSION_SOUND_DIRECTIVE = "Generate a new synchronized soundtrack for this continuation with fresh ambience, effects, and music shaped by the new action; do not loop the source track or leave the new segment silent.";
 export const VIDEO_NO_DIALOGUE_DIRECTIVE = "No dialogue or intelligible human speech. Do not invent words, lyrics, or human vocal patterns.";
 const NO_SPEECH_DIRECTIVE = `${VIDEO_NO_DIALOGUE_DIRECTIVE} ${VIDEO_SOUND_DESIGN_DIRECTIVE}`;
 export const VIDEO_SPEECH_TEXT_MAX_LENGTH = 1_200;
@@ -160,6 +164,10 @@ export function compileVideoPromptWithSpeech(
   options: { continuationSound?: boolean; soundDesign?: boolean; inputMode?: VideoPromptInputMode } = {},
 ) {
   let basePrompt = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  for (const injected of [LEGACY_VIDEO_SOUND_DESIGN_DIRECTIVE, LEGACY_VIDEO_EXTENSION_SOUND_DIRECTIVE, VIDEO_SOUND_DESIGN_DIRECTIVE, VIDEO_EXTENSION_SOUND_DIRECTIVE]) {
+    basePrompt = basePrompt.replaceAll(`${VIDEO_NO_DIALOGUE_DIRECTIVE} ${injected}`, "").replaceAll(injected, "");
+  }
+  basePrompt = basePrompt.replace(/[ \t]+/g, " ").trim();
   if (basePrompt.length < 4) throw new Error("directive_required");
   if (profile.outputFormat === "minimax-h3-timeline" && options.inputMode) {
     const hasFrame = options.inputMode === "image-to-video" || options.inputMode === "video-extension";
