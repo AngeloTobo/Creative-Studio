@@ -1,3 +1,6 @@
+import { resolveComfyLoraNames } from "./comfyLoraNames.mjs";
+import { lmStudioTextConfiguration, canUseLmStudioForEnhancement, lmStudioEnhanceText } from "./lmStudioText.mjs";
+import { detectImageTrainingRuntime, prepareImageDataset, executeImageTraining } from "./imageStyleTraining.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -25,7 +28,7 @@ import {
 } from "./gpuCoordinator.mjs";
 import { collectVideoDoctor } from "./videoDoctor.mjs";
 
-export const RUNNER_VERSION = "1.22.0";
+export const RUNNER_VERSION = "1.23.1";
 export const MIN_IDLE_POLL_INTERVAL_MS = 60_000;
 export const LOCAL_IDLE_POLL_INTERVAL_MS = 5_000;
 export const REMOTE_ACTIVE_POLL_INTERVAL_MS = 2_000;
@@ -379,7 +382,7 @@ async function machineState(config, activeJobId = null, error = null) {
     ...info,
     activeJobId,
     error: reportedError,
-    modelTrainingProviders: aceStepProviderList(detectAceStepRuntime()),
+    modelTrainingProviders: [...aceStepProviderList(detectAceStepRuntime()), ...((await detectImageTrainingRuntime(config)).available ? ["comfy-sd15-lora"] : [])],
   };
 }
 
@@ -1533,7 +1536,8 @@ export function applyInputFilenames(graphValue, parameters, filenames) {
 export function applyModelAdapterBindings(graphValue, parameters, settingsStamp) {
   const adapters = settingsStamp?.modelAdapters || [];
   if (!adapters.length) return graphValue;
-  if (adapters.length !== 1 || adapters[0].provider !== "ace-step-1.5-lora") throw new Error("model_adapter_binding_invalid");
+  if (adapters.length !== 1 || !["ace-step-1.5-lora", "comfy-sd15-lora"].includes(adapters[0].provider)) throw new Error("model_adapter_binding_invalid");
+  const imageStyle = adapters[0].provider === "comfy-sd15-lora";
   const graph = structuredClone(graphValue);
   let fileApplied = false;
   let strengthApplied = false;
@@ -1541,8 +1545,8 @@ export function applyModelAdapterBindings(graphValue, parameters, settingsStamp)
     const binding = parameter.binding;
     if (binding?.format !== "comfyui-api") continue;
     const identity = `${parameter.id || ""} ${parameter.label || ""} ${binding.inputName || ""}`.toLowerCase();
-    const isFile = /(lora|adapter).*(name|file|path)|(name|file|path).*(lora|adapter)/.test(identity);
-    const isStrength = /(lora|adapter).*(strength|weight|scale)|(strength|weight|scale).*(lora|adapter)/.test(identity);
+    const isFile = imageStyle ? binding.inputName === "lora_name" : /(lora|adapter).*(name|file|path)|(name|file|path).*(lora|adapter)/.test(identity);
+    const isStrength = imageStyle ? ["strength_model", "strength_clip"].includes(binding.inputName) : /(lora|adapter).*(strength|weight|scale)|(strength|weight|scale).*(lora|adapter)/.test(identity);
     if (!isFile && !isStrength) continue;
     const node = graph?.[binding.nodeId];
     if (!node?.inputs) throw new Error(`model_adapter_node_missing:${binding.nodeId}`);
@@ -1575,6 +1579,12 @@ function graphParameterValue(graph, parameter) {
 export function validateGenerationPromptGraph(bundle, graph) {
   if (bundle.job.modality === "music") return;
   const parameters = bundle.workflow.currentRevision.parameters || [];
+  if (bundle.job.modality === "3d") {
+    const images = parameters.filter((parameter) => parameter.kind === "media" && parameter.mediaKind === "image");
+    if (!images.length || images.some((parameter) => !bundle.job.settingsStamp.inputBindings?.[parameter.id]
+      || !graphParameterValue(graph, parameter))) throw new Error("mesh_source_binding_required");
+    return;
+  }
   const positives = parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "positive");
   const negatives = parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
   const expected = String(bundle.job.settingsStamp.prompt || "").trim();
@@ -1619,6 +1629,7 @@ async function prepareGraph(config, bundle) {
 }
 
 async function submitPrompt(config, graph, jobId, outputsToExecute = null) {
+  graph = await resolveComfyLoraNames(config, graph);
   const response = await fetch(`${config.comfyUrl}/prompt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1877,12 +1888,14 @@ function allFileObjects(value, result = []) {
 }
 
 const EXTENSIONS = {
+  "3d": [".glb"],
   image: [".png", ".jpg", ".jpeg", ".webp"],
   music: [".wav", ".mp3", ".flac", ".ogg"],
   video: [".mp4", ".webm", ".mov"],
 };
 
 const OUTPUT_NODE_PATTERNS = {
+  "3d": /^SaveGLB$/,
   image: /save.*image|image.*save/i,
   music: /save.*audio|audio.*save/i,
   video: /save.*video|video.*save|video.*combine|combine.*video|saveanimatedwebp/i,
@@ -2177,11 +2190,13 @@ export async function describeTrainingMedia(config, trainingJobId, specification
   }
 }
 
-function contentType(filename, upstream) {
-  const current = String(upstream || "").split(";", 1)[0];
+export function contentType(filename, upstream) {
+  const current = String(upstream || "").split(";", 1)[0].trim().toLowerCase();
+  const canonical = { "audio/x-flac": "audio/flac", "audio/x-wav": "audio/wav", "audio/wave": "audio/wav", "image/jpg": "image/jpeg" }[current];
+  if (canonical) return canonical;
   if (/^(image|audio|video)\//.test(current)) return current;
   const extension = filename.toLowerCase().split(".").at(-1);
-  return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime" })[extension] || "application/octet-stream";
+  return ({ glb: "model/gltf-binary", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime" })[extension] || "application/octet-stream";
 }
 
 async function fetchOutput(config, output) {
@@ -2586,6 +2601,22 @@ export async function executePromptEnhancementBundle(config, bundle, options = {
       outputFormat: enhancement.outputFormat,
       seed: stableVideoPromptEnhancementSeed(enhancement.id),
     });
+    const lmConfiguration = canUseLmStudioForEnhancement(bundle) ? lmStudioTextConfiguration() : null;
+    if (lmConfiguration) {
+      const released = await releaseComfyTaskResidency(config, `LM Studio prompt helper ${enhancement.id}`, options);
+      if (!released?.released) throw new Error("lmstudio_comfy_handoff_unconfirmed");
+      await runnerRequest(config, `/api/creative-studio/runner/prompt-enhancements/${enhancement.id}/heartbeat`, {
+        method: "POST", body: JSON.stringify({ progress: 30 }),
+      });
+      let result;
+      let lmRequestStarted = false;
+      try { result = await lmStudioEnhanceText(lmConfiguration, graph["1"].inputs.prompt, fetch, () => { lmRequestStarted = true; }); }
+      finally { if (lmRequestStarted) await releaseExternalLmStudioForGpu(options); }
+      await runnerRequest(config, `/api/creative-studio/runner/prompt-enhancements/${enhancement.id}/complete`, {
+        method: "POST", body: JSON.stringify({ enhancedPrompt: result.text, upstreamId: `lmstudio:${enhancement.id}`, helperModel: result.model }),
+      });
+      return;
+    }
     await prepareGemmaModelHandoff(config, `${enhancement.id}-video-prompt-enhancement`, options);
     promptId = await submitPrompt(config, graph, `${enhancement.id}-video-prompt-enhancement`);
     recordGemmaModelResidency(options.modelResidencyState || PROCESS_COMFY_MODEL_RESIDENCY);
@@ -3044,6 +3075,33 @@ export async function freeComfyMemory(config, reason = "resource handoff", optio
 async function executeModelTrainingBundle(config, bundle, options = {}) {
   const job = bundle.modelTrainingJob;
   try {
+    if (job.provider === "comfy-sd15-lora") {
+      if (bundle.assets.length !== job.assetIds.length || bundle.assets.some((asset) => asset.projectId !== job.projectId || asset.kind !== "image" || !asset.trainingEligible || !job.assetIds.includes(asset.id))) throw new Error("image_training_source_consent_required");
+      if (!job.dataset?.reviewedAt) {
+        await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/dataset`, {
+          method: "POST", body: JSON.stringify({ dataset: prepareImageDataset(bundle) }),
+        });
+        return;
+      }
+      await releaseExternalLmStudioForGpu(options);
+      const released = await releaseComfyTaskResidency(config, `Image training ${job.id}`, options);
+      if (!released?.released) throw new Error("image_training_gpu_handoff_unconfirmed");
+      const result = await executeImageTraining(config, job, {
+        download: async (assetId) => (await downloadTrainingMedia(config, assetId)).buffer,
+        submit: (graph) => submitPrompt(config, graph, job.id),
+        cancelAndDrain: (promptId) => cancelAndDrainComfyPrompt(config, promptId, options),
+        heartbeat: async (progress, stage, upstreamId) => {
+          const response = await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/heartbeat`, {
+            method: "POST", body: JSON.stringify({ progress, stage, upstreamId }),
+          });
+          if (!response.continue) throw new Error("model_training_cancelled");
+        },
+      });
+      await runnerRequest(config, `/api/creative-studio/runner/model-training/${job.id}/complete`, {
+        method: "POST", body: JSON.stringify({ ...result, localFile: { ...result.localFile, runnerId: job.runnerId } }),
+      });
+      return;
+    }
     if (!job.dataset || !job.dataset.reviewedAt) {
       await prepareAceStepDataset(config, bundle, options);
       return;

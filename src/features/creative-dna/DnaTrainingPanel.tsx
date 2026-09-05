@@ -1,3 +1,4 @@
+import { ImageStyleTrainingPanel } from "./ImageStyleTrainingPanel";
 import { useMemo, useRef, useState } from "react";
 import type { CreativeDnaTarget } from "../../../shared/contracts";
 import { creativeDnaCanGenerate, useStudio } from "../../app/StudioProvider";
@@ -14,7 +15,7 @@ function statusLabel(status: string) {
   return status.replaceAll("-", " ");
 }
 
-type TrainingPath = "analyze" | "model";
+type TrainingPath = "analyze" | "model" | "image-model";
 
 export function DnaTrainingPanel({ onMedia, initialAssetIds = [], initialPath, reviewJobId, onReviewJobHandled }: { onMedia: () => void; initialAssetIds?: string[]; initialPath?: TrainingPath; reviewJobId?: string; onReviewJobHandled?: () => void }) {
   const { snapshot, activeProjectId, activeDna, uploadMedia, startDnaTraining, cancelDnaTraining, reviewDnaTraining, busy, error } = useStudio();
@@ -104,8 +105,9 @@ export function DnaTrainingPanel({ onMedia, initialAssetIds = [], initialPath, r
     <div className="training-path-tabs" role="tablist" aria-label="Training path">
       <button type="button" role="tab" aria-selected={path === "analyze"} aria-controls="creative-dna-analysis-panel" className={path === "analyze" ? "on" : ""} onClick={() => setPath("analyze")}><span><Icon name="image" size={18} /></span><strong>Analyze media</strong><small>Describe files and evolve CreativeDNA</small><em>{selectedAssetIds.length ? `${selectedAssetIds.length} selected` : `${eligibleAssets.length} eligible`}</em></button>
       <button type="button" role="tab" aria-selected={path === "model"} aria-controls="music-model-training-panel" className={path === "model" ? "on" : ""} onClick={() => setPath("model")}><span><Icon name="music" size={18} /></span><strong>Train music LoRA</strong><small>Create real ACE-Step LoRA weights</small><em>{modelActionCount ? `${modelActionCount} needs action` : consentedAudioCount >= 3 ? `${consentedAudioCount} tracks ready` : `${3 - consentedAudioCount} more needed`}</em></button>
+      <button type="button" role="tab" aria-selected={path === "image-model"} aria-controls="image-model-training-panel" className={path === "image-model" ? "on" : ""} onClick={() => setPath("image-model")}><span><Icon name="image" size={18} /></span><strong>Train art style</strong><small>Create real local image LoRA weights</small></button>
     </div>
-    {path === "model" ? <div id="music-model-training-panel" role="tabpanel"><AceStepTrainingPanel onMedia={onMedia} initialAssetIds={initialAssetIds} /></div> : <div id="creative-dna-analysis-panel" role="tabpanel"><section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
+    {path === "image-model" ? <div id="image-model-training-panel" role="tabpanel"><ImageStyleTrainingPanel key={activeProjectId} onMedia={onMedia} /></div> : path === "model" ? <div id="music-model-training-panel" role="tabpanel"><AceStepTrainingPanel onMedia={onMedia} initialAssetIds={initialAssetIds} /></div> : <div id="creative-dna-analysis-panel" role="tabpanel"><section className="dna-training glass" id="creative-dna-training" aria-labelledby="dna-training-title">
     <header className="dna-training-head">
       <div><span className="eyebrow">CreativeDNA analysis</span><h2 id="dna-training-title">Analyze media</h2><p>Gemma describes each file, measures its signals, and creates a reviewable DNA version. Model weights stay unchanged.</p></div>
       <span className="training-runner-state"><i /> Local runner + Gemma 4</span>

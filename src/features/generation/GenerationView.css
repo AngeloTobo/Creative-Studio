@@ -2574,3 +2574,32 @@
     transition: none !important;
   }
 }
+
+/* The primary composer uses direct controls; advanced tools remain progressively disclosed. */
+.quick-create-card.simple-create { box-shadow: none; }
+.studio-compose-modes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; padding: 4px 0 18px; }
+.studio-compose-modes button { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 48px; border: 1px solid var(--border-mid); border-radius: 10px; color: var(--text-soft); background: var(--surface); font: inherit; font-size: 14px; cursor: pointer; }
+.studio-compose-modes button.on { background: color-mix(in srgb, var(--cyan) 12%, transparent); color: var(--text); border-color: var(--cyan); }
+.studio-compose-modes button:focus-visible, .studio-source-row button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.studio-source-row { display: flex; align-items: center; gap: 16px; min-height: 108px; padding: 18px; border: 1px dashed var(--border-mid); border-radius: 12px; background: var(--surface); }
+.studio-source-row > div { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.studio-source-row strong { overflow-wrap: anywhere; font-size: 14px; color: var(--text); }
+.studio-source-row small { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.studio-source-preview { width: 72px; height: 72px; display: grid; place-items: center; overflow: hidden; border-radius: 8px; flex-shrink: 0; }
+.studio-source-preview img { width: 100%; height: 100%; object-fit: cover; }
+.quick-create-head .studio-train-door { margin-left: auto; flex-shrink: 0; }
+.quick-create-stage { background: none; }
+@media (max-width: 640px) {
+ .studio-compose-modes { gap: 5px; }
+ .studio-compose-modes button { flex-direction: column; gap: 5px; font-size: 12px; min-height: 60px; }
+ .studio-source-row { flex-wrap: wrap; gap: 12px; padding: 14px; }
+ .studio-source-row > div { min-width: 160px; }
+ .studio-source-row > button { width: 100%; justify-content: center; }
+ .quick-create-head { flex-wrap: wrap; }
+ .quick-create-head .studio-train-door { margin-left: 0; }
+}
+
+.studio-style-status { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 9px; background: var(--surface-inset); color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.studio-style-status svg { flex-shrink: 0; margin-top: 2px; }
+
+.quick-create .quick-direction[hidden] { display: none; }

@@ -1,3 +1,5 @@
+import { validatedGlbStream } from "./mesh";
+import { putSizedStream } from "./sizedStream";
 import {
   compileCreativeDna,
   creativeDnaReferenceAssetIds,
@@ -607,7 +609,7 @@ export async function runnerInputById(env: Env, ownerId: string, inputId: string
       id: string; projectId: string; kind: Artifact["kind"]; name: string;
       mimeType: string; size: number; r2Key: string;
     }>();
-  if (!artifact) return null;
+  if (!artifact || artifact.kind === "3d") return null;
   const kind: RunnerMediaInput["kind"] = artifact.kind === "music" ? "audio" : artifact.kind;
   return {
     ...artifact,
@@ -828,7 +830,7 @@ export async function createQueuedJob(
   const jobId = id("job");
   const now = new Date().toISOString();
   const timeoutAt = input.executionTarget === "local-comfyui" ? null : new Date(Date.now() + 30 * 60_000).toISOString();
-  const prompt = input.promptOverride ?? creativeDnaGenerationPrompt(input.dna, input.modality === "video" ? "image" : input.modality);
+  const prompt = input.promptOverride ?? creativeDnaGenerationPrompt(input.dna, (input.modality === "video" || input.modality === "3d") ? "image" : input.modality);
   const settingsStamp = withGenerationProviderWorkload(input.settingsStampOverride ?? {
     schemaVersion: 1,
     source: "creative-dna",
@@ -953,6 +955,7 @@ async function ensureArtifactForJob(env: Env, ownerId: string, job: Job, name: s
 }
 
 async function ensureTrainingExample(env: Env, ownerId: string, job: Job, artifactId: string) {
+  if (job.modality === "3d") return;
   const now = new Date().toISOString();
   await env.DB.prepare(`insert or ignore into creative_training_examples (
     id, owner_id, project_id, dna_artifact_id, artifact_id, kind, status, prompt, settings_stamp_json, created_at, updated_at
@@ -1045,6 +1048,7 @@ export async function dueBackgroundJobIds(env: Env, limit = 50) {
 }
 
 const RUNNER_OUTPUT_TYPES: Record<string, { kind: Job["modality"]; extension: string }> = {
+  "model/gltf-binary": { kind: "3d", extension: "glb" },
   "image/png": { kind: "image", extension: "png" },
   "image/jpeg": { kind: "image", extension: "jpg" },
   "image/webp": { kind: "image", extension: "webp" },
@@ -1106,7 +1110,8 @@ export async function completeLocalRunnerJob(
   const artifactId = `artifact_${jobId}`;
   const safeOwner = ownerId.replace(/[^a-z0-9_-]/gi, "_").slice(0, 120);
   const key = `owners/${safeOwner}/artifacts/${artifactId}/result.${output.extension}`;
-  const created = await env.ARTIFACTS.put(key, body, {
+  const retainedBody = output.kind === "3d" ? await validatedGlbStream(body, declaredSize) : body;
+  const created = await putSizedStream(env.ARTIFACTS, key, retainedBody, declaredSize, {
     onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: { contentType },
     customMetadata: { ownerId, artifactId, jobId, runnerId, retainedAt: new Date().toISOString() },
@@ -1186,7 +1191,7 @@ export async function retainLocalRunnerVideoThumbnail(
 
   const safeOwner = ownerId.replace(/[^a-z0-9_-]/gi, "_").slice(0, 120);
   const key = `owners/${safeOwner}/artifacts/${background.artifactId}/thumbnail.jpg`;
-  const created = await env.ARTIFACTS.put(key, body, {
+  const created = await putSizedStream(env.ARTIFACTS, key, body, declaredSize, {
     onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: { contentType },
     customMetadata: { ownerId, artifactId: background.artifactId, jobId, runnerId, frame: "first", retainedAt: new Date().toISOString() },
@@ -1289,7 +1294,7 @@ export async function artifactById(env: Env, ownerId: string, artifactId: string
 }
 
 const ARTIFACT_STATUSES = new Set<Artifact["status"]>(["retaining", "ready", "accepted", "rejected", "archived"]);
-const ARTIFACT_KINDS = new Set<Artifact["kind"]>(["music", "image", "video"]);
+const ARTIFACT_KINDS = new Set<Artifact["kind"]>(["music", "image", "video", "3d"]);
 
 /** Stable, owner-scoped history pages. The live snapshot remains a bounded operational window. */
 export async function listArtifactHistoryPage(env: Env, ownerId: string, query: ArtifactHistoryQuery = {}): Promise<ArtifactHistoryPage> {

@@ -324,6 +324,16 @@ function apiInspection(graph: RecordValue): WorkflowGraphInspection {
       });
       continue;
     }
+    if (["LoraLoader", "LoraLoaderModelOnly"].includes(nodeType)) {
+      for (const inputName of ["lora_name", "strength_model", "strength_clip"]) {
+        const value = inputs[inputName];
+        if (!scalar(value)) continue;
+        parameters.push({ id: `${nodeId}::${inputName}`, label: `${title}: ${label(inputName)}`,
+          kind: typeof value === "number" ? "number" : "text", value, mediaKind: null,
+          binding: { format: "comfyui-api", nodeId, inputName } });
+      }
+      continue;
+    }
     if (/loader|save|preview|markdown/i.test(nodeType)) continue;
     for (const [inputName, value] of Object.entries(inputs)) {
       if (!SAFE_API_INPUTS.has(inputName) || !scalar(value)) continue;

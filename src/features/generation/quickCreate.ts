@@ -1,11 +1,11 @@
 import type { Job, WorkflowDefinition, WorkflowParameter, WorkflowScalar } from "../../../shared/contracts";
 
-export type CreateIntent = "image" | "video" | "music" | "train";
-export type QuickSourceKind = "image" | "audio" | "video";
+export type CreateIntent = "image" | "video" | "music" | "3d" | "train";
+export type QuickSourceKind = "image" | "audio" | "video" | "3d";
 
 export function workflowCreateIntent(value: string): Exclude<CreateIntent, "train"> {
   if (value === "audio" || value === "music") return "music";
-  return value === "video" ? "video" : "image";
+  return value === "3d" ? "3d" : value === "video" ? "video" : "image";
 }
 
 function workflowScore(workflow: WorkflowDefinition, sourceKind: QuickSourceKind | null) {

@@ -14,6 +14,7 @@
     "host:migrate": "node scripts/migrate-cloud-to-pc.mjs",
     "host:start": "node scripts/start-pc-host.mjs",
     "host:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1",
+    "desktop:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-desktop-shortcut.ps1",
     "host:installer:check": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1 -PathValidationSelfTest && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1 -ProcessIdentitySelfTest && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-pc-host.ps1 -NodeRuntimeSelfTest",
     "build:host": "npm run typecheck && node scripts/build-pc-host.mjs",
     "db:local": "wrangler d1 migrations apply creative-studio --local",
@@ -34,7 +35,7 @@
     "build": "npm run typecheck && vite build",
     "check": "npm run lint && npm run test && npm run test:worker && npm run runner:check && npm run host:installer:check && npm run check:env && npm run check:cloudflare-free && npm run build && npm run check:secrets",
     "check:all": "npm run check && npm run test:e2e",
-    "deploy:pc-host": "npm run check:all && npm run build:host && npm run host:install",
+    "deploy:pc-host": "npm run check:all && npm run build:host && npm run host:install && npm run desktop:install",
     "deploy:production": "npm run deploy:pc-host",
     "cloud:retire": "npm run check:env:production && npm run check:cloudflare-free && wrangler deploy --config wrangler.retired.jsonc"
   },

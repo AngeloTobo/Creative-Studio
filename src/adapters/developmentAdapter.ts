@@ -315,7 +315,7 @@ export function createDevelopmentAdapter(options: DevelopmentAdapterOptions = {}
     if (!project) throw new Error("project_not_found");
     if (project.status === "archived") throw new Error("project_archived");
     const createdAt = now().toISOString();
-    const prompt = creativeDnaGenerationPrompt(dna, input.modality);
+    const prompt = creativeDnaGenerationPrompt(dna, input.modality === "3d" ? "image" : input.modality);
     const settingsStamp: GenerationSettingsStamp = {
       schemaVersion: 1, source: "creative-dna", createdAt, reusedFromJobId: retryOfJobId,
       prompt, provider: "development-renderer", modality: input.modality, workflow: null,

@@ -36,7 +36,7 @@ export type UpdateProjectRequest = Partial<CreateProjectRequest> & {
   status?: Exclude<ProjectStatus, "archived">;
 };
 
-export type GenerationModality = "music" | "image" | "video";
+export type GenerationModality = "music" | "image" | "video" | "3d";
 export type ImagePerformanceMode = "fast-default" | "explicit-custom";
 export type VideoPerformanceMode = "fast-default" | "explicit-heavy";
 
@@ -278,7 +278,7 @@ export type CreativeDnaTrainingJob = {
   baseDnaArtifactId: string | null;
   resultDnaArtifactId: string | null;
   name: string;
-  targetModality: Exclude<GenerationModality, "video">;
+  targetModality: Exclude<GenerationModality, "video" | "3d">;
   status: CreativeDnaTrainingStatus;
   progress: number;
   provider: "local-creative-dna-runner";

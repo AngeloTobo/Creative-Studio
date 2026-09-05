@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 
 const COMMAND_TIMEOUT_MS = 15_000;
+const LM_OBSERVATION_TIMEOUT_MS = 30_000;
 const MAX_COMMAND_OUTPUT_BYTES = 256_000;
 
 function localRunnerDirectory() {
@@ -74,7 +75,7 @@ export async function runLocalCommand(command, args, options = {}) {
 function parseLmStudioProcesses(value) {
   let parsed;
   try {
-    parsed = JSON.parse(String(value || "").replace(/^\uFEFF/, "").trim() || "[]");
+    parsed = JSON.parse(String(value || "").replace(/^\uFEFF/, "").trim());
   } catch {
     throw new Error("lmstudio_gpu_state_invalid");
   }
@@ -87,11 +88,17 @@ export async function observeLmStudioResidency(options = {}) {
   if (!cli) return { available: false, loadedCount: 0 };
   const run = options.runCommand || runLocalCommand;
   let result;
-  try {
-    result = await run(cli, ["ps", "--json"], options);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "command_failed";
-    throw new Error(`lmstudio_gpu_state_unconfirmed:${detail}`, { cause: error });
+  // CLI startup can exceed 15 seconds during GPU/CPU pressure. Retry only the
+  // observation timeout once; neither failed observation authorizes a handoff.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      result = await run(cli, ["ps", "--json"], { ...options, timeoutMs: options.timeoutMs ?? LM_OBSERVATION_TIMEOUT_MS });
+      break;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "command_failed";
+      if (attempt === 0 && detail === "local_command_timed_out") continue;
+      throw new Error(`lmstudio_gpu_state_unconfirmed:${detail}`, { cause: error });
+    }
   }
   if (result.code !== 0) throw new Error("lmstudio_gpu_state_unconfirmed");
   return { available: true, loadedCount: parseLmStudioProcesses(result.stdout).length };

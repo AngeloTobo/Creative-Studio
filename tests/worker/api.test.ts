@@ -3994,6 +3994,48 @@ describe("Creative Studio Worker API", () => {
     expect(await result(forgedRetry)).toMatchObject({ error: "invalid_trusted_video_preset" });
   });
 
+  it("retries source-bound meshes without text conditioning and never resumes a drained LM guard failure", async () => {
+    const ownerId = "development-angelo";
+    const project = await testProject(ownerId, "Mesh retries");
+    const dna = await createLocalDna(env, ownerId, { projectId: project.id, name: "Mesh source", directive: "A ceramic object.", targetModality: "image" });
+    const { bucket } = memoryBucket();
+    const local = workerEnv("development", undefined, bucket);
+    const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+      method: "POST", headers: { "content-type": "image/png", "x-cs-project-id": project.id,
+        "x-cs-file-name": "source.png", "x-cs-file-size": "4", "x-cs-training-eligible": "false" },
+      body: new Uint8Array([137, 80, 78, 71]),
+    }), local)) as { asset: { id: string } };
+    const graph = JSON.stringify({ "1": { class_type: "LoadImage", inputs: { image: "source.png" } },
+      "2": { class_type: "Hunyuan3Dv2Conditioning", inputs: { image: ["1", 0] } },
+      "3": { class_type: "SaveGLB", inputs: { mesh: ["2", 0] } } });
+    const imported = await result(await routeCreativeStudioApi(request("/api/creative-studio/workflows", {
+      method: "POST", headers: { "content-type": "application/json", "x-cs-project-id": project.id,
+        "x-cs-file-name": "mesh.json", "x-cs-file-size": String(new TextEncoder().encode(graph).length), "x-cs-workflow-name": "Hunyuan mesh" }, body: graph,
+    }), local)) as { workflow: { id: string; currentRevision: { id: string; parameters: Array<{ id: string; kind: string }> } } };
+    const media = imported.workflow.currentRevision.parameters.find((parameter) => parameter.kind === "media")!;
+    const created = await result(await routeCreativeStudioApi(request("/api/creative-studio/jobs", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId: project.id,
+        dnaArtifactId: dna.artifactId, modality: "3d", idempotencyKey: "mesh_retry_original_001",
+        workflow: { workflowId: imported.workflow.id, revisionId: imported.workflow.currentRevision.id,
+          inputBindings: { [media.id]: uploaded.asset.id } } }),
+    }), local)) as { job: { id: string } };
+    expect(created.job.id).toBeTruthy();
+    await env.DB.prepare("update creative_jobs set status = 'failed', upstream_id = 'drained-prompt', error = ? where id = ?")
+      .bind("lmstudio_gpu_state_unconfirmed:local_command_timed_out", created.job.id).run();
+    const retry = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${created.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "mesh_retry_good_001" }),
+    }), local);
+    expect(retry.status).toBe(202);
+    expect(await result(retry)).toMatchObject({ job: { modality: "3d", upstreamId: null, retryOfJobId: created.job.id } });
+    await env.DB.prepare("update creative_jobs set settings_stamp_json = json_set(settings_stamp_json, '$.inputBindings', json('{}')) where id = ?")
+      .bind(created.job.id).run();
+    const invalid = await routeCreativeStudioApi(request(`/api/creative-studio/jobs/${created.job.id}/retry`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idempotencyKey: "mesh_retry_bad_001" }),
+    }), local);
+    expect(invalid.status).toBe(400);
+    expect(await result(invalid)).toMatchObject({ error: "mesh_source_binding_invalid" });
+  });
+
   it("pairs a revocable runner and completes a browser-independent video workflow with exact provenance", async () => {
     const ownerId = "development-angelo";
     const project = await testProject(ownerId, "Runner Study");
@@ -4795,6 +4837,144 @@ describe("Creative Studio Worker API", () => {
     }));
     const prepared = await runnerPost(`/api/creative-studio/runner/model-training/${started.modelTrainingJob.id}/dataset`, {
       dataset: { schemaVersion: "creative-studio-ace-step-dataset/1.0", items: datasetItems, preparedAt: new Date().toISOString(), reviewedAt: null, reviewNote: null },
+    });
+    expect(prepared.status).toBe(200);
+
+    const reviewed = await routeCreativeStudioApi(request(`/api/creative-studio/model-training-jobs/${started.modelTrainingJob.id}/dataset-review`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: datasetItems.map(({ assetId, caption, lyrics, isInstrumental }) => ({ assetId, caption, lyrics, isInstrumental })),
+        note: "All three captions were checked against the source recordings.",
+      }),
+    }), production);
+    expect(reviewed.status).toBe(200);
+    expect(await result(reviewed)).toMatchObject({ modelTrainingJob: { status: "waiting-for-runner", stage: "preflight" } });
+
+    const trainingClaim = await result(await runnerPost("/api/creative-studio/runner/work/claim", state)) as {
+      bundle: { modelTrainingJob: { id: string; runnerId: string; dataset: { reviewedAt: string } } };
+    };
+    expect(trainingClaim.bundle.modelTrainingJob.dataset.reviewedAt).toBeTruthy();
+    const completed = await runnerPost(`/api/creative-studio/runner/model-training/${started.modelTrainingJob.id}/complete`, {
+      upstreamId: `ace-step:${started.modelTrainingJob.id}`,
+      localFile: {
+        runnerId: enrolled.runner.id,
+        relativePath: `creative-studio/${started.modelTrainingJob.id}/adapter_model.safetensors`,
+        format: "safetensors",
+        sha256: "a".repeat(64),
+        size: 4096,
+      },
+      evaluation: {
+        schemaVersion: "creative-studio-model-adapter-evaluation/1.0",
+        datasetItems: 3,
+        captionedItems: 3,
+        validationPromptCount: 0,
+        notes: ["Corrected ACE-Step LoRA training completed."],
+      },
+    });
+    expect(completed.status).toBe(200);
+    const completedBody = await result(completed) as { adapter: { id: string; status: string } };
+    expect(completedBody.adapter.status).toBe("review-required");
+
+    const activated = await routeCreativeStudioApi(request(`/api/creative-studio/model-adapters/${completedBody.adapter.id}/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approved", note: "Checkpoint lineage is valid; activate it for controlled ACE-Step comparison renders." }),
+    }), production);
+    expect(activated.status).toBe(201);
+    expect(await result(activated)).toMatchObject({ adapter: { id: completedBody.adapter.id, status: "active", dnaArtifactId: dna.artifactId }, review: { decision: "approved", actor: "angelo" } });
+  });
+
+  it("runs native image LoRA preparation, owner review, completion, and activation as durable state", async () => {
+    const ownerId = "owner-image-training";
+    const project = await testProject(ownerId, "Image Style World");
+    const dna = await createLocalDna(env, ownerId, {
+      projectId: project.id,
+      name: "ACE music DNA",
+      directive: "Cold synthetic detail interrupted by tactile organic rhythm and one controlled harmonic rupture.",
+      targetModality: "image",
+      sourceKind: "original",
+    });
+    const { bucket } = memoryBucket();
+    const production = workerEnv("afdfw", afdfwFor(ownerId), bucket);
+    const assetIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const bytes = new Uint8Array([73, 68, 51, index, 1, 2, 3, 4]);
+      const uploaded = await result(await routeCreativeStudioApi(request("/api/creative-studio/media", {
+        method: "POST",
+        headers: {
+          "content-type": "image/png",
+          "x-cs-project-id": project.id,
+          "x-cs-file-name": encodeURIComponent(`Training Image ${index + 1}.png`),
+          "x-cs-file-size": String(bytes.byteLength),
+          "x-cs-training-eligible": "true",
+        },
+        body: bytes,
+      }), production)) as { asset: { id: string } };
+      assetIds.push(uploaded.asset.id);
+    }
+
+    await env.DB.prepare("update creative_media_assets set training_eligible = 0 where id = ?").bind(assetIds[0]).run();
+    const denied = await routeCreativeStudioApi(request("/api/creative-studio/model-training-jobs", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: project.id, name: "My image style", target: "image-style", triggerToken: "cs_style", description: "Learn the texture and pigments in my own artwork.", preset: "proof", assetIds, instrumental: true, idempotencyKey: "image_denied" }),
+    }), production);
+    expect(denied.status).toBeGreaterThanOrEqual(400);
+    await env.DB.prepare("update creative_media_assets set training_eligible = 1 where id = ?").bind(assetIds[0]).run();
+
+    const startedResponse = await routeCreativeStudioApi(request("/api/creative-studio/model-training-jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectId: project.id,
+        dnaArtifactId: dna.artifactId,
+        name: "Nocturnal tactile electronics",
+        target: "image-style",
+        triggerToken: "cs_nocturnal_tactile",
+        description: "Learn the recurring electronic percussion, tactile bass, vocal space, and controlled harmonic friction.",
+        continuityRules: ["Brittle percussion over tactile sub bass"],
+        preset: "proof",
+        assetIds,
+        instrumental: true,
+        idempotencyKey: "image_training_test_001",
+      }),
+    }), production);
+    expect(startedResponse.status).toBe(202);
+    const started = await result(startedResponse) as { modelTrainingJob: { id: string; status: string; stage: string } };
+    expect(started.modelTrainingJob).toMatchObject({ status: "waiting-for-runner", stage: "queued" });
+
+    const enrolled = await result(await routeCreativeStudioApi(request("/api/creative-studio/runners/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "ACE test runner" }),
+    }), production)) as { runner: { id: string }; token: string };
+    const runnerPost = (path: string, body: object) => routeCreativeStudioApi(request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${enrolled.token}` },
+      body: JSON.stringify(body),
+    }), production);
+    const state = {
+      version: "1.9.0", comfyUrl: "http://127.0.0.1:8188", comfyReady: true, comfyVersion: "0.33.0", device: "RTX 3090",
+      activeJobId: null, error: null, modelTrainingProviders: ["comfy-sd15-lora"],
+    };
+    const claimed = await result(await runnerPost("/api/creative-studio/runner/work/claim", state)) as {
+      kind: string; bundle: { modelTrainingJob: { id: string; stage: string } };
+    };
+    expect(claimed).toMatchObject({ kind: "model-training", bundle: { modelTrainingJob: { id: started.modelTrainingJob.id, stage: "captioning" } } });
+
+    const datasetItems = assetIds.map((assetId, index) => ({
+      assetId,
+      fileName: `Training Image ${index + 1}.png`,
+      caption: "Measured electronic pulse with brittle hybrid percussion, tactile sub bass, processed keys, close stereo space, short decays, and a single suspended harmonic rupture before the groove returns.",
+      lyrics: "[Instrumental]",
+      isInstrumental: true,
+      durationSeconds: 90,
+      bpm: null,
+      keyscale: null,
+      captionSource: "owner-edited",
+    }));
+    const prepared = await runnerPost(`/api/creative-studio/runner/model-training/${started.modelTrainingJob.id}/dataset`, {
+      dataset: { schemaVersion: "creative-studio-image-dataset/1.0", items: datasetItems, preparedAt: new Date().toISOString(), reviewedAt: null, reviewNote: null },
     });
     expect(prepared.status).toBe(200);
 

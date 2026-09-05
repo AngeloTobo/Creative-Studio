@@ -12,7 +12,7 @@ const MAX_SETTING_STRING_CHARACTERS = 2_000;
 const MAX_VIDEO_PROMPT_SETTING_CHARACTERS = 4_000;
 const MAX_LYRICS_SETTING_CHARACTERS = 8_000;
 
-export type CreativeSessionMediaKind = "image" | "video" | "music";
+export type CreativeSessionMediaKind = "image" | "video" | "music" | "3d";
 export type CreativeSessionIntentTier = "scout" | "explore" | "master";
 export type CreativeSessionSettingValue = string | number | boolean | null;
 export type CreativeSessionGraphicalSettings = Record<string, CreativeSessionSettingValue>;
@@ -71,7 +71,7 @@ function currentTimestamp(options: CreativeSessionStoreOptions) {
 }
 
 function mediaKind(value: unknown): CreativeSessionMediaKind | null {
-  if (value === "image" || value === "video" || value === "music") return value;
+  if (value === "image" || value === "video" || value === "music" || value === "3d") return value;
   if (value === "audio" || value === "song") return "music";
   return null;
 }

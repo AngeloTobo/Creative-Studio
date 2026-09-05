@@ -422,7 +422,7 @@ function referenceMedia(reference: CanonReference, media: MediaAsset[], artifact
   }
   if (source.kind === "retained-artifact") {
     const artifact = artifacts.find((item) => item.id === source.artifactId);
-    if (!artifact) return null;
+    if (!artifact || artifact.kind === "3d") return null;
     const imageUrl = artifact.kind === "image" && artifact.preview.kind === "remote-media"
       ? artifact.preview.url
       : artifact.kind === "video" && artifact.preview.kind === "remote-media"
@@ -531,7 +531,7 @@ export function WorldBoard({ project }: { project: Project }) {
       imageUrl: asset.kind === "image" ? asset.contentUrl : null,
       createdAt: asset.createdAt,
     })),
-    ...artifacts.filter((artifact) => artifact.status === "accepted" && artifact.retention.state === "retained").map((artifact) => ({
+    ...artifacts.filter((artifact): artifact is Artifact & { kind: Exclude<Artifact["kind"], "3d"> } => artifact.kind !== "3d").filter((artifact) => artifact.status === "accepted" && artifact.retention.state === "retained").map((artifact) => ({
       key: `artifact:${artifact.id}`,
       origin: "artifact" as const,
       source: { kind: "retained-artifact" as const, artifactId: artifact.id, label: artifact.name },

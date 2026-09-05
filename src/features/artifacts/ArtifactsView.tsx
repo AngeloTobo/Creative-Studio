@@ -126,6 +126,7 @@ function ModalShell({ labelledBy, onClose, className = "", children }: { labelle
 export function ArtifactMediaReview({ artifact, onInspect, onExtend }: { artifact: Artifact; onInspect: () => void; onExtend?: () => void }) {
   const mediaUrl = artifact.preview.kind === "remote-media" ? artifact.preview.url : null;
   if (!mediaUrl) return null;
+  if (artifact.kind === "3d") return <section className="artifact-playback"><span>3D mesh  /  GLB</span><a className="btn btn-ghost artifact-download" href={mediaUrl} download={`${downloadName(artifact)}.glb`}><Icon name="cube" size={15} /> Download GLB</a><small>Open in your 3D app to inspect and edit.</small></section>;
   if (artifact.kind === "music") {
     return (
       <section className="artifact-audio-review" aria-label={`Audio review for ${artifact.name}`}>
@@ -310,12 +311,12 @@ function ArtifactCard({ artifact, onReuse, onInspect, onPlayVideo, onReview, onM
   const disabled = busy || artifact.status === "retaining";
   const animateAction = artifact.kind === "image" ? <button className="btn btn-primary artifact-animate" disabled={disabled} onClick={() => onAnimate(artifact.id)} title="Prepare two speed-safe 5-second versions in Create"><Icon name="video" size={16} /> Animate</button> : null;
   const animateFourWayAction = artifact.kind === "image" ? <button className="btn btn-ghost artifact-animate-four" disabled={disabled} onClick={() => onAnimateFourWay(artifact.id)} title="Prepare Exact, Enhanced, Left Field, and Awe in Create"><Icon name="star" size={16} /> Animate ×4</button> : null;
-  const evolveAction = <button className="btn artifact-evolve" disabled={disabled} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>;
+  const evolveAction = artifact.kind === "3d" ? null : <button className="btn artifact-evolve" disabled={disabled} onClick={() => onEvolve(artifact.id)}><Icon name="star" size={16} /> Evolve this</button>;
   const reuseAction = <button className="btn btn-ghost artifact-reuse" disabled={disabled} title="Review these retained settings in Create before generating" onClick={() => onReuse(artifact)}><Icon name="rerun" size={16} /> Reuse setup</button>;
   const acceptAction = <button className="btn artifact-accept" disabled={disabled} onClick={() => onReview({ artifact, decision: "accepted" })}><Icon name="check" size={16} /> Accept</button>;
   const rejectAction = <button className="btn artifact-reject" disabled={disabled} onClick={() => onReview({ artifact, decision: "rejected" })}><Icon name="close" size={16} /> Reject</button>;
   const archiveAction = <button className="btn btn-ghost" disabled={disabled} onClick={() => onReview({ artifact, decision: "archived" })}><Icon name="archive" size={16} /> Archive</button>;
-  const canonAction = artifact.status === "accepted" && artifact.retention.state === "retained" && (alreadyCanon || hasCanonTarget)
+  const canonAction = artifact.kind !== "3d" && artifact.status === "accepted" && artifact.retention.state === "retained" && (alreadyCanon || hasCanonTarget)
     ? <button className="btn btn-ghost artifact-canon" disabled={disabled || alreadyCanon} onClick={() => onMakeCanon({ artifact })}><Icon name="shield" size={16} /> {alreadyCanon ? "Canon saved" : "Make canon"}</button>
     : null;
   const saveWinningRecipe = async () => {

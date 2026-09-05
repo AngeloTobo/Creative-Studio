@@ -16,6 +16,30 @@ afterEach(async () => {
 });
 
 describe("Local GPU coordinator", () => {
+  it("retries one timed-out observation and requires a subsequent explicit empty list", async () => {
+    const runCommand = vi.fn()
+      .mockRejectedValueOnce(new Error("local_command_timed_out"))
+      .mockResolvedValueOnce({ code: 0, stdout: "[]", stderr: "" });
+    await expect(ensureLmStudioUnloaded({ cli: "lms", runCommand }))
+      .resolves.toEqual({ available: true, unloadedCount: 0, verified: true });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand).toHaveBeenNthCalledWith(2, "lms", ["ps", "--json"], expect.objectContaining({ timeoutMs: 30_000 }));
+  });
+
+  it("keeps repeated timeouts unconfirmed without issuing unload", async () => {
+    const runCommand = vi.fn().mockRejectedValue(new Error("local_command_timed_out"));
+    await expect(ensureLmStudioUnloaded({ cli: "lms", runCommand }))
+      .rejects.toThrow("lmstudio_gpu_state_unconfirmed:local_command_timed_out");
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand.mock.calls.every((call) => call[1][0] === "ps")).toBe(true);
+  });
+
+  it.each(["", "not-json", "{}"]) ("never considers invalid output %j verified empty", async (stdout) => {
+    const runCommand = vi.fn().mockResolvedValue({ code: 0, stdout, stderr: "" });
+    await expect(ensureLmStudioUnloaded({ cli: "lms", runCommand })).rejects.toThrow("lmstudio_gpu_state_invalid");
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
   it("treats an absent LM Studio installation as verified empty", async () => {
     await expect(observeLmStudioResidency({ cli: null })).resolves.toEqual({
       available: false,

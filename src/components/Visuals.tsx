@@ -60,7 +60,7 @@ export function ArtifactThumb({ artifact, compact = false }: { artifact: Artifac
       {hasImage && artifact.preview.url ? <GalleryImage key={artifact.preview.url} src={artifact.preview.url} alt={`${artifact.name} preview`} /> : null}
       {videoPoster ? <GalleryImage key={videoPoster} src={videoPoster} alt={`${artifact.name} first frame`} /> : null}
       {hasAudio ? <span className="artifact-audio-visual" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} />)}</span> : null}
-      {!hasImage && !hasAudio && (!hasVideo || !videoPoster) ? <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : artifact.kind === "video" ? "MOTION" : "FRAME"}</span> : null}
+      {!hasImage && !hasAudio && (!hasVideo || !videoPoster) ? <span className="artifact-monogram">{artifact.kind === "music" ? "WAVE" : artifact.kind === "video" ? "MOTION" : artifact.kind === "3d" ? "3D MESH" : "FRAME"}</span> : null}
     </div>
   );
 }

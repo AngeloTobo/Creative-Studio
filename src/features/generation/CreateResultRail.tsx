@@ -45,6 +45,10 @@ function SelectedArtifactMedia({ artifact }: { artifact: Artifact }) {
     );
   }
 
+  if (artifact.kind === "3d") {
+    return <div className="create-result-unavailable"><Icon name="cube" size={48} /><strong>{artifact.name}</strong><span>Retained 3D mesh  /  GLB</span><a className="btn btn-primary" href={mediaUrl} download={`${artifactDownloadName(artifact)}.glb`}>Download GLB</a><span>Open in Blender or your preferred 3D app to inspect and edit.</span></div>;
+  }
+
   if (artifact.kind === "video") {
     return (
       <video
@@ -158,7 +162,7 @@ export function CreateResultRail({
           {selectedArtifact.prompt ? <p>{selectedArtifact.prompt}</p> : null}
 
           <div className="create-result-actions" aria-label={`Actions for ${selectedArtifact.name}`}>
-            {onUseAsSource ? (
+            {onUseAsSource && selectedArtifact.kind !== "3d" ? (
               <button type="button" className="create-result-primary" onClick={() => onUseAsSource(selectedArtifact.id)}>
                 <Icon name="wand" size={16} /> Use as source
               </button>

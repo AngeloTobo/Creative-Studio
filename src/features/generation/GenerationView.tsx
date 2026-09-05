@@ -1,7 +1,8 @@
+import { imageAdapterParameterIds } from "../../../shared/contracts/imageAdapter";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { creativeDnaCanGenerate, useStudio, type SubmitWorkflowJobInput } from "../../app/StudioProvider";
 import { Icon } from "../../components/Icon";
-import { Orb, StatusDot } from "../../components/Visuals";
+import { StatusDot } from "../../components/Visuals";
 import {
   GENERATION_LONG_RUN_THRESHOLD_MS,
   GENERATION_ASPECT_PRESETS,
@@ -149,15 +150,16 @@ const SOURCE_GALLERY_LIMIT = 6;
 const ARCHIVE_SOURCE_PAGE_SIZE = 24;
 const STANDARD_VIDEO_OUTPUT_COUNTS = [1, 2] as const satisfies readonly GenerationOutputCount[];
 
-type CreateIntentOption = { id: CreateIntent; label: string; icon: "image" | "video" | "music" | "dna" };
+type CreateIntentOption = { id: CreateIntent; label: string; icon: "image" | "video" | "music" | "dna" | "cube" };
 
 const PRIMARY_CREATE_INTENTS: ReadonlyArray<CreateIntentOption> = [
   { id: "image", label: "Image", icon: "image" },
   { id: "video", label: "Video", icon: "video" },
+  { id: "music", label: "Song", icon: "music" },
+  { id: "3d", label: "3D mesh", icon: "cube" },
 ] as const;
 
 const SECONDARY_CREATE_INTENTS: ReadonlyArray<CreateIntentOption> = [
-  { id: "music", label: "Song", icon: "music" },
   { id: "train", label: "Train", icon: "dna" },
 ] as const;
 
@@ -311,7 +313,7 @@ export function GenerationView({
   onArtifacts: () => void;
   onWorkflows: () => void;
   onDesign: () => void;
-  onTrain: (assetIds?: string[], path?: "analyze" | "model") => void;
+  onTrain: (assetIds?: string[], path?: "analyze" | "model" | "image-model") => void;
   initialVideoExtensionArtifactId?: string;
   initialEvolutionSourceId?: string;
   initialSourceId?: string;
@@ -370,7 +372,7 @@ export function GenerationView({
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, 8), [projectArtifacts]);
   const workflows = useMemo(
-    () => snapshot?.workflows.filter((item) => item.executionState === "ready" && item.modality !== "3d") ?? [],
+    () => snapshot?.workflows.filter((item) => item.executionState === "ready") ?? [],
     [snapshot?.workflows],
   );
   const initialReuseSettings = initialReuseArtifact?.settingsStamp ?? null;
@@ -412,7 +414,7 @@ export function GenerationView({
     ? creativeDnaDescriptionSummaries(initialDirectAnalysis.detailedDescription).shortSummary
     : null;
   const initialReuseIntent: CreateIntent | null = initialReuseArtifact
-    ? initialReuseArtifact.kind === "video" ? "video" : initialReuseArtifact.kind === "music" ? "music" : "image"
+    ? initialReuseArtifact.kind === "video" ? "video" : initialReuseArtifact.kind === "music" ? "music" : initialReuseArtifact.kind === "3d" ? "3d" : "image"
     : null;
   const initialIntent: CreateIntent = initialCreateIntent ?? initialReuseIntent ?? (initialVideoSource || initialEvolutionSource?.kind === "video"
     ? "video"
@@ -506,7 +508,7 @@ export function GenerationView({
   ));
   const [developmentPreviewSelected, setDevelopmentPreviewSelected] = useState(false);
   const [recentResultsOpen, setRecentResultsOpen] = useState(false);
-  const [trainingEligible, setTrainingEligible] = useState(true);
+  const [trainingEligible, setTrainingEligible] = useState(false);
   const [projectContextEnabled, setProjectContextEnabled] = useState(false);
   const [worldContinuityEnabled, setWorldContinuityEnabled] = useState(false);
   const [selectedWorldId, setSelectedWorldId] = useState("");
@@ -900,13 +902,13 @@ export function GenerationView({
   const authoredProjectDirection = appendProjectContext(direction);
   const selectedWorldRules = (snapshot?.continuityRules ?? []).filter((rule) => rule.worldId === selectedWorld?.id
     && rule.status === "active"
-    && rule.modalities.includes(generationIntent)
+    && generationIntent !== "3d" && rule.modalities.includes(generationIntent)
     && (rule.entityIds.length === 0 || rule.entityIds.some((entityId) => selectedWorldEntities.some((entity) => entity.id === entityId))));
   const selectedWorldReferences = (snapshot?.canonReferences ?? []).filter((reference) => reference.worldId === selectedWorld?.id
     && reference.status === "canonical"
     && selectedWorldEntities.some((entity) => entity.id === reference.entityId));
   const worldReferences = (snapshot?.canonReferences ?? []).filter((reference) => reference.worldId === selectedWorld?.id);
-  const compiledWorldDirective = selectedWorld && generationIntent !== "music"
+  const compiledWorldDirective = selectedWorld && generationIntent !== "music" && generationIntent !== "3d"
     ? compileContinuityDirective({
       world: selectedWorld,
       entities: selectedWorldEntitiesAvailable,
@@ -920,7 +922,7 @@ export function GenerationView({
     : null;
   const continuityTooLarge = Boolean(worldContinuityEnabled && compiledWorldDirective?.truncated);
   const continuityDirective = worldContinuityEnabled && !continuityTooLarge ? compiledWorldDirective : null;
-  const continuitySelection: GenerationContinuitySelection | undefined = continuityDirective?.text && selectedWorld
+  const continuitySelection: GenerationContinuitySelection | undefined = continuityDirective?.text && selectedWorld && generationIntent !== "3d"
     ? {
       schemaVersion: GENERATION_CONTINUITY_SELECTION_SCHEMA_VERSION,
       modality: generationIntent,
@@ -983,6 +985,8 @@ export function GenerationView({
     : requestedWorkflow && (generationIntent !== "video" || workflowSupportsVideoDuration(requestedWorkflow, videoDurationSeconds))
       ? requestedWorkflow
       : preferredWorkflow;
+  const activeImageStyle = snapshot?.modelAdapters.find((adapter) => adapter.projectId === activeProjectId && adapter.target === "image-style" && adapter.status === "active");
+  const imageStyleApplies = Boolean(workflow && imageAdapterParameterIds(workflow));
   const workflowAcceptsImageSource = (candidate: WorkflowDefinition) => candidate.currentRevision.parameters.some((parameter) => (
     parameter.kind === "media" && (!parameter.mediaKind || parameter.mediaKind === "image")
   ));
@@ -1004,7 +1008,7 @@ export function GenerationView({
   const effectiveInputBindings = quickInputBindings(mediaParameters, inputBindings, sourceUsage.rendererSource);
   const selectedSourceConnected = !quickSource || intent === "train" || sourceUsage.promptOnly || Object.values(effectiveInputBindings).includes(quickSource.id);
   const selectedSourceCompatibilityError = Boolean(quickSource && intent !== "train" && workflow && !selectedSourceConnected);
-  const promptReference: GenerationPromptReferenceSelection | undefined = sourceUsage.promptOnly && quickSource ? {
+  const promptReference: GenerationPromptReferenceSelection | undefined = sourceUsage.promptOnly && quickSource && quickSource.kind !== "3d" ? {
     schemaVersion: "creative-studio-prompt-reference-request/1.0",
     purpose: "music-prompt-inspiration",
     sourceId: quickSource.id,
@@ -1068,7 +1072,7 @@ export function GenerationView({
   const activeJobs = snapshot?.jobs.filter((job) => job.projectId === activeProjectId && (job.status === "queued" || job.status === "running")) ?? [];
   const missingMediaParameters = mediaParameters.filter((parameter) => !effectiveInputBindings[parameter.id]);
   const workflowReady = Boolean(workflow) && missingMediaParameters.length === 0;
-  const directionReady = direction.trim().length >= 4;
+  const directionReady = generationIntent === "3d" || direction.trim().length >= 4;
   const promptEnhancementCapability = snapshot?.capabilities.find((capability) => capability.key === "prompt-enhancement") ?? null;
   const activePromptEnhancement = snapshot?.promptEnhancements.find((request) => request.id === promptEnhancementId) ?? null;
   const appliedPromptEnhancement = snapshot?.promptEnhancements.find((request) => request.id === appliedPromptEnhancementId) ?? null;
@@ -1805,7 +1809,7 @@ export function GenerationView({
     if (nextGoal === "scout") {
       setEvolutionEnabled(true);
       setImagePerformanceMode("fast-default");
-      setNotice(generationGoalCanScout(generationIntent, quickSource?.kind ?? null)
+      setNotice(generationGoalCanScout(generationIntent, quickSource?.kind === "3d" ? null : quickSource?.kind ?? null)
         ? "Scout will render Refine, Correct, and Discovery as three fast retained directions."
         : "Choose an image source to scout three directions.");
       return;
@@ -2449,7 +2453,7 @@ export function GenerationView({
       return;
     }
     try {
-      const asset = await uploadMedia(file, intent === "train" ? true : trainingEligible);
+      const asset = await uploadMedia(file, trainingEligible);
       if (intent === "music" && asset.kind !== "image") {
         setLocalError("Choose an image artwork to inspire the song prompt.");
         return;
@@ -2475,7 +2479,7 @@ export function GenerationView({
   };
 
   const ensureDna = async () => {
-    const cleanDirection = direction.trim();
+    const cleanDirection = generationIntent === "3d" ? `Create a 3D mesh from ${quickSource?.name ?? "the source image"}.` : direction.trim();
     if (cleanDirection.length < 4) {
       setLocalError("Describe what you want to create first.");
       return null;
@@ -3036,12 +3040,14 @@ export function GenerationView({
 
   const sourceRequirement = missingMediaParameters[0]?.mediaKind;
   const generationLabel = generationIntent === "music" ? "song" : generationIntent;
-  const scoutReady = generationGoal !== "scout" || generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
+  const scoutReady = generationGoal !== "scout" || generationGoalCanScout(generationIntent, quickSource?.kind === "3d" ? null : quickSource?.kind ?? null);
   const evolutionReady = !evolutionEnabled || Boolean(quickSource && workflowPromptParameter && projectTasteMemory && personalTaste);
-  const usingAfdfwRoute = generationRoute === "afdfw" && generationIntent !== "video";
-  const usingDevelopmentPreview = developmentPreviewSelected && developmentPreviewAvailable && !workflow && generationIntent !== "video";
+  const usingAfdfwRoute = generationRoute === "afdfw" && generationIntent !== "video" && generationIntent !== "3d";
+  const usingDevelopmentPreview = developmentPreviewSelected && developmentPreviewAvailable && !workflow && generationIntent !== "video" && generationIntent !== "3d";
   const generationBlocker: { message: string; action: "controls" | "direction" | "models" | "outputs" | "source" | null; actionLabel?: string } | null = reuseSetupUnchanged
     ? null
+    : generationIntent === "3d" && quickSource?.kind !== "image"
+      ? { message: "Choose an image to turn into a 3D mesh.", action: "source", actionLabel: "Choose image" }
     : editedReuseContinuityIsAmbiguous
       ? { message: "This older run's authored prompt cannot be separated safely from its retained World continuity. Use the untouched exact setup or start a fresh Create.", action: null }
     : usingDevelopmentPreview
@@ -3116,7 +3122,7 @@ export function GenerationView({
       target?.focus({ preventScroll: true });
     });
   };
-  const primaryLabel = busy ? "Working…" : "Generate";
+  const primaryLabel = busy ? "Working…" : generationIntent === "3d" ? "Generate mesh" : "Generate";
   const sourcePickerLabel = videoOperation ? "Video to extend" : intent === "music" ? "Artwork inspiration" : intent === "train" ? "Training source" : "Use retained work";
   const uploadSourceLabel = intent === "train" ? "Upload training media" : videoOperation ? "Upload video" : intent === "music" ? "Upload artwork" : "Upload new";
   const trustedPresetEvidence = TRUSTED_LTX_25_I2V_PORTRAIT_30S.evidence;
@@ -3196,6 +3202,7 @@ export function GenerationView({
       <section className={`quick-create-card simple-create glass${generationIntent === "video" ? " video-create" : ""}${creativeToolsOpen ? " power-open" : ""}`}>
         <div className="quick-create-head">
           <div><h2>{intent === "train" ? "What should Creative Studio learn?" : "What do you want to make?"}</h2><p>{intent === "train" ? "Give it work you own. You review everything it learns." : "Drop in a starting point or just describe the idea. Creative Studio handles the setup."}</p></div>
+          <button type="button" className="btn btn-ghost studio-train-door" onClick={() => onTrain([], "image-model")}><Icon name="dna" size={16} /> Train my style</button>
           <em className={runnerOnline ? "online" : "offline"}><i />{runnerOnline ? "Ready" : "Runner offline"}</em>
         </div>
 
@@ -3212,22 +3219,18 @@ export function GenerationView({
             void uploadAndUseMedia(event.dataTransfer.files?.[0] ?? null);
           }}
         >
-          <div className="quick-orb-compose">
-            <div className="quick-intents" role="group" aria-label="What do you want to make?">
-              {PRIMARY_CREATE_INTENTS.map((item, index) => <button key={item.id} className={`orbit-${index + 1}${intent === item.id ? " on" : ""}`} aria-pressed={intent === item.id} onClick={() => chooseIntent(item.id)}><Icon name={item.icon} size={17} /><span>{item.label}</span></button>)}
-            </div>
-            {quickSource ? <div className="quick-orb-source has-source">
-              <span className={`quick-orb-preview ${quickSource.kind}`} style={{ background: `linear-gradient(135deg, ${quickSource.colors[0]}, ${quickSource.colors[1]})` }}><QuickSourceVisual source={quickSource} alt={`${quickSource.name} source`} /></span>
-            </div> : <button type="button" className="quick-orb-source" disabled={busy || uiOnlyDevelopment} aria-label="Upload an optional source" onClick={() => mediaInputRef.current?.click()}>
-              <Orb size={138} />
-              <span className="quick-orb-action"><Icon name="plus" size={13} />{uiOnlyDevelopment ? "Worker needed to upload" : "Add source"}</span>
-            </button>}
-            <div className="quick-orb-copy"><strong>{quickSource?.name ?? "Start with words—or drop a file here"}</strong><small>{quickSource ? `${quickSource.origin === "archive-index" ? "Art Index" : quickSource.source === "upload" ? "Uploaded" : "Retained"} ${quickSource.kind}` : "A source is optional"}</small></div>
+          <div className="studio-compose-modes" role="group" aria-label="What do you want to make?">
+            {PRIMARY_CREATE_INTENTS.map((item) => <button type="button" key={item.id} className={intent === item.id ? "on" : ""} aria-pressed={intent === item.id} disabled={busy} onClick={() => chooseIntent(item.id)}><Icon name={item.icon} size={19} /><span>{item.label}</span></button>)}
+          </div>
+          <div className="studio-source-row">
+            {quickSource ? <span className="studio-source-preview"><QuickSourceVisual source={quickSource} alt={`${quickSource.name} source`} /></span> : <Icon name={intent === "3d" ? "cube" : "image"} size={28} />}
+            <div><strong>{quickSource?.name ?? (intent === "3d" ? "Add an image to turn into a mesh" : "Start with an idea")}</strong><small>{quickSource ? `${quickSourceOriginLabel(quickSource)}  /  ${quickSource.kind}` : intent === "3d" ? "An image is required. Your original stays attached to the result." : "Describe it below, or add a source image."}</small></div>
+            <button type="button" className="btn btn-ghost" disabled={busy || uiOnlyDevelopment} aria-label={intent === "3d" ? "Upload source image" : "Upload an optional source"} onClick={() => mediaInputRef.current?.click()}><Icon name="plus" size={15} />{quickSource ? "Upload another" : "Add source"}</button>
           </div>
           {quickSource?.kind === "video" && quickSource.previewUrl ? <details className="quick-source-playback"><summary><Icon name="video" size={13} /> Preview source video</summary><video key={quickSource.id} src={quickSource.previewUrl} poster={quickSource.posterUrl ?? undefined} controls playsInline preload="metadata" aria-label={`${quickSource.name} source video`} /></details> : null}
           {quickSource?.kind === "audio" && quickSource.previewUrl ? <details className="quick-source-playback"><summary><Icon name="music" size={13} /> Preview source audio</summary><audio key={quickSource.id} src={quickSource.previewUrl} controls preload="none" aria-label={`${quickSource.name} source audio`} /></details> : null}
           <footer>
-            <span><small>{quickSource ? "STARTING POINT" : "OPTIONAL SOURCE"}</small><strong>{quickSource ? "Creative Studio will keep it attached" : "Prompt-only creation is ready"}</strong></span>
+            <span><small>{quickSource ? "STARTING POINT" : intent === "3d" ? "IMAGE REQUIRED" : "OPTIONAL SOURCE"}</small><strong>{quickSource ? "Creative Studio will keep it attached" : intent === "3d" ? "Choose or upload your source image" : "Prompt-only creation is ready"}</strong></span>
             <div>
               {quickSource ? <button type="button" className="btn btn-ghost stage-remove" disabled={busy} onClick={() => { detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setLocalError(""); }}><Icon name="close" size={14} /> Remove</button> : null}
               <button type="button" className="btn btn-ghost stage-change" disabled={busy} onClick={() => { if (!sourcePickerRef.current) return; sourcePickerRef.current.open = true; sourcePickerRef.current.scrollIntoView({ block: "nearest" }); }}><Icon name="library" size={14} /> {quickSource ? "Change" : "Retained work"}</button>
@@ -3265,7 +3268,7 @@ export function GenerationView({
               <header><span><strong>{sourcePickerLabel}</strong><small>{quickSource ? quickSource.name : `${sourceChoices.length} compatible retained`}</small></span>{sourceChoices.length > SOURCE_GALLERY_LIMIT ? <button type="button" className="link-btn" disabled={busy} onClick={() => setSourceGalleryExpanded((current) => !current)}>{sourceGalleryExpanded ? "Show newest" : `View all ${sourceChoices.length}`}</button> : null}</header>
               <div className="quick-source-gallery-grid" role="group" aria-label={`${sourcePickerLabel} gallery`}>
                 <label className={`quick-source-card quick-source-upload${uiOnlyDevelopment ? " disabled" : ""}`}>
-                  <input ref={mediaInputRef} type="file" aria-label={uploadSourceLabel} accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : intent === "music" ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
+                  <input ref={mediaInputRef} type="file" aria-label={uploadSourceLabel} accept={videoOperation ? "video/mp4,video/webm,video/quicktime" : (intent === "music" || intent === "3d") ? ACCEPTED_ART : ACCEPTED_MEDIA} disabled={busy || uiOnlyDevelopment} onChange={(event) => void uploadAndUseMedia(event.target.files?.[0] ?? null)} />
                   <span className="quick-source-visual"><Icon name="plus" size={22} /></span>
                   <span className="quick-source-copy"><strong>{busy ? "Working…" : uploadSourceLabel}</strong><small>{uiOnlyDevelopment ? "Worker required" : "From this device"}</small></span>
                 </label>
@@ -3273,7 +3276,7 @@ export function GenerationView({
                   <span className="quick-source-visual"><Icon name="archive" size={22} /></span>
                   <span className="quick-source-copy"><strong>Browse Angelo Art Index</strong><small>Verified image copy</small></span>
                 </button> : null}
-                {intent !== "train" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { if (quickSourceId) detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
+                {intent !== "train" && intent !== "3d" ? <button type="button" className={`quick-source-card quick-source-none${quickSource ? "" : " on"}`} aria-label="Use no retained source" aria-pressed={!quickSource} disabled={busy} onClick={() => { if (quickSourceId) detachAssistedVideoScript(); setSelectedStoryRecommendation(undefined); setQuickSourceId(""); setInputBindings({}); setSourceGalleryExpanded(false); if (sourcePickerRef.current) sourcePickerRef.current.open = false; }}>
                   <span className="quick-source-visual"><Icon name="generate" size={22} /></span>
                   <span className="quick-source-copy"><strong>No source</strong><small>Start from prompt</small></span>
                   {!quickSource ? <span className="quick-source-selected"><Icon name="check" size={11} /></span> : null}
@@ -3294,7 +3297,7 @@ export function GenerationView({
           <button type="button" disabled={busy} onClick={() => onTrain(trainingSource ? [trainingSource.id] : [], "analyze")}><span><Icon name="image" size={19} /></span><strong>Analyze media</strong><small>Describe files and evolve a reviewable CreativeDNA version.</small><em>{trainingSource ? `Use ${trainingSource.name}` : "Images, audio, or video"}</em></button>
           <button type="button" disabled={busy} onClick={() => onTrain([], "model")}><span><Icon name="music" size={19} /></span><strong>Train music LoRA</strong><small>Train real ACE-Step weights from consented recordings.</small><em>{consentedAudioCount >= 3 ? `${consentedAudioCount} tracks ready` : `${3 - consentedAudioCount} more tracks needed`}</em></button>
         </div> : <>
-          <div className="quick-direction">
+          <div className="quick-direction" hidden={generationIntent === "3d"}>
             <div className="quick-direction-head">
               <label htmlFor="creative-studio-direction">{intent === "music" ? "Describe the song" : videoOperation ? "Describe what happens next" : intent === "video" ? "Describe the video" : "Describe the image"}</label>
               <small className="quick-autosave-state">{sessionId ? "Draft saved." : "Saves as you type."}</small>
@@ -3388,6 +3391,8 @@ export function GenerationView({
             <p><strong>{heavyRenderTimeSummary}</strong><small>{estimatedOutputCount === 1 ? "One local render will use the 3090 until this clip finishes." : `The Local Runner renders these ${estimatedOutputCount} versions one after another, so later versions wait for earlier ones to finish.`}</small></p>
             <footer><button type="button" className="btn btn-ghost" onClick={() => { armedVideoRenderSignature.current = ""; setHeavyRenderConfirmationOpen(false); }}>Keep editing</button><button type="button" className="btn btn-primary" onClick={() => { armedVideoRenderSignature.current = videoRenderSignature; setHeavyRenderConfirmationOpen(false); void startWorkflowGeneration(); }}><Icon name="send" size={15} /> Confirm &amp; queue</button></footer>
           </section> : null}
+          {generationIntent === "image" && activeImageStyle ? <p className="studio-style-status" role="status"><Icon name="dna" size={15} /><span>{imageStyleApplies ? `${activeImageStyle.name} will apply to this image.` : `${activeImageStyle.name} is active for compatible SD1.5 models. This model does not use its trained weights.`}</span></p> : null}
+          {generationIntent === "3d" ? <p className="studio-style-status"><Icon name="cube" size={17} /><span>Image to 3D geometry  /  Download a GLB for Blender or other 3D apps. Shape comes from the source image; this model does not use text instructions or add textures.</span></p> : null}
           <div className={`quick-generate-dock${visibleGenerationError ? " has-error" : ""}`}>
             {visibleGenerationError ? <div className="quick-generate-error" role="status" aria-live="polite"><Icon name="close" size={15} /><span><strong>Generation needs attention</strong><small>{visibleGenerationError}</small></span></div> : null}
             {!visibleGenerationError && generationBlocker ? <div className="quick-generation-blocker" role="status"><Icon name="shield" size={15} /><span>{generationBlocker.message}</span>{generationBlocker.action ? <button type="button" onClick={resolveGenerationBlocker}>{generationBlocker.actionLabel ?? "Review"}</button> : null}</div> : null}
@@ -3401,7 +3406,7 @@ export function GenerationView({
               target?.scrollIntoView({ block: "nearest" });
               target?.focus({ preventScroll: true });
             });
-          }}><span><Icon name={creativeToolsOpen ? "close" : "settings"} size={15} /><span><strong>{creativeToolsOpen ? "Hide creative controls" : "More creative controls"}</strong><small>{creativeToolsOpen ? "Return to the focused canvas" : "Song, training, sound, and settings"}</small></span></span><Icon name={creativeToolsOpen ? "chevronDown" : "chevron"} size={14} /></button>
+          }}><span><Icon name={creativeToolsOpen ? "close" : "settings"} size={15} /><span><strong>{creativeToolsOpen ? "Hide creative controls" : "More creative controls"}</strong><small>{creativeToolsOpen ? "Return to the focused canvas" : "Models, sound, style, and detailed settings"}</small></span></span><Icon name={creativeToolsOpen ? "chevronDown" : "chevron"} size={14} /></button>
         </>}
 
         {intent !== "train" ? <div className="quick-power-tools" id="creative-studio-power-tools" hidden={!creativeToolsOpen}>
@@ -3431,7 +3436,7 @@ export function GenerationView({
           <summary><span><Icon name="star" size={14} /><strong>Creation goal</strong></span><em>{GENERATION_GOALS.find((goal) => goal.id === generationGoal)?.shortLabel ?? generationGoal}</em><small>{generationGoal === "explore" ? "Recommended" : generationGoal === "scout" ? "Three fast directions" : "Exact settings"}</small><Icon name="chevronDown" size={13} /></summary>
           <div className="quick-generation-goal-body"><div className="quick-generation-goal-options" role="group" aria-label="Choose creation goal">
             {GENERATION_GOALS.map((goal) => {
-              const unavailable = goal.id === "scout" && !generationGoalCanScout(generationIntent, quickSource?.kind ?? null);
+              const unavailable = goal.id === "scout" && !generationGoalCanScout(generationIntent, quickSource?.kind === "3d" ? null : quickSource?.kind ?? null);
               return <button type="button" key={goal.id} className={generationGoal === goal.id ? "on" : ""} aria-pressed={generationGoal === goal.id} disabled={busy || (goal.id === "scout" && generationIntent !== "image")} onClick={() => chooseGenerationGoal(goal.id)} title={goal.id === "scout" && generationIntent !== "image" ? "Scout Board begins with images; video already creates two directions." : goal.description}><span>{goal.shortLabel}</span><small>{goal.id === "scout" ? unavailable ? "Choose an image" : "3 fast directions" : goal.id === "explore" ? "Recommended" : "Exact settings"}</small></button>;
             })}
           </div>

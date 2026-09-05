@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
@@ -19,6 +20,7 @@ import type {
 import {
   TRUSTED_LTX_25_I2V_PORTRAIT_30S,
   inspectWorkflowGraph,
+  modelTrainingRecipe,
   trustedVideoPresetStamp,
   videoWorkflowDurationParameters,
 } from "../../shared/contracts";
@@ -284,9 +286,9 @@ function json(route: Route, body: unknown, status = 200) {
 async function installVideoBackend(
   page: Page,
   withEnhancement: boolean,
-  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean; failEnhancementCompletionOnce?: boolean } = {},
+  options: { delayFirstRevision?: boolean; delayEnhancementCompletion?: boolean; failEnhancementCompletionOnce?: boolean; workflow?: WorkflowDefinition; transformSnapshot?: (snapshot: StudioSnapshot) => void } = {},
 ): Promise<MockVideoBackend> {
-  let workflow = initialWorkflow();
+  let workflow = options.workflow ?? initialWorkflow();
   let revision = 1;
   const workflowRevisions = new Map<string, WorkflowDefinition>([[workflow.currentRevision.id, workflow]]);
   const jobs: Job[] = [];
@@ -320,8 +322,8 @@ async function installVideoBackend(
       id: `job_video_e2e_${jobRequests.length}`,
       projectId: input.projectId,
       dnaArtifactId: input.dnaArtifactId,
-      capability: "VIDEO_GENERATE",
-      modality: "video",
+      capability: input.modality === "3d" ? "MESH_GENERATE" : "VIDEO_GENERATE",
+      modality: input.modality,
       status: "queued",
       progress: 0,
       prompt,
@@ -343,7 +345,7 @@ async function installVideoBackend(
         reusedFromJobId: null,
         prompt,
         provider: "local-comfyui",
-        modality: "video",
+        modality: input.modality,
         videoPerformance: input.videoPerformanceMode ? {
           schemaVersion: "creative-studio-video-performance/1.0",
           mode: input.videoPerformanceMode,
@@ -389,6 +391,7 @@ async function installVideoBackend(
     if (request.method() === "GET" && pathname === "/api/creative-studio/snapshot") {
       const snapshot = baseSnapshot(workflow, jobs, promptEnhancement, withEnhancement, createdDna);
       snapshot.mediaAssets.push(...uploadedAssets);
+      options.transformSnapshot?.(snapshot);
       await json(route, { snapshot });
       return;
     }
@@ -634,6 +637,77 @@ async function openRetainedMedia(page: Page) {
   await expect(page.getByRole("heading", { name: "Source media" })).toBeVisible();
   await expect(page.getByText("Retained city frame", { exact: true })).toBeVisible();
 }
+
+test("imported image-to-mesh workflow submits a source-bound 3d job without a text prompt", async ({ page }) => {
+  const graph = JSON.parse(readFileSync(resolve(process.cwd(), "runner/workflows/hunyuan3d-image-to-mesh.json"), "utf8"));
+  const inspection = inspectWorkflowGraph(graph);
+  expect(inspection.modality).toBe("3d");
+  const mesh: WorkflowDefinition = {
+    ...initialWorkflow(), id: "workflow_mesh", name: "Hunyuan3D image to mesh", modality: "3d",
+    currentRevision: { ...initialWorkflow().currentRevision, ...inspection, id: "mesh_revision", workflowId: "workflow_mesh" },
+  };
+  const backend = await installVideoBackend(page, false, { workflow: mesh });
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+  await page.getByRole("button", { name: "3D mesh", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Generate mesh", exact: true })).toBeDisabled();
+  await openRetainedWork(page);
+  await page.getByRole("button", { name: "Use Retained city frame upload" }).click();
+  await expect(page.getByRole("textbox", { name: "Describe the image" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Generate mesh", exact: true })).toBeEnabled();
+  expect(backend.jobs).toHaveLength(0);
+  await page.getByRole("button", { name: "Generate mesh", exact: true }).click();
+  await expect.poll(() => backend.jobs.length).toBe(1);
+  expect(backend.jobs[0]).toMatchObject({ modality: "3d", workflow: { workflowId: mesh.id, expectedPrompt: "", inputBindings: { "2::image": SOURCE_ID } } });
+  expect(backend.enhancementRequests).toHaveLength(0);
+});
+
+test("art training shows bounded thumbnail selection and preserves explicit consent", async ({ page }) => {
+  await installVideoBackend(page, false, { transformSnapshot(snapshot) {
+    const source = snapshot.mediaAssets[0];
+    snapshot.mediaAssets = Array.from({ length: 32 }, (_, index) => ({ ...source, id: `art_${index}`, name: `Artwork ${index + 1}` }));
+  } });
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+  await page.getByRole("button", { name: "Train my style", exact: true }).click();
+  const grid = page.getByRole("group", { name: "Artwork for style training" });
+  await expect(grid.getByRole("checkbox")).toHaveCount(32);
+  await expect(grid.locator("img")).toHaveCount(32);
+  await expect(grid.locator("input:checked")).toHaveCount(0);
+  await expect(page.getByText("0 selected / 32 available", { exact: true })).toBeVisible();
+  await grid.getByRole("checkbox", { name: "Artwork 1", exact: true }).check();
+  await expect(page.getByText("1 selected / 32 available", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /I own or have training rights/ })).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "Prepare 1 selected images" })).toBeDisabled();
+  await expect(page.locator(".image-training-runtime")).not.toHaveAttribute("open", "");
+  const size = await grid.evaluate((element) => ({ height: element.clientHeight, scroll: element.scrollHeight }));
+  expect(size.height).toBeLessThanOrEqual(468);
+  expect(size.scroll).toBeGreaterThan(size.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("art caption review pairs each editable caption with its retained thumbnail", async ({ page }, testInfo) => {
+  await installVideoBackend(page, false, { transformSnapshot(snapshot) {
+    const source = snapshot.mediaAssets[0];
+    snapshot.modelTrainingJobs = [{
+      id: "caption_review", projectId: source.projectId, dnaArtifactId: null, adapterId: null, name: "Art style proof", target: "image-style", provider: "comfy-sd15-lora",
+      concept: { schemaVersion: "creative-studio-training-concept/1.0", name: "Art style proof", target: "image-style", triggerToken: "cs_style", description: "Painted textures and gentle light.", continuityRules: [] },
+      recipe: modelTrainingRecipe("image-style", "proof"), assetIds: [source.id], instrumental: true,
+      dataset: { schemaVersion: "creative-studio-image-dataset/1.0", preparedAt: NOW, reviewedAt: null, reviewNote: null, items: [{ assetId: source.id, fileName: "retained-city-frame.png", caption: "cs_style, a luminous city frame.", lyrics: "", isInstrumental: true, durationSeconds: 0, bpm: null, keyscale: null, captionSource: "owner-edited" }] },
+      status: "waiting-for-review", stage: "dataset-review", progress: 20, runnerId: null, upstreamId: null, error: null, createdAt: NOW, updatedAt: NOW, startedAt: null, completedAt: null,
+    }];
+  } });
+  await page.goto(`${HTTP_STUDIO}/#/dna`);
+  await page.getByRole("button", { name: "Train my style", exact: true }).click();
+  const thumbnail = page.getByRole("img", { name: "Artwork for retained-city-frame.png" });
+  await expect(thumbnail).toBeVisible();
+  await expect(thumbnail).toHaveAttribute("loading", "lazy");
+  const caption = page.getByRole("textbox", { name: "Caption for retained-city-frame.png" });
+  await caption.fill("cs_style, a luminous city beneath soft evening light.");
+  await expect(caption).toHaveValue("cs_style, a luminous city beneath soft evening light.");
+  await expect(page.getByRole("button", { name: "Approve dataset & train locally" })).toBeDisabled();
+  await page.locator(".image-caption-card").scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `output/playwright/training-caption-${testInfo.project.name}.png` });
+});
 
 test("an AFDFW draft stays remote after leaving and resuming Create", async ({ page }) => {
   await installVideoBackend(page, false);
@@ -958,8 +1032,8 @@ test("Mobile video creation keeps prompt and Generate ahead of optional controls
   await expect(page.locator("#creative-studio-power-tools")).toBeVisible();
   await expect(page.getByRole("button", { name: /Hide creative controls/ })).toHaveAttribute("aria-controls", "creative-studio-power-tools");
   const secondaryModes = page.getByRole("group", { name: "Secondary creation modes" });
-  await expect(secondaryModes.getByRole("button")).toHaveText(["Song", "Train"]);
-  await expect(secondaryModes.getByRole("button", { name: "Song", exact: true })).toBeFocused();
+  await expect(secondaryModes.getByRole("button")).toHaveText(["Train"]);
+  await expect(secondaryModes.getByRole("button", { name: "Train", exact: true })).toBeFocused();
   await expect(page.getByRole("region", { name: "Creation goal" })).not.toHaveAttribute("open", "");
   await page.getByRole("button", { name: /Hide creative controls/ }).click();
   await page.getByLabel("Describe the video").focus();
@@ -979,13 +1053,11 @@ test("Mobile video creation keeps prompt and Generate ahead of optional controls
     expect(generateBounds).not.toBeNull();
     expect(promptBounds!.y + promptBounds!.height).toBeLessThanOrEqual(setupBounds!.y + 1);
     expect(setupBounds!.y + setupBounds!.height).toBeLessThanOrEqual(generateBounds!.y + 1);
-    const sourceNameSizing = await page.locator(".quick-orb-copy strong").evaluate((element) => ({
+    const sourceNameSizing = await page.locator(".studio-source-row strong").evaluate((element) => ({
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
-      whiteSpace: getComputedStyle(element).whiteSpace,
     }));
-    expect(sourceNameSizing.whiteSpace).toBe("nowrap");
-    expect(sourceNameSizing.scrollWidth).toBeGreaterThanOrEqual(sourceNameSizing.clientWidth);
+    expect(sourceNameSizing.scrollWidth).toBeLessThanOrEqual(sourceNameSizing.clientWidth + 1);
     if (viewport.width === 320) {
       const [sourceNameBounds, sourceActionsBounds] = await Promise.all([
         page.locator(".quick-create-stage > footer > span").boundingBox(),

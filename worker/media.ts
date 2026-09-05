@@ -1,4 +1,5 @@
 import type { MediaAsset, MediaKind } from "../shared/contracts";
+import { putSizedStream } from "./sizedStream";
 import { boundedText, id } from "./lib/http";
 import { createMediaAsset, mediaAssetById, mediaObjectById, projectById } from "./repository";
 import type { Env } from "./types";
@@ -103,7 +104,7 @@ export async function uploadMedia(env: Env, request: Request, ownerId: string) {
       || provenance.archiveEntryId !== archive.provenance.archiveEntryId) throw new Error("archive_materialization_conflict");
     return existing;
   }
-  await env.ARTIFACTS.put(r2Key, request.body, {
+  await putSizedStream(env.ARTIFACTS, r2Key, request.body, input.claimedSize, {
     httpMetadata: { contentType: input.mimeType },
     customMetadata: {
       ownerId,

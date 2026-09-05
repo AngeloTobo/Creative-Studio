@@ -41,8 +41,8 @@ export function AceStepTrainingPanel({ onMedia, initialAssetIds = [] }: { onMedi
   const audio = useMemo(() => (snapshot?.mediaAssets
     .filter((asset) => asset.projectId === activeProjectId && asset.kind === "audio" && asset.trainingEligible) ?? [])
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)), [activeProjectId, snapshot?.mediaAssets]);
-  const jobs = snapshot?.modelTrainingJobs.filter((job) => job.projectId === activeProjectId) ?? [];
-  const adapters = snapshot?.modelAdapters.filter((adapter) => adapter.projectId === activeProjectId) ?? [];
+  const jobs = snapshot?.modelTrainingJobs.filter((job) => job.projectId === activeProjectId && job.target === "music-style") ?? [];
+  const adapters = snapshot?.modelAdapters.filter((adapter) => adapter.projectId === activeProjectId && adapter.target === "music-style") ?? [];
   const capability = snapshot?.capabilities.find((item) => item.key === "model-adapter-training");
   const project = snapshot?.projects.find((item) => item.id === activeProjectId) ?? null;
   const [selected, setSelected] = useState<string[]>(initialAssetIds);

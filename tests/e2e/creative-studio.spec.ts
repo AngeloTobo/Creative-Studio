@@ -14,6 +14,26 @@ async function openCreatePlan(page: Page) {
   if (await plan.getAttribute("open") === null) await plan.locator(":scope > summary").click();
 }
 
+test("four creation modes and direct art training remain visible with mesh source required", async ({ page }) => {
+  await page.addInitScript(() => {
+    const time = "2026-09-05T12:00:00.000Z";
+    localStorage.setItem("creative-studio:development-adapter:v3", JSON.stringify({
+      projects: [{ id: "mesh_ui", activeDnaArtifactId: null, name: "Mesh UI", type: "Image", status: "active", description: "", note: "", hue: "#d946ef", initials: "MU", createdAt: time, updatedAt: time }],
+      dnaArtifacts: [], jobs: [], artifacts: [], mediaAssets: [], workflows: [], acceptances: [], trainingExamples: [], trainingJobs: [], trainingReviews: [], idempotencyKeys: {},
+    }));
+  });
+  await page.goto("/#/dna");
+  await expect(page.getByRole("group", { name: "What do you want to make?" }).getByRole("button")).toHaveText(["Image", "Video", "Song", "3D mesh"]);
+  await page.getByRole("button", { name: "3D mesh", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Describe the image" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Generate mesh", exact: true })).toBeDisabled();
+  await expect(page.getByText("Choose an image to turn into a 3D mesh.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose image", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Train my style", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /Train art style/ })).toHaveAttribute("aria-selected", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 test("a Create draft survives navigation and resumes through canonical Create", async ({ page }) => {
   const createdAt = "2026-08-27T05:00:00.000Z";
   await page.addInitScript(({ createdAt: time }) => {
@@ -25,7 +45,7 @@ test("a Create draft survives navigation and resumes through canonical Create", 
 
   await page.goto("/#/dna");
   const primaryIntents = page.getByRole("group", { name: "What do you want to make?" });
-  await expect(primaryIntents.getByRole("button")).toHaveText(["Image", "Video"]);
+  await expect(primaryIntents.getByRole("button")).toHaveText(["Image", "Video", "Song", "3D mesh"]);
   await expect(page.locator(".quick-secondary-modes")).toBeHidden();
   await expect(page.locator(".quick-primary")).toHaveText(/Generate/);
   const direction = page.getByRole("textbox", { name: "Describe the image" });

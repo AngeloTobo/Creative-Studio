@@ -29,6 +29,8 @@ export type OvernightSetupSheetProps = {
   onArm: (input: OvernightArmInput) => Promise<unknown> | unknown;
 };
 
+type OvernightModality = Exclude<GenerationModality, "3d">;
+
 type ScheduleChoice = "now" | "tonight";
 
 const EXPLORATION_OPTIONS: Array<{ value: OvernightExploration; label: string; detail: string }> = [
@@ -37,7 +39,7 @@ const EXPLORATION_OPTIONS: Array<{ value: OvernightExploration; label: string; d
   { value: "wild", label: "Wild", detail: "Push into surprise" },
 ];
 
-const MEDIA_LABELS: Record<GenerationModality, { label: string; detail: string }> = {
+const MEDIA_LABELS: Record<OvernightModality, { label: string; detail: string }> = {
   image: { label: "Scenes", detail: "Still frames" },
   video: { label: "Motion", detail: "Video scenes" },
   music: { label: "Sound", detail: "Songs and soundscapes" },
@@ -95,7 +97,7 @@ export function OvernightSetupSheet({ open, projectId, dnaArtifactId, onClose, o
   const [surprise, setSurprise] = useState(true);
   const [storyCount, setStoryCount] = useState(1);
   const [outputCount, setOutputCount] = useState(4);
-  const [modalities, setModalities] = useState<GenerationModality[] | null>(null);
+  const [modalities, setModalities] = useState<OvernightModality[] | null>(null);
   const [exploration, setExploration] = useState<OvernightExploration>("exploratory");
   const [scheduleChoice, setScheduleChoice] = useState<ScheduleChoice>("tonight");
   const [scheduledFor, setScheduledFor] = useState(() => localInputValue(startDate("tonight")));
@@ -104,7 +106,7 @@ export function OvernightSetupSheet({ open, projectId, dnaArtifactId, onClose, o
   const [maxBytes, setMaxBytes] = useState(512 * 1024 * 1024);
   const [worldId, setWorldId] = useState<string | null>(null);
   const [openedAt] = useState(() => Date.now());
-  const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<Partial<Record<GenerationModality, string>>>({});
+  const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<Partial<Record<OvernightModality, string>>>({});
   const [localError, setLocalError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -122,7 +124,7 @@ export function OvernightSetupSheet({ open, projectId, dnaArtifactId, onClose, o
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)), [projectId, snapshot?.worlds]);
 
   const bestWorkflowIds = useMemo(() => {
-    const ids: Partial<Record<GenerationModality, string>> = {};
+    const ids: Partial<Record<OvernightModality, string>> = {};
     if (!snapshot) return ids;
     for (const modality of OVERNIGHT_MODALITIES) {
       const best = bestOvernightWorkflow(snapshot, projectId, modality);
@@ -134,7 +136,7 @@ export function OvernightSetupSheet({ open, projectId, dnaArtifactId, onClose, o
   const selectedModalities = useMemo(() => {
     const available = OVERNIGHT_MODALITIES.filter((modality) => candidates[modality].length > 0);
     if (modalities !== null) return modalities.filter((modality) => available.includes(modality));
-    const defaults = (["image", "music"] as GenerationModality[]).filter((modality) => available.includes(modality));
+    const defaults = (["image", "music"] as OvernightModality[]).filter((modality) => available.includes(modality));
     return defaults.length ? defaults : available.slice(0, 1);
   }, [candidates, modalities]);
 
@@ -176,7 +178,7 @@ export function OvernightSetupSheet({ open, projectId, dnaArtifactId, onClose, o
     setCutoffAt(localInputValue(defaultCutoff(start, choice)));
   };
 
-  const toggleModality = (modality: GenerationModality) => {
+  const toggleModality = (modality: OvernightModality) => {
     if (!candidates[modality].length) return;
     setModalities(selectedModalities.includes(modality)
       ? selectedModalities.filter((item) => item !== modality)

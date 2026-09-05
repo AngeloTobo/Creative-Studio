@@ -176,12 +176,12 @@ export async function createModelTrainingJob(env: Env, ownerId: string, input: C
   const concept = normalizeModelTrainingConcept(input);
   const recipe = modelTrainingRecipe(concept.target, input.preset);
   const assetIds = [...new Set((input.assetIds ?? []).map((assetId) => boundedText(assetId, 100)).filter(Boolean))];
-  if (assetIds.length < recipe.dataset.minimumItems) throw new Error(`ace_step_requires_${recipe.dataset.minimumItems}_audio_files`);
+  if (assetIds.length < recipe.dataset.minimumItems) throw new Error(concept.target === "image-style" ? `image_training_requires_${recipe.dataset.minimumItems}_images` : `ace_step_requires_${recipe.dataset.minimumItems}_audio_files`);
   if (assetIds.length > 40) throw new Error("too_many_model_training_assets");
   const assets = (await listMediaAssets(env, ownerId)).filter((asset) => assetIds.includes(asset.id));
   if (assets.length !== assetIds.length) throw new Error("model_training_asset_not_found");
-  if (assets.some((asset) => asset.projectId !== project.id || asset.kind !== "audio" || !asset.trainingEligible)) {
-    throw new Error("model_training_audio_consent_required");
+  if (assets.some((asset) => asset.projectId !== project.id || !recipe.dataset.acceptedKinds.includes(asset.kind) || !asset.trainingEligible)) {
+    throw new Error("model_training_source_consent_required");
   }
   const dnaArtifactId = boundedText(input.dnaArtifactId, 100) || project.activeDnaArtifactId;
   if (dnaArtifactId) {
@@ -210,14 +210,15 @@ function leaseUntil(now: Date) {
 }
 
 export async function claimModelTrainingJob(env: Env, runner: RunnerIdentity, providers: ModelTrainingProvider[]) {
-  if (!providers.includes("ace-step-1.5-lora")) return null;
+  const supported = providers.filter((provider) => ["ace-step-1.5-lora", "comfy-sd15-lora"].includes(provider));
+  if (!supported.length) return null;
   const now = new Date();
   const timestamp = now.toISOString();
   const candidate = await env.DB.prepare(`select id from creative_model_training_jobs
-    where owner_id = ? and provider = 'ace-step-1.5-lora' and status in ('waiting-for-runner', 'running')
+    where owner_id = ? and provider in (${supported.map(() => '?').join(',')}) and status in ('waiting-for-runner', 'running')
       and (runner_lease_until is null or runner_lease_until <= ? or runner_id = ?)
     order by case when runner_id = ? then 0 else 1 end, created_at limit 1`)
-    .bind(runner.ownerId, timestamp, runner.id, runner.id).first<{ id: string }>();
+    .bind(runner.ownerId, ...supported, timestamp, runner.id, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const changed = await env.DB.prepare(`update creative_model_training_jobs set status = 'running',
     stage = case when stage = 'queued' then 'captioning' else 'preflight' end,
@@ -284,12 +285,12 @@ function cleanDatasetItem(value: ModelTrainingDatasetItem, assetIds: string[]): 
 export async function completeModelTrainingDataset(env: Env, runner: RunnerIdentity, jobId: string, input: CompleteModelTrainingDatasetRequest) {
   const row = await jobRow(env, runner.ownerId, jobId);
   if (!row || row.runnerId !== runner.id || row.status !== "running" || row.stage !== "captioning") throw new Error("model_training_job_not_claimed");
-  if (input.runnerId !== runner.id || input.dataset.schemaVersion !== "creative-studio-ace-step-dataset/1.0") throw new Error("invalid_model_training_dataset");
+  if (input.runnerId !== runner.id || input.dataset.schemaVersion !== (row.target === "image-style" ? "creative-studio-image-dataset/1.0" : "creative-studio-ace-step-dataset/1.0")) throw new Error("invalid_model_training_dataset");
   const job = mapJob(row);
   const items = input.dataset.items.map((item) => cleanDatasetItem(item, job.assetIds));
   if (items.length !== job.assetIds.length || new Set(items.map((item) => item.assetId)).size !== job.assetIds.length) throw new Error("invalid_model_training_dataset");
   const dataset: ModelTrainingDataset = {
-    schemaVersion: "creative-studio-ace-step-dataset/1.0",
+    schemaVersion: input.dataset.schemaVersion,
     items,
     preparedAt: new Date().toISOString(),
     reviewedAt: null,
@@ -415,8 +416,8 @@ export async function reviewModelAdapter(env: Env, ownerId: string, adapterId: s
   const statements = [];
   if (decision === "approved") {
     statements.push(env.DB.prepare(`update creative_model_adapters set status = 'inactive', updated_at = ?
-      where owner_id = ? and project_id = ? and target = 'music-style' and status = 'active' and id != ?`)
-      .bind(now, ownerId, adapter.projectId, adapterId));
+      where owner_id = ? and project_id = ? and target = ? and status = 'active' and id != ?`)
+      .bind(now, ownerId, adapter.projectId, adapter.target, adapterId));
   }
   statements.push(
     env.DB.prepare(`update creative_model_adapters set status = ?, dna_artifact_id = ?, activated_at = ?, updated_at = ? where id = ? and owner_id = ?`)
@@ -435,6 +436,24 @@ export async function reviewModelAdapter(env: Env, ownerId: string, adapterId: s
 export async function activeMusicAdapterBindings(env: Env, ownerId: string, projectId: string): Promise<GenerationModelAdapterBinding[]> {
   const result = await env.DB.prepare(`select ${ADAPTER_COLUMNS} from creative_model_adapters
     where owner_id = ? and project_id = ? and target = 'music-style' and status = 'active' order by activated_at desc limit 1`)
+    .bind(ownerId, projectId).all<AdapterRow>();
+  return (result.results ?? []).map(mapAdapter).map((adapter) => ({
+    schemaVersion: "creative-studio-generation-adapter/1.0",
+    adapterId: adapter.id,
+    name: adapter.name,
+    target: adapter.target,
+    provider: adapter.provider,
+    baseModelId: adapter.recipe.baseModel.id,
+    triggerToken: adapter.concept.triggerToken,
+    relativePath: adapter.localFile.relativePath,
+    runnerId: adapter.localFile.runnerId,
+    strength: adapter.recommendedStrength,
+  }));
+}
+
+export async function activeImageAdapterBindings(env: Env, ownerId: string, projectId: string): Promise<GenerationModelAdapterBinding[]> {
+  const result = await env.DB.prepare(`select ${ADAPTER_COLUMNS} from creative_model_adapters
+    where owner_id = ? and project_id = ? and target = 'image-style' and status = 'active' order by activated_at desc limit 1`)
     .bind(ownerId, projectId).all<AdapterRow>();
   return (result.results ?? []).map(mapAdapter).map((adapter) => ({
     schemaVersion: "creative-studio-generation-adapter/1.0",

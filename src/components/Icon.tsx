@@ -4,7 +4,7 @@ export type IconName =
   | "portal" | "dna" | "chat" | "generate" | "library" | "gallery" | "projects"
   | "flows" | "queue" | "analytics" | "settings" | "runtime" | "search" | "bell"
   | "arrow" | "chevron" | "chevronDown" | "plus" | "play" | "pause" | "video"
-  | "image" | "music" | "voice" | "cube" | "copy" | "send" | "star" | "sun"
+  | "3d" | "image" | "music" | "voice" | "cube" | "copy" | "send" | "star" | "sun"
   | "moon" | "wand" | "rerun" | "check" | "close" | "grid" | "more" | "archive"
   | "shield" | "history" | "external";
 
@@ -67,5 +67,5 @@ export function Icon({ name, ...props }: IconProps) {
     history: <><path d="M4 12a8 8 0 1 0 2-5.3L4 9"/><path d="M4 4v5h5M12 7v5l3 2"/></>,
     external: <><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></>,
   };
-  return <Svg {...props}>{paths[name] ?? paths.generate}</Svg>;
+  return <Svg {...props}>{paths[name === "3d" ? "cube" : name] ?? paths.generate}</Svg>;
 }

@@ -37,7 +37,7 @@ type PromptEnhancementRow = {
   inputMode: VideoPromptEnhancement["inputMode"];
   sourceId: string | null;
   videoDurationSeconds: VideoPromptEnhancement["videoDurationSeconds"];
-  model: typeof GEMMA_VIDEO_PROMPT_MODEL | null;
+  model: string | null;
   comfyPromptId: string | null;
   runnerId: string | null;
   runnerLeaseUntil: string | null;
@@ -72,7 +72,9 @@ function publicEnhancement(row: PromptEnhancementRow): VideoPromptEnhancement {
   void _ownerId;
   void _runnerLeaseUntil;
   void _idempotencyKey;
-  return result;
+  return result.model?.startsWith("lm-studio:")
+    ? { ...result, provider: "local-lmstudio", comfyPromptId: null, upstreamId: result.comfyPromptId }
+    : result;
 }
 
 function semverAtLeast(version: string | null | undefined, major: number, minor: number) {
@@ -248,7 +250,11 @@ export async function completeVideoPromptEnhancement(
   const current = await rowById(env, runner.ownerId, boundedText(enhancementId, 100));
   if (!current) throw new Error("prompt_enhancement_not_found");
   if (current.status !== "running" || current.runnerId !== runner.id) throw new Error("prompt_enhancement_not_completable");
-  const comfyPromptId = boundedText(input.comfyPromptId, 120);
+  const helperModel = boundedText(input.helperModel, 180);
+  const usesLmStudio = Boolean(helperModel);
+  if (usesLmStudio && (!/^lm-studio:[^\r\n]{1,160}$/.test(helperModel) || current.inputMode !== "text-to-video" || current.sourceId || !String(input.upstreamId || "").startsWith("lmstudio:") || input.comfyPromptId)) throw new Error("invalid_lmstudio_enhancement_result");
+  // Legacy storage column retains either the Comfy prompt ID or an explicit LM request namespace.
+  const comfyPromptId = boundedText(usesLmStudio ? input.upstreamId : input.comfyPromptId, 120);
   if (!comfyPromptId) throw new Error("invalid_prompt_enhancement_result");
   const evidenceAt = new Date().toISOString();
   const recorded = await env.DB.prepare(`update creative_prompt_enhancements
@@ -266,7 +272,7 @@ export async function completeVideoPromptEnhancement(
     env.DB.prepare(`update creative_prompt_enhancements set status = 'completed', progress = 100,
       enhanced_prompt = ?, model = ?, comfy_prompt_id = ?, runner_lease_until = null, error = null,
       updated_at = ?, completed_at = ? where id = ? and owner_id = ? and runner_id = ? and status = 'running'`)
-      .bind(enhancedPrompt, GEMMA_VIDEO_PROMPT_MODEL, comfyPromptId, now, now, current.id, runner.ownerId, runner.id),
+      .bind(enhancedPrompt, usesLmStudio ? helperModel : GEMMA_VIDEO_PROMPT_MODEL, comfyPromptId, now, now, current.id, runner.ownerId, runner.id),
     env.DB.prepare("update creative_runners set active_job_id = null, last_error = null, last_heartbeat_at = ? where id = ? and owner_id = ? and active_job_id = ?")
       .bind(now, runner.id, runner.ownerId, current.id),
   ]);
@@ -352,11 +358,12 @@ export async function videoPromptEnhancementStampForJob(env: Env, ownerId: strin
     basePrompt,
     appliedPrompt,
     editedAfterEnhancement: basePrompt !== row.enhancedPrompt,
-    provider: "local-comfyui",
-    workflowId: "gemma4-video-prompt-enhancer",
+    provider: row.model.startsWith("lm-studio:") ? "local-lmstudio" : "local-comfyui",
+    workflowId: row.model.startsWith("lm-studio:") ? "lmstudio-video-prompt-enhancer" : "gemma4-video-prompt-enhancer",
     workflowVersion: 1,
-    model: GEMMA_VIDEO_PROMPT_MODEL,
-    comfyPromptId: row.comfyPromptId,
+    model: row.model,
+    comfyPromptId: row.model.startsWith("lm-studio:") ? null : row.comfyPromptId,
+    ...(row.model.startsWith("lm-studio:") ? { upstreamId: row.comfyPromptId } : {}),
     sourceWordCount: row.sourcePrompt.split(/\s+/).filter(Boolean).length,
     enhancedWordCount: row.enhancedPrompt.split(/\s+/).filter(Boolean).length,
     createdAt: row.completedAt ?? row.updatedAt,

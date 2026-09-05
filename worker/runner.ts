@@ -61,6 +61,12 @@ export function supportsStoryPlanning(version: string | null) {
   return major > 1 || (major === 1 && minor >= 17);
 }
 
+export function supportsMeshOutput(version: string | null) {
+  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  return Boolean(match && (Number(match[1]) > 1 || (Number(match[1]) === 1
+    && (Number(match[2]) > 23 || (Number(match[2]) === 23 && Number(match[3]) >= 1)))));
+}
+
 export function supportsVideoExtensionGeneratedSound(version: string | null) {
   const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)/);
   if (!match) return false;
@@ -198,7 +204,7 @@ function mapRunner(row: RunnerRow): LocalRunner {
   let modelTrainingProviders: LocalRunner["modelTrainingProviders"] = [];
   try {
     const parsed = JSON.parse(modelTrainingProvidersJson || "[]") as unknown;
-    if (Array.isArray(parsed)) modelTrainingProviders = parsed.filter((value): value is "ace-step-1.5-lora" => value === "ace-step-1.5-lora");
+    if (Array.isArray(parsed)) modelTrainingProviders = parsed.filter((value): value is LocalRunner["modelTrainingProviders"][number] => value === "ace-step-1.5-lora" || value === "comfy-sd15-lora");
   } catch { modelTrainingProviders = []; }
   const storedVideoDoctor = (() => {
     try { return normalizeVideoDoctor(JSON.parse(videoDoctorJson || "null"), true); } catch { return null; }
@@ -303,7 +309,7 @@ export async function heartbeatLocalRunner(env: Env, runner: RunnerIdentity, inp
   const device = boundedText(input.device, 160) || null;
   const activeJobId = boundedText(input.activeJobId, 100) || null;
   const error = boundedText(input.error, 500) || null;
-  const modelTrainingProviders = [...new Set((input.modelTrainingProviders ?? []).filter((provider) => provider === "ace-step-1.5-lora"))];
+  const modelTrainingProviders = [...new Set((input.modelTrainingProviders ?? []).filter((provider) => provider === "ace-step-1.5-lora" || provider === "comfy-sd15-lora"))];
   const normalizedDoctor = normalizeVideoDoctor(input.videoDoctor);
   const videoDoctor = normalizedDoctor ? await enrichVideoDoctor(env, runner, normalizedDoctor) : null;
   await env.DB.prepare(`update creative_runners set version = ?, comfy_url = ?, comfy_version = ?, device = ?,
@@ -349,6 +355,7 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
   const candidate = await env.DB.prepare(`select id from creative_jobs
     where owner_id = ? and execution_target = 'local-comfyui' and status in ('queued', 'running')
       and (modality != 'music' or ? = 1)
+      and (modality != '3d' or ? = 1)
       and (coalesce(json_extract(settings_stamp_json, '$.videoOperation.audioMode'), '') != 'new-sound' or ? = 1)
       and (json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') is null
         or json_extract(settings_stamp_json, '$.modelAdapters[0].runnerId') = ?)
@@ -365,7 +372,7 @@ export async function claimLocalRunnerJob(env: Env, runner: RunnerIdentity) {
       ))
     order by case when status = 'running' and runner_id = ? then 0 when status = 'running' then 1 else 2 end,
       case when modality = 'video' then 0 else 1 end, priority desc, created_at limit 1`)
-    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, generatedExtensionSoundSupported,
+    .bind(runner.ownerId, supportsSongPromptEnhancement(runner.version) ? 1 : 0, supportsMeshOutput(runner.version) ? 1 : 0, generatedExtensionSoundSupported,
       runner.id, nowValue, runner.id, nowValue, nowValue, nowValue, runner.id).first<{ id: string }>();
   if (!candidate) return null;
   const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();

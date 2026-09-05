@@ -35,11 +35,12 @@ function workflowAttempt(
 }
 
 describe("quick Create routing", () => {
-  it("normalizes workflow modalities into the four task-first choices", () => {
+  it("normalizes workflow modalities into creation choices", () => {
     expect(workflowCreateIntent("audio")).toBe("music");
     expect(workflowCreateIntent("music")).toBe("music");
     expect(workflowCreateIntent("video")).toBe("video");
     expect(workflowCreateIntent("image")).toBe("image");
+    expect(workflowCreateIntent("3d")).toBe("3d");
   });
 
   it("prefers a source-compatible workflow while preserving modality", () => {
@@ -49,6 +50,14 @@ describe("quick Create routing", () => {
     expect(preferredQuickWorkflow([textImage, imageToImage, video], "image", "image")?.id).toBe("image-image");
     expect(preferredQuickWorkflow([imageToImage, textImage, video], "image", null)?.id).toBe("text-image");
     expect(preferredQuickWorkflow([textImage, imageToImage, video], "video", "image")?.id).toBe("image-video");
+  });
+
+  it("routes a mesh to its image-conditioned workflow and retains the image binding", () => {
+    const mesh = workflow("image-mesh", "3d", "image");
+    const source = { id: "retained-art", kind: "image" as const };
+    expect(preferredQuickWorkflow([workflow("image", "image"), mesh], "3d", "image")?.id).toBe("image-mesh");
+    expect(quickGenerationSourceUsage("3d", source)).toEqual({ rendererSource: source, promptOnly: false });
+    expect(quickInputBindings(mesh.currentRevision.parameters, {}, source)).toEqual({ "image-mesh_media": "retained-art" });
   });
 
   it("prefers the faster proven compatible animation workflow", () => {

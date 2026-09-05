@@ -52,6 +52,6 @@ describe("Local Runner Comfy image input normalization", () => {
   });
 
   it("reports the current cooperative runner source version", () => {
-    expect(RUNNER_VERSION).toBe("1.22.0");
+    expect(RUNNER_VERSION).toBe("1.23.1");
   });
 });

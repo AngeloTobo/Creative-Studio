@@ -57,7 +57,7 @@ export function MediaView({ onGenerate, onUseAsset, onEvolve, onAnimate, onAnima
   const { snapshot, activeProjectId, uploadMedia, busy, error } = useStudio();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [trainingEligible, setTrainingEligible] = useState(true);
+  const [trainingEligible, setTrainingEligible] = useState(false);
   const [localError, setLocalError] = useState("");
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"all" | MediaKind>("all");

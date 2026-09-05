@@ -1,6 +1,17 @@
 # Build reality
 
-Last verified: 2026-09-04 (America/Chicago)
+Last verified: 2026-09-05 (America/Chicago)
+
+## PC creative workstation - September 5 release
+
+- Create exposes Image, Video, Song, and 3D mesh directly. Image-to-mesh uses a retained source and the installed native Hunyuan3D 2.1 graph; results retain a downloadable GLB. MiniMax Music3 has an installed, bounded 30-second song workflow. Meshes do not appear as unsupported image/audio/video inputs elsewhere.
+- Train my style opens project-scoped artwork thumbnails, explicit training consent, caption review, and native Comfy SD1.5 LoRA training. The installed SD1.5 checkpoint, training nodes, and dataset/output contracts were inspected. Training is bounded to 3-40 selected images, 512-pixel copies, rank 8 and batch 1; source artwork remains untouched. Approval creates a compatible SD1.5 generation workflow and binds only the approved adapter. No owner dataset was selected and no training run or adapter activation was performed for this release.
+- Migration 0026 extends the existing durable training records to image styles and preserves music history. The installed migration passed with recovery checkpoint `checkpoint-20260905T140512Z-a45d9130-5b07-4b08-bbdc-c9a5a7e2fd17`.
+- Runner 1.23.1 supports source-bound GLB generation, canonical Comfy FLAC/WAV media types, Windows LoRA filename resolution, and bounded retry of timed-out LM Studio status observations. Local streamed uploads use a size-verified stream compatible with the PC R2 runtime. Unknown GPU state still blocks execution. GPU work remains serialized through the shared owner lock.
+- Mesh retries revalidate their retained image bindings and SaveGLB instead of requiring text. Cancelled renders and LM guard failures create a fresh Comfy prompt; retention recovery can still resume an eligible saved upstream result.
+- Optional LM Studio text-to-video enhancement requires `CS_LM_STUDIO_MODEL` to name an already loaded local instance. It uses the same GPU handoff, never auto-loads a model, and preserves truthful provider provenance. No model was loaded in LM Studio and live LM inference was not exercised; request and lifecycle behavior passed contract tests.
+- `desktop:install` adds a Creative Studio desktop app-window shortcut; normal `deploy:pc-host` includes it. The existing PC authority, Access-protected Cloudflare Tunnel and durable local state remain the production architecture. Anonymous remote access still redirects to Cloudflare Access; this release does not claim a new authenticated remote browser inspection.
+- Verification: 370 app/Runner tests, 77 Worker tests, 82 desktop/mobile browser checks and six intentional device skips; lint, all TypeScript targets, Runner/installer checks, environment/free-tier guards, build, and secret scan passed. The final PC installation is healthy. A real retained 512px image was inspected; a retained 29.989-second stereo 44.1 kHz FLAC completed browser playback without errors. The retained Hunyuan3D proof completed in 74.37 seconds and downloaded as an 11,228,568-byte GLB with 235,367 vertices and 700,154 triangles; indices and finite positions validate. A two-angle geometry inspection shows the source teapot shape plus a background plane, so this is draft geometry requiring cleanup, not a print-ready quality claim. These private proofs are in the Studio checks project.
 
 ## PC-host production cutover verified
 

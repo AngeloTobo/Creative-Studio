@@ -1,6 +1,6 @@
 # Creative Studio
 
-Creative Studio is Angelo's private, standalone creative workstation for turning an idea or retained source into images, video, music, CreativeDNA, and reusable training evidence.
+Creative Studio is Angelo's private PC workstation for creating images, video, songs, and 3D meshes, and training image or music style adapters from selected artwork.
 
 **Idea or source -> CreativeDNA -> generate -> retain -> review -> evolve**
 
@@ -14,12 +14,22 @@ The guarded cloud-to-PC migration, PC-host installation, Cloudflare Worker execu
 
 | Surface | Purpose | Direct actions |
 | --- | --- | --- |
-| **Home** | Start from the newest or selected image, audio file, or video and see its real CreativeDNA profile. | Upload, analyze, create an image, animate, make a song, train, enable the daily Love Loop, or arm Overnight Studio. |
-| **Create** | Make media in one visual workspace without assembling a workflow. | Choose Image, Video, Song, or Train; upload or reuse a retained source in place; write the direction; adjust the compact essentials; generate; then inspect or reuse the result on the same surface. |
+| **Ideas** | Explore directions using optional project and CreativeDNA context. | Story Bank, Love Loop, and Overnight Studio. |
+| **Create** | Make media in one focused workspace. | Choose Image, Video, Song, or 3D mesh; add an optional source (required for mesh); describe the result; generate. Train my style opens real image LoRA training. |
 | **Work** | Follow the durable production lifecycle for the active project. | Resolve owner actions, inspect running jobs, cancel or retry, review retained results, extend, animate, reuse, or evolve. |
 | **Studio** | Manage the workspace behind creation. | Create and switch projects, browse media and CreativeDNA memory, import models, and inspect or pair local systems. |
 
 Legacy deep links still resolve into the correct Work or Studio section, but the primary desktop and mobile navigation stays limited to these four destinations.
+
+### Image style training and 3D
+
+**Train my style** uses 3–40 selected, training-consented images. Review the captions before starting native ComfyUI training. The first supported base is the installed Stable Diffusion 1.5 checkpoint, with 512px copies, rank 8, batch size one, gradient checkpointing, and offloading. Proof, balanced, and deep run 100, 500, or 1,500 steps. The checkpoint stays private and review-required; approval creates a matching SD1.5 generation workflow. Its learned weights do not apply to unrelated image, video, song, or mesh models. Native ComfyUI training nodes remain experimental, and training completion alone is not a quality assessment.
+
+**3D mesh** binds a selected image to a Hunyuan3D workflow and retains a validated GLB download. GLB can be opened in a 3D application; this release does not include an embedded mesh viewer. The bundled API graphs are `runner/workflows/hunyuan3d-image-to-mesh.json` and `runner/workflows/minimax-music3-local.json`; import them into the desired project through Models. The song graph executes local MiniMax Music3 weights through ComfyUI.
+
+Run `npm run desktop:install` to create a **Creative Studio** desktop shortcut. It opens the local host in a dedicated Chrome or Edge app window. The installed PC host remains the background owner; remote access uses the same state at the protected tunnel address.
+
+Optional LM Studio prompt help is available for text-to-video without a source image. Set the PC host process environment `CS_LM_STUDIO_MODEL` to an already loaded LM Studio instance ID (and optionally `CS_LM_STUDIO_URL`, restricted to loopback; default `http://127.0.0.1:1234`). The helper verifies residency, releases Comfy memory through the GPU coordinator, makes one bounded text request, records the actual LM model/provider, and unloads LM before rendering. It never downloads or auto-loads a model. An unconfigured host continues using its existing Comfy/Gemma helper; a configured but unavailable LM instance reports an explicit failure.
 
 ## What the app can do
 
@@ -243,9 +253,9 @@ See [docs/CLOUDFLARE_FREE_BUDGET.md](docs/CLOUDFLARE_FREE_BUDGET.md) for the gua
 - Real generation requires the selected workflow's models and custom nodes to exist in ComfyUI.
 - UI-format ComfyUI JSON is not automatically converted into an executable API graph.
 - CreativeDNA analysis changes a versioned evidence profile, not model weights.
-- ACE-Step music LoRA is implemented; image and video model training remain future work.
+- ACE-Step music LoRA and native Comfy SD1.5 image-style LoRA are implemented with separate dataset and activation review. Video model training remains future work.
 - Non-instrumental ACE-Step datasets require a working local Whisper executable for draft transcription. Adapter approval does not claim a scored A/B quality proof; automatic validation generations are not implemented yet.
-- Image, audio/music, and video workflow execution are supported. 3D workflows may be inspected but are rejected at execution in this release.
+- Image, audio/music, video, and source-bound 3D mesh workflow execution are supported with compatible installed models and nodes. Mesh output requires SaveGLB and Runner 1.23.1 or newer.
 - Video duration choices depend on a recognized control in a compatible workflow. Two-version and three-branch video requests create sequential local jobs, so their total time includes each render.
 - Runtime estimates require comparable completed evidence and exclude unknown queue or cold-model-load time.
 - The consolidated snapshot intentionally exposes a bounded recent window; older retained records are available through the cursor-paginated artifact-history API rather than increasing every background refresh.

@@ -42,7 +42,7 @@ function SourceDescriptionSummaries({ description }: { description: CreativeDnaM
 }
 
 type CreativeDnaWorkspace = "create" | "design" | "train";
-type TrainingPath = "analyze" | "model";
+type TrainingPath = "analyze" | "model" | "image-model";
 
 function savedLabel(value: string) {
   const date = new Date(value);

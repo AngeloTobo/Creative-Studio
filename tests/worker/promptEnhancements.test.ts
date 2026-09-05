@@ -17,7 +17,7 @@ async function result<T>(response: Response): Promise<T> {
 const enhancedTimeline = "SHOT 1 (0.00-3.00 seconds): A translucent figure stands beneath a narrow blue light while the camera begins a restrained forward move and fine dust crosses the foreground. SHOT 2 (3.00-7.00 seconds): The figure turns toward a distant pulse, one hand opening as reflected light moves across the surface and the room responds with a slow curtain drift. SHOT 3 (7.00-10.00 seconds): The camera settles close to the profile; the hand closes, the pulse fades, and the last reflection becomes still without changing the location. Audio: soft room tone, a tactile glass movement, distant electrical resonance, and one low musical note that ends with the light.";
 
 describe("durable video prompt enhancement", () => {
-  it("uses an owner-library workflow across projects while keeping the Gemma request project-scoped", async () => {
+  it.each(["comfy", "lmstudio"] as const)("uses an owner-library workflow across projects while keeping the Gemma request project-scoped", async (helper) => {
     const workflowProject = await result<{ project: { id: string } }>(await routeCreativeStudioApi(request("/api/creative-studio/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -62,7 +62,7 @@ describe("durable video prompt enhancement", () => {
       inputMode: "text-to-video",
       sourceId: null,
       videoDurationSeconds: 10,
-      idempotencyKey,
+      idempotencyKey: `${idempotencyKey}_${helper}`,
     });
     const missingProject = await routeCreativeStudioApi(request("/api/creative-studio/prompt-enhancements", {
       method: "POST",
@@ -118,13 +118,14 @@ describe("durable video prompt enhancement", () => {
     const completed = await result<{ promptEnhancement: { status: string; enhancedPrompt: string; comfyPromptId: string; model: string } }>(await routeCreativeStudioApi(request(`/api/creative-studio/runner/prompt-enhancements/${created.promptEnhancement.id}/complete`, {
       method: "POST",
       headers: runnerHeaders,
-      body: JSON.stringify({ enhancedPrompt: enhancedTimeline, comfyPromptId: "comfy-video-prompt-001" }),
+      body: JSON.stringify(helper === "lmstudio" ? { enhancedPrompt: enhancedTimeline, upstreamId: "lmstudio:video-prompt-001", helperModel: "lm-studio:resident-test" } : { enhancedPrompt: enhancedTimeline, comfyPromptId: "comfy-video-prompt-001" }),
     }), env));
     expect(completed.promptEnhancement).toMatchObject({
       status: "completed",
       enhancedPrompt: enhancedTimeline,
-      comfyPromptId: "comfy-video-prompt-001",
-      model: "gemma4_e4b_it_fp8_scaled.safetensors",
+      comfyPromptId: helper === "lmstudio" ? null : "comfy-video-prompt-001",
+      model: helper === "lmstudio" ? "lm-studio:resident-test" : "gemma4_e4b_it_fp8_scaled.safetensors",
+      provider: helper === "lmstudio" ? "local-lmstudio" : "local-comfyui",
     });
     const discoveryPrompt = `${enhancedTimeline} The final camera scale changes once while continuity remains intact.`;
     const stamp = await videoPromptEnhancementStampForJob(env, "development-angelo", {
@@ -148,6 +149,7 @@ describe("durable video prompt enhancement", () => {
       appliedPrompt: discoveryPrompt,
       editedAfterEnhancement: false,
     });
+    if (helper === "lmstudio") expect(stamp).toMatchObject({ provider: "local-lmstudio", model: "lm-studio:resident-test", comfyPromptId: null, upstreamId: "lmstudio:video-prompt-001", workflowId: "lmstudio-video-prompt-enhancer" });
     const stampInput = {
       requestId: created.promptEnhancement.id,
       basePrompt: enhancedTimeline,

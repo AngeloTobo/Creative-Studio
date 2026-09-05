@@ -3,8 +3,8 @@ import type { IsoDateString, MediaKind } from "./domain";
 export const MODEL_TRAINING_RECIPE_SCHEMA_VERSION = "creative-studio-model-training-recipe/1.0" as const;
 export const MODEL_ADAPTER_SCHEMA_VERSION = "creative-studio-model-adapter/1.0" as const;
 
-export type ModelTrainingTarget = "music-style";
-export type ModelTrainingProvider = "ace-step-1.5-lora";
+export type ModelTrainingTarget = "music-style" | "image-style";
+export type ModelTrainingProvider = "ace-step-1.5-lora" | "comfy-sd15-lora";
 export type ModelTrainingPreset = "proof" | "balanced" | "deep";
 export type ModelTrainingStatus = "waiting-for-runner" | "waiting-for-review" | "running" | "completed" | "failed" | "cancelled";
 export type ModelTrainingStage = "queued" | "preflight" | "captioning" | "dataset-review" | "preprocessing" | "training" | "retaining" | "adapter-review" | "completed" | "failed" | "cancelled";
@@ -24,14 +24,14 @@ export type ModelTrainingRecipe = {
   provider: ModelTrainingProvider;
   preset: ModelTrainingPreset;
   baseModel: {
-    id: "ace-step-1.5-base";
+    id: "ace-step-1.5-base" | "stable-diffusion-1.5";
     label: string;
     file: string;
   };
   dataset: {
     acceptedKinds: MediaKind[];
     minimumItems: number;
-    captioner: "gemma4-multimodal-description/1.0";
+    captioner: "gemma4-multimodal-description/1.0" | "owner-caption/1.0";
   };
   optimization: {
     adapter: "lora";
@@ -91,7 +91,7 @@ export type ModelTrainingDatasetItem = {
 };
 
 export type ModelTrainingDataset = {
-  schemaVersion: "creative-studio-ace-step-dataset/1.0";
+  schemaVersion: "creative-studio-ace-step-dataset/1.0" | "creative-studio-image-dataset/1.0";
   items: ModelTrainingDatasetItem[];
   preparedAt: IsoDateString;
   reviewedAt: IsoDateString | null;
@@ -189,7 +189,7 @@ export type CompleteModelTrainingDatasetRequest = {
   dataset: ModelTrainingDataset;
 };
 
-const TARGETS = new Set<ModelTrainingTarget>(["music-style"]);
+const TARGETS = new Set<ModelTrainingTarget>(["music-style", "image-style"]);
 const PRESETS = new Set<ModelTrainingPreset>(["proof", "balanced", "deep"]);
 
 function text(value: unknown, length: number) {
@@ -222,6 +222,16 @@ export function normalizeModelTrainingConcept(input: Pick<CreateModelTrainingJob
 export function modelTrainingRecipe(target: ModelTrainingTarget, preset: ModelTrainingPreset): ModelTrainingRecipe {
   if (!TARGETS.has(target)) throw new Error("invalid_model_training_target");
   if (!PRESETS.has(preset)) throw new Error("invalid_model_training_preset");
+  if (target === "image-style") {
+    const steps = { proof: 100, balanced: 500, deep: 1500 }[preset];
+    return {
+      schemaVersion: MODEL_TRAINING_RECIPE_SCHEMA_VERSION, provider: "comfy-sd15-lora", preset,
+      baseModel: { id: "stable-diffusion-1.5", label: "Stable Diffusion 1.5", file: "v1-5-pruned-emaonly-fp16.safetensors" },
+      dataset: { acceptedKinds: ["image"], minimumItems: 3, captioner: "owner-caption/1.0" },
+      optimization: { adapter: "lora", rank: 8, alpha: 8, learningRate: 0.0001, steps, epochs: null, batchSize: 1, gradientAccumulation: 4, precision: "bf16", resolution: 512, seed: 42 },
+      estimate: { minimumMinutes: 5, maximumMinutes: 120, basis: "Unmeasured estimate; native ComfyUI training is experimental. Duration depends on dataset and steps." },
+    };
+  }
   const settings = {
     proof: { rank: 16, epochs: 20, min: 20, max: 50 },
     balanced: { rank: 64, epochs: 100, min: 60, max: 180 },
@@ -239,13 +249,11 @@ export function modelTrainingRecipe(target: ModelTrainingTarget, preset: ModelTr
 }
 
 export function modelTrainingTargetLabel(target: ModelTrainingTarget) {
-  void target;
-  return "Music style";
+  return target === "image-style" ? "Image style" : "Music style";
 }
 
 export function modelTrainingAssetKind(target: ModelTrainingTarget): MediaKind {
-  void target;
-  return "audio";
+  return target === "image-style" ? "image" : "audio";
 }
 
 export function normalizeAdapterStrength(value: unknown) {

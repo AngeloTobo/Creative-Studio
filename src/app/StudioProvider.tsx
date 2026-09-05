@@ -194,13 +194,17 @@ function workflowJobRequest(
   const { workflow, inputBindings, expectedPrompt: expectedPromptValue, dnaArtifactId, videoOperation, performanceMode, videoPerformanceMode, trustedVideoPresetId, videoVariant, videoSpeech, evolution, outputBatch, promptReference, videoDurationSeconds, idempotencyKey: stableIdempotencyKey, continuity, promptEnhancement, videoScript, storyRecommendation } = input;
   const dnaId = dnaArtifactId ?? activeDnaArtifactId;
   if (!dnaId) throw new Error("creative_dna_required");
-  const modality: GenerationModality = workflow.modality === "audio" || workflow.modality === "music" ? "music" : workflow.modality === "video" ? "video" : "image";
-  if (workflow.modality === "3d") throw new Error("workflow_modality_not_supported");
+  const modality: GenerationModality = workflow.modality === "audio" || workflow.modality === "music" ? "music" : workflow.modality === "video" ? "video" : workflow.modality === "3d" ? "3d" : "image";
   const promptParameter = primaryWorkflowPromptParameter(workflow.currentRevision.parameters, workflow.modality);
   const workflowPrompt = String(promptParameter?.value ?? "").trim();
-  const expectedPrompt = expectedPromptValue.trim();
-  if (!workflowPrompt || !expectedPrompt) throw new Error("workflow_positive_prompt_missing");
-  if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
+  const expectedPrompt = modality === "3d" ? "" : expectedPromptValue.trim();
+  if (modality === "3d") {
+    const imageInputs = workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "media" && parameter.mediaKind === "image");
+    if (!imageInputs.length || imageInputs.some((parameter) => !inputBindings[parameter.id])) throw new Error("workflow_image_source_required");
+  } else {
+    if (!workflowPrompt || !expectedPrompt) throw new Error("workflow_positive_prompt_missing");
+    if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
+  }
   return {
     projectId,
     dnaArtifactId: dnaId,

@@ -200,7 +200,10 @@ import {
   reviewModelAdapter,
   reviewModelTrainingDataset,
   activeMusicAdapterBindings,
+  activeImageAdapterBindings,
 } from "../modelTraining";
+import { imageAdapterParameterIds } from "../../shared/contracts/imageAdapter";
+import { ensureImageStyleWorkflow } from "../imageStyleWorkflow";
 import {
   claimVideoPromptEnhancement,
   completeVideoPromptEnhancement,
@@ -516,7 +519,7 @@ async function reconcileGenerationBatch(
 
 function workflowJobModality(value: string): GenerationModality {
   if (value === "audio" || value === "music") return "music";
-  if (value === "image" || value === "video") return value;
+  if (value === "image" || value === "video" || value === "3d") return value;
   throw new Error("workflow_modality_not_supported");
 }
 
@@ -605,6 +608,19 @@ async function assertReusableLocalWorkflowPrompt(env: Env, ownerId: string, job:
   const workflow = job.settingsStamp.workflow;
   if (!workflow) throw new Error("runner_workflow_missing");
   const plan = await workflowExecutionPlan(env, ownerId, workflow.workflowId, workflow.revisionId);
+  if (job.modality === "3d") {
+    const imageInputs = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "media" && parameter.mediaKind === "image");
+    const bindings = job.settingsStamp.inputBindings ?? {};
+    if (plan.workflow.modality !== "3d" || !imageInputs.length || !plan.graph || typeof plan.graph !== "object"
+      || !Object.values(plan.graph).some((node: unknown) => node && typeof node === "object" && "class_type" in node && node.class_type === "SaveGLB")) {
+      throw new Error("mesh_image_workflow_required");
+    }
+    for (const parameter of imageInputs) {
+      const source = await runnerInputById(env, ownerId, bindings[parameter.id] ?? "");
+      if (!source || source.projectId !== job.projectId || source.kind !== "image") throw new Error("mesh_source_binding_invalid");
+    }
+    return;
+  }
   const expected = boundedText(job.settingsStamp.prompt, 4_000);
   const positives = generationWorkflowPromptParameters(plan.workflow.currentRevision.parameters);
   const negatives = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
@@ -1323,7 +1339,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
     }
     if (route === "jobs-create") {
       const input = await body<SubmitJobRequest>(request);
-      if (!input || !["music", "image", "video"].includes(input.modality)) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
+      if (!input || !["music", "image", "video", "3d"].includes(input.modality)) return json({ ok: false, error: "invalid_job_request" }, { status: 400 });
+      if (input.modality === "3d" && !input.workflow) throw new Error("mesh_local_workflow_required");
       const requestKey = idempotencyKey(input.idempotencyKey);
       const dnaArtifacts = await listLocalDna(env, session.userId);
       const dna = dnaArtifacts.find((item) => item.artifactId === input.dnaArtifactId);
@@ -1491,16 +1508,19 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         const expectedPrompt = boundedPrompt(exactExpectedPrompt);
         const workflowPrompt = boundedPrompt(exactWorkflowPrompt);
         const negativePromptParameters = plan.workflow.currentRevision.parameters.filter((parameter) => parameter.kind === "text" && parameter.promptRole === "negative");
-        if (!expectedPrompt) throw new Error("workflow_prompt_confirmation_required");
-        if (!workflowPromptParameter || !workflowPrompt || workflowPromptParameter.promptRole === "negative") throw new Error("workflow_positive_prompt_missing");
-        if (workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
-        if (!promptParameters.length || promptParameters.some((parameter) => boundedPrompt(parameter.value) !== workflowPrompt)) {
+        if (modality !== "3d" && !expectedPrompt) throw new Error("workflow_prompt_confirmation_required");
+        if (modality !== "3d" && (!workflowPromptParameter || !workflowPrompt || workflowPromptParameter.promptRole === "negative")) throw new Error("workflow_positive_prompt_missing");
+        if (modality !== "3d" && workflowPrompt !== expectedPrompt) throw new Error("workflow_prompt_confirmation_mismatch");
+        if (modality !== "3d" && (!promptParameters.length || promptParameters.some((parameter) => boundedPrompt(parameter.value) !== workflowPrompt))) {
           throw new Error("workflow_positive_prompt_ambiguous");
         }
-        if (negativePromptParameters.some((parameter) => boundedPrompt(parameter.value) === workflowPrompt)) {
+        if (modality !== "3d" && negativePromptParameters.some((parameter) => boundedPrompt(parameter.value) === workflowPrompt)) {
           throw new Error("workflow_prompt_bound_to_negative");
         }
-        const prompt = workflowPrompt;
+        if (modality === "3d" && (!mediaParameters.some((parameter) => parameter.mediaKind === "image")
+          || !plan.graph || typeof plan.graph !== "object"
+          || !Object.values(plan.graph).some((node: unknown) => node && typeof node === "object" && "class_type" in node && node.class_type === "SaveGLB"))) throw new Error("mesh_image_workflow_required");
+        const prompt = modality === "3d" ? "Create a 3D mesh from the retained source image." : workflowPrompt;
         if (videoSpeech && !prompt.includes(videoSpeech.directive)) throw new Error("video_speech_prompt_mismatch");
         const extensionSuppressesNewSound = videoOperation?.audioMode === "keep-source" || videoOperation?.audioMode === "mute";
         if (videoSpeech && !extensionSuppressesNewSound && !videoSpeech.directive.includes(VIDEO_SOUND_DESIGN_DIRECTIVE)) {
@@ -1559,7 +1579,8 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
               videoSpeech: videoSpeech!,
             })
           : undefined;
-        const continuity = input.continuity
+        if (input.continuity && modality === "3d") throw new Error("mesh_continuity_not_supported");
+        const continuity = input.continuity && modality !== "3d"
           ? await generationContinuityStamp(env, session.userId, input.projectId, modality, input.continuity, prompt)
           : undefined;
         if (continuity) {
@@ -1570,12 +1591,19 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         }
         const createdAt = new Date().toISOString();
         const aceStepWorkflow = modality === "music" && /\bace\s*step\b/.test(aceStepWorkflowIdentity(plan.workflow));
-        const modelAdapters = aceStepWorkflow ? await activeMusicAdapterBindings(env, session.userId, input.projectId) : [];
+        const imageAdapterParameters = imageAdapterParameterIds(plan.workflow);
+        const modelAdapters = aceStepWorkflow ? await activeMusicAdapterBindings(env, session.userId, input.projectId)
+          : imageAdapterParameters ? await activeImageAdapterBindings(env, session.userId, input.projectId) : [];
         if (modelAdapters.length) {
-          const adapterParameters = aceStepAdapterParameterIds(plan.workflow);
-          if (!adapterParameters.fileId || !adapterParameters.strengthId) throw new Error("ace_step_workflow_adapter_controls_missing");
-          parameterValues[adapterParameters.fileId] = modelAdapters[0].relativePath;
-          parameterValues[adapterParameters.strengthId] = modelAdapters[0].strength;
+          if (imageAdapterParameters) {
+            parameterValues[imageAdapterParameters.fileId] = modelAdapters[0].relativePath;
+            for (const strengthId of imageAdapterParameters.strengthIds) parameterValues[strengthId] = modelAdapters[0].strength;
+          } else {
+            const adapterParameters = aceStepAdapterParameterIds(plan.workflow);
+            if (!adapterParameters.fileId || !adapterParameters.strengthId) throw new Error("ace_step_workflow_adapter_controls_missing");
+            parameterValues[adapterParameters.fileId] = modelAdapters[0].relativePath;
+            parameterValues[adapterParameters.strengthId] = modelAdapters[0].strength;
+          }
         }
         const evolution = input.evolution && evolutionSource && evolutionTaste ? {
           schemaVersion: "creative-studio-evolution/1.0" as const,
@@ -1754,6 +1782,7 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
         && original.settingsStamp.performanceMode !== "explicit-custom") throw new Error("image_custom_mode_required");
       const videoPerformance = localWorkflow ? await revalidatedVideoPerformance(env, session.userId, original) : undefined;
       const resumeLocalUpstream = localWorkflow && original.status === "failed" && Boolean(original.upstreamId)
+        && !/lmstudio_|comfyui_execution_timed_out|cancelled|interrupted/i.test(original.error ?? "")
         && /timeout|timed_out|output_download|retention|artifact_storage|fetch failed/i.test(original.error ?? "");
       const createdAt = new Date().toISOString();
       const created = await createQueuedJob(env, session.userId, {
@@ -1967,6 +1996,10 @@ export async function routeCreativeStudioApi(request: Request, env: Env) {
       const input = await body<ReviewModelAdapterRequest>(request);
       if (!match || !input) return json({ ok: false, error: "invalid_model_adapter_review" }, { status: 400 });
       const actor = developmentMode(env) ? "development-user" : "angelo";
+      if (input.decision === "approved" && boundedText(input.note, 500)) {
+        const adapter = (await listModelAdapters(env, session.userId)).find((item) => item.id === match[1]);
+        if (adapter?.provider === "comfy-sd15-lora" && adapter.status === "review-required") await ensureImageStyleWorkflow(env, session.userId, adapter);
+      }
       return json({ ok: true, ...await reviewModelAdapter(env, session.userId, match[1], input.decision, input.note, actor) }, { status: 201 });
     }
     if (route === "artifact-review") {

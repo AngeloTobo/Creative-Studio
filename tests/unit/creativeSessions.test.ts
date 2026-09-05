@@ -156,6 +156,13 @@ describe("Creative Sessions browser persistence", () => {
     expect(loadCreativeSession("session_large_comfy_graph", { storage })?.graphicalSettings).toEqual(saved?.graphicalSettings);
   });
 
+  it("restores an image-conditioned mesh draft with its exact source and workflow", () => {
+    const storage = memoryStorage();
+    const saved = saveCreativeSession({ ...base, mediaKind: "3d", direction: "", sourceAssetIds: ["art_source"], workflowId: "image_mesh" }, { storage, createId: () => "mesh_draft" });
+    expect(loadCreativeSession("mesh_draft", { storage })).toEqual(saved);
+    expect(saved).toMatchObject({ mediaKind: "3d", sourceAssetIds: ["art_source"], workflowId: "image_mesh" });
+  });
+
   it("ignores corrupt records and heals corrupt storage on the next save", () => {
     const storage = memoryStorage("{definitely-not-json");
     expect(listCreativeSessions(undefined, { storage })).toEqual([]);
@@ -169,7 +176,7 @@ describe("Creative Sessions browser persistence", () => {
     expect(() => JSON.parse(storage.value!)).not.toThrow();
     expect(JSON.parse(storage.value!)).toMatchObject({ schemaVersion: 2 });
 
-    const mixed = JSON.stringify({ schemaVersion: 2, sessions: [null, {}, { projectId: "project", mediaKind: "3d" }, saved] });
+    const mixed = JSON.stringify({ schemaVersion: 2, sessions: [null, {}, { projectId: "project", mediaKind: "unknown" }, saved] });
     expect(parseCreativeSessionStorage(mixed)).toEqual([saved]);
     expect(parseCreativeSessionStorage(JSON.stringify({ schemaVersion: 99, sessions: [saved] }))).toEqual([]);
     expect(parseCreativeSessionStorage("x".repeat(512_001))).toEqual([]);

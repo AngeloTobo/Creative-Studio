@@ -860,7 +860,7 @@ async function planningEvidence(
     && workflow.executionState === "ready" && modalityForWorkflow(workflow.modality)
     && generationWorkflowPromptParameters(workflow.currentRevision.parameters).length);
   const workflowSelections: StoryPlannerWorkflow[] = [];
-  for (const modality of ["image", "video", "music"] as GenerationModality[]) {
+  for (const modality of ["image", "video", "music"] as const) {
     const candidates = projectWorkflows.filter((workflow) => modalityForWorkflow(workflow.modality) === modality);
     const matchingRecipes = recipes.filter((recipe) => !recipe.archivedAt && recipe.mediaKind === modality
       && (!recipe.projectId || recipe.projectId === project.id)
@@ -1287,7 +1287,7 @@ export async function completeStoryPlan(env: Env, runner: RunnerIdentity, refres
       .bind(storyId, runner.ownerId, current.projectId, current.id, current.worldId, current.dnaArtifactId,
         story.title, story.logline, JSON.stringify(sourceRefs), current.evidenceFingerprint, plannerModel, now, now,
         current.id, runner.ownerId, runner.id));
-    for (const modality of ["image", "video", "music"] as GenerationModality[]) {
+    for (const modality of ["image", "video", "music"] as const) {
       const recommendation = story[modality];
       const workflow = workflows.find((item) => item.modality === modality);
       if (!workflow) throw new Error("story_plan_workflows_invalid");
